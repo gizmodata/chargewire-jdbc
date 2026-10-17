@@ -390,7 +390,7 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       radix,
       field.isNullable() ? columnNullable : columnNoNulls,
       metadata.get(SqlTypes.REMARKS),
-      null,
+      metadata.get(SqlTypes.COLUMN_DEFAULT),
       null,
       null,
       SqlTypes.isText(type) ? size : null,

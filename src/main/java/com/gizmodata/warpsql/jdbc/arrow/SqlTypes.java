@@ -48,6 +48,9 @@ public final class SqlTypes {
   /** Field metadata key: the column's comment. */
   public static final String REMARKS = "ARROW:FLIGHT:SQL:REMARKS";
 
+  /** A column's default, as SQL text (Warp SQL spec §10; Flight SQL has no key for it). */
+  public static final String COLUMN_DEFAULT = "WARP:SQL:COLUMN_DEFAULT";
+
   /** Size reported for strings and binaries without a known length. */
   public static final int UNBOUNDED = Integer.MAX_VALUE;
 

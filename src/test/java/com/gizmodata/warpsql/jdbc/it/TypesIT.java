@@ -32,7 +32,6 @@ import java.util.Calendar;
 import java.util.List;
 import java.util.TimeZone;
 import java.util.UUID;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /** Every common DuckDB type, read through the getters JDBC applications use, and bound back. */
@@ -346,9 +345,6 @@ class TypesIT {
   }
 
   @Test
-  @Disabled(
-      "warp-duckdb refuses list-typed Arrow parameters with unsupported_arrow_type, though spec"
-          + " §6.1 sends nested values through Arrow parameters (reported)")
   void listParameters() throws SQLException {
     try (Connection connection = SharedServer.connect();
         PreparedStatement select = connection.prepareStatement("SELECT ?::INTEGER[] AS l")) {
@@ -361,9 +357,6 @@ class TypesIT {
   }
 
   @Test
-  @Disabled(
-      "warp-duckdb refuses month_day_nano_interval Arrow parameters with unsupported_arrow_type,"
-          + " though it returns INTERVAL results in that type (reported)")
   void intervalParameters() throws SQLException {
     try (Connection connection = SharedServer.connect();
         PreparedStatement select = connection.prepareStatement("SELECT ?::INTERVAL AS i")) {

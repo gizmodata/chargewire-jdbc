@@ -19,7 +19,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -264,9 +263,6 @@ class MetadataIT {
   }
 
   @Test
-  @Disabled(
-      "warp-duckdb's table_schema sends no REMARKS for COMMENT ON COLUMN, and Warp SQL defines no"
-          + " key for a column's default (reported)")
   void columnsCarryCommentsAndDefaults() throws SQLException {
     try (Connection connection = SharedServer.connect()) {
       Map<String, Map<String, String>> columns = describeMetaTable(connection);

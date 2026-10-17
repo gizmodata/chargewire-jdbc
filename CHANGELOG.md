@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `getColumns` reports `COLUMN_DEF` from the server's `WARP:SQL:COLUMN_DEFAULT` (warp-sql
+  0d5a36c). The tests for typed-NULL, list and interval parameters and for column
+  comments and defaults run again: the server bugs they were disabled for are fixed.
+
 - A JDBC 4.2 driver for the Warp SQL protocol (draft 0.1.0): `jdbc:warp://host[:port][/catalog]`,
   registered with `DriverManager` and `ServiceLoader`, as one standalone jar
   (`target/warp-sql-jdbc.jar`) with every dependency relocated. Java 17 or later; no

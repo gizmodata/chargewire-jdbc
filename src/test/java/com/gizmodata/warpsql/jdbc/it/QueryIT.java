@@ -21,7 +21,6 @@ import java.sql.SQLSyntaxErrorException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -730,9 +729,6 @@ class QueryIT {
   }
 
   @Test
-  @Disabled(
-      "warp-duckdb binds a null Arrow parameter as an untyped NULL, ignoring its Arrow type:"
-          + " SELECT ? + 1 with an int32 null fails to bind (reported)")
   void typedNullParameters() throws SQLException {
     try (Connection connection = SharedServer.connect();
         PreparedStatement select = connection.prepareStatement("SELECT ? + 1 AS plus")) {
