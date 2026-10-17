@@ -232,6 +232,16 @@ public final class WarpClient implements AutoCloseable {
       case SUBJECT_TOKEN:
         requestToken(credential);
         return;
+      case CLIENT_CERTIFICATE:
+        // Only a server that maps certificates to users offers the grant (spec §4.4).
+        if (!hasCapability("mtls_identity")) {
+          throw new SQLInvalidAuthorizationSpecException(
+              "The server does not offer sign-in with a client certificate (no capability"
+                  + " mtls_identity); use authType=password",
+              "28000");
+        }
+        requestToken(credential);
+        return;
       default:
         throw new SQLInvalidAuthorizationSpecException(
             "No credentials: set user and password, token, or subjectToken", "28000");
@@ -244,6 +254,9 @@ public final class WarpClient implements AutoCloseable {
       body.put("grant_type", "password")
           .put("username", config.user)
           .put("password", config.password);
+    } else if (credential == ConnectionConfig.Credential.CLIENT_CERTIFICATE) {
+      // The credential is the certificate this connection presents; the token is bound to it.
+      body.put("grant_type", "client_certificate");
     } else {
       body.put("grant_type", "token_exchange").put("subject_token", config.subjectToken);
     }
@@ -275,7 +288,8 @@ public final class WarpClient implements AutoCloseable {
   private boolean canRenewToken() {
     ConnectionConfig.Credential credential = config.credential();
     return credential == ConnectionConfig.Credential.PASSWORD
-        || credential == ConnectionConfig.Credential.SUBJECT_TOKEN;
+        || credential == ConnectionConfig.Credential.SUBJECT_TOKEN
+        || credential == ConnectionConfig.Credential.CLIENT_CERTIFICATE;
   }
 
   /**

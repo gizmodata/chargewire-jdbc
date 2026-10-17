@@ -25,6 +25,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Sign-in with the mutual-TLS client certificate (Warp SQL spec §4.4): `authType=client_certificate`
+  (alias `mtls`) sends `{"grant_type":"client_certificate"}` over the TLS connection that presents
+  `clientCertificate`/`clientKey`, with no user name or password, and renews the token the same
+  way before it expires. The server binds the token to the certificate; every connection the
+  driver opens (partition readers included) presents it. The driver refuses the setting up front
+  (SQLSTATE 28000) without a client certificate, without TLS, or beside `user`, `password`,
+  `token` or `subjectToken`, and before signing in when the server lacks the `mtls_identity`
+  capability. The new problem codes `client_certificate_required`,
+  `unknown_certificate_identity`, `certificate_revoked`, `certificate_mismatch` and
+  `certificate_identity_mismatch` map to SQLSTATE 28000 (`SQLInvalidAuthorizationSpecException`),
+  with the code in `WarpProblem.codeOf`. Tests: `ClientCertificateGrantTest` (an HTTPS fake that
+  records each request's client certificate) and `ClientCertificateIT` (both servers). The test
+  client certificates now carry e-mail SANs, and the test certificates were regenerated.
+
 - Partitioned results (Warp SQL spec §6.10): with `resultPartitions=<n>` (1 to 256, default 1),
   on servers with the `result_partitions` capability, the driver sends
   `Warp-Result-Partitions` and `Warp-Result-Order`, and reads a result the server splits over

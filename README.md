@@ -84,6 +84,7 @@ For a local server without TLS, add `useEncryption=false`.
 | `user`, `password` | | Sign in with the `password` grant. Any character is allowed in the password. |
 | `token` | | A Warp SQL access token to send as is (no sign-in; not renewable) |
 | `subjectToken` | | An identity-provider token for the `token_exchange` grant |
+| `authType` | `password` | `client_certificate` (alias `mtls`): sign in with the mutual-TLS client certificate (`clientCertificate`, `clientKey`) and no password, on servers with the `mtls_identity` capability (spec §4.4). The server binds the token to the certificate; the driver renews it with the certificate. Refused with SQLSTATE 28000 without a certificate, without TLS, or beside `user`, `password`, `token` or `subjectToken` |
 | `catalog`, `schema` | server's | The session's initial catalog (also the URL path) and schema |
 | `useEncryption` | `true` | `false` for plain HTTP (loopback and test servers) |
 | `tlsRootCerts` | | PEM file of extra CA certificates to trust |
@@ -225,6 +226,11 @@ server for themselves on a free port, with a fresh password and an empty home di
 ```bash
 WARP_SQL_JDBC_TEST_SERVER_BINARY=/path/to/warp-sql/cpp/build/warp-duckdb mvn verify
 ```
+
+Mutual TLS that carries identity (`ClientCertificateIT`) starts its servers with
+`--mtls-admin-identities client@example.com` (the test client certificate's e-mail SAN), a
+flag warp-duckdb and Hardcharger share. The test certificates in `src/test/resources/certs`
+come from `dev/generate-test-certs.sh`.
 
 Without the variable they use a sibling checkout's `../warp-sql/cpp/build-main/warp-duckdb`, or
 else `../warp-sql/cpp/build/warp-duckdb`. With no server they fail; they never skip.

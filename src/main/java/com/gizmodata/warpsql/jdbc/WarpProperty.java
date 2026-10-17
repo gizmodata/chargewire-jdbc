@@ -11,6 +11,17 @@ import java.util.Map;
  * the URL wins over the same key in the properties.
  */
 public enum WarpProperty {
+  /**
+   * How the connection signs in: {@code password} (the default: {@link #USER} and {@link
+   * #PASSWORD}, or {@link #TOKEN} or {@link #SUBJECT_TOKEN}), or {@code client_certificate} (alias
+   * {@code mtls}): the mutual-TLS client certificate ({@link #CLIENT_CERTIFICATE}, {@link
+   * #CLIENT_KEY}) is the credential, with no password (spec §4.4).
+   */
+  AUTH_TYPE(
+      "authType",
+      "password",
+      "password, or client_certificate (alias mtls): sign in with the mutual-TLS client"
+          + " certificate"),
   /** User name for the {@code password} grant. */
   USER("user", null, "User name"),
   /** Password for the {@code password} grant. Any character is allowed, {@code :} included. */
@@ -134,6 +145,8 @@ public enum WarpProperty {
       info.choices = new String[] {"none", "zstd"};
     } else if (this == RESULT_ORDER) {
       info.choices = new String[] {"preserve", "any"};
+    } else if (this == AUTH_TYPE) {
+      info.choices = new String[] {"password", "client_certificate", "mtls"};
     }
     return info;
   }

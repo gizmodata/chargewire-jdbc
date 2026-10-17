@@ -54,6 +54,11 @@ public final class SqlErrors {
     switch (problem.code()) {
       case "invalid_credentials":
       case "invalid_token":
+      case "client_certificate_required":
+      case "unknown_certificate_identity":
+      case "certificate_revoked":
+      case "certificate_mismatch":
+      case "certificate_identity_mismatch":
         return "28000";
       case "session_ended":
       case "session_not_found":

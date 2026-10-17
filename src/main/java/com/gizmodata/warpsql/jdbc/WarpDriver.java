@@ -11,6 +11,7 @@ import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLInvalidAuthorizationSpecException;
 import java.sql.SQLNonTransientConnectionException;
 import java.time.Duration;
 import java.util.HashMap;
@@ -161,7 +162,9 @@ public final class WarpDriver implements Driver {
           "a number from 1 to " + WarpClient.MAX_RESULT_PARTITIONS);
     }
     boolean anyOrder = resultOrderIsAny(WarpProperty.RESULT_ORDER.get(properties));
+    boolean certificateGrant = clientCertificateGrant(properties);
     return new ConnectionConfig.Builder()
+        .clientCertificateGrant(certificateGrant)
         .address(url.host, url.port)
         .basePath(WarpProperty.BASE_PATH.get(properties))
         .credentials(
@@ -186,6 +189,58 @@ public final class WarpDriver implements Driver {
             (int) number(properties, WarpProperty.POLL_WAIT))
         .partitions((int) partitions, anyOrder)
         .build();
+  }
+
+  /**
+   * Reads {@code authType}, and checks that a {@code client_certificate} sign-in has a client
+   * certificate over TLS and no other credential.
+   *
+   * @param properties the connection's properties, keyed in lower case
+   * @return {@code true} for the {@code client_certificate} grant
+   * @throws SQLException for an unknown value or a configuration the grant cannot work with
+   */
+  static boolean clientCertificateGrant(Map<String, String> properties) throws SQLException {
+    String value = WarpProperty.AUTH_TYPE.get(properties);
+    String type = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    if ("password".equals(type)) {
+      return false;
+    }
+    if (!"client_certificate".equals(type) && !"mtls".equals(type)) {
+      throw invalid(WarpProperty.AUTH_TYPE, value, "password, client_certificate or mtls");
+    }
+    if (!bool(properties, WarpProperty.USE_ENCRYPTION)) {
+      throw new SQLInvalidAuthorizationSpecException(
+          "authType="
+              + type
+              + " signs in with a TLS client certificate: it needs useEncryption=true",
+          "28000");
+    }
+    if (blank(WarpProperty.CLIENT_CERTIFICATE.get(properties))
+        || blank(WarpProperty.CLIENT_KEY.get(properties))) {
+      throw new SQLInvalidAuthorizationSpecException(
+          "authType="
+              + type
+              + " signs in with a TLS client certificate: set clientCertificate and clientKey",
+          "28000");
+    }
+    for (WarpProperty credential :
+        new WarpProperty[] {
+          WarpProperty.USER, WarpProperty.PASSWORD, WarpProperty.TOKEN, WarpProperty.SUBJECT_TOKEN
+        }) {
+      if (!blank(credential.get(properties))) {
+        throw new SQLInvalidAuthorizationSpecException(
+            "authType="
+                + type
+                + " signs in with the client certificate alone; remove "
+                + credential.key(),
+            "28000");
+      }
+    }
+    return true;
+  }
+
+  private static boolean blank(String value) {
+    return value == null || value.isEmpty();
   }
 
   /**

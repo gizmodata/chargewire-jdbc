@@ -5,11 +5,16 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsExchange;
+import com.sun.net.httpserver.HttpsParameters;
+import com.sun.net.httpserver.HttpsServer;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -19,6 +24,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLPeerUnverifiedException;
 
 /**
  * A scripted Warp SQL server for testing the driver's client logic: discovery, sign-in and session
@@ -34,7 +42,21 @@ final class FakeWarpServer implements AutoCloseable {
     final Headers headers;
     final byte[] body;
 
+    /** The client certificate's subject on an HTTPS fake, or {@code null} when none was sent. */
+    final String clientCertificate;
+
     Request(HttpExchange exchange, byte[] body) {
+      String subject = null;
+      if (exchange instanceof HttpsExchange) {
+        try {
+          java.security.cert.Certificate[] chain =
+              ((HttpsExchange) exchange).getSSLSession().getPeerCertificates();
+          subject = ((X509Certificate) chain[0]).getSubjectX500Principal().getName();
+        } catch (SSLPeerUnverifiedException e) {
+          subject = null;
+        }
+      }
+      this.clientCertificate = subject;
       this.method = exchange.getRequestMethod();
       this.path = exchange.getRequestURI().getPath();
       this.query = exchange.getRequestURI().getRawQuery();
@@ -60,6 +82,7 @@ final class FakeWarpServer implements AutoCloseable {
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private final HttpServer server;
+  private final boolean tls;
   private final String basePath;
   private final Map<Pattern, Route> routes = new LinkedHashMap<>();
   final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
@@ -76,8 +99,36 @@ final class FakeWarpServer implements AutoCloseable {
   }
 
   FakeWarpServer(String basePath) throws IOException {
+    this(basePath, null);
+  }
+
+  /**
+   * An HTTPS fake that asks every connection for a client certificate (and accepts one without):
+   * {@code tls} is the server's context.
+   */
+  FakeWarpServer(SSLContext tls) throws IOException {
+    this("/warp", tls);
+  }
+
+  private FakeWarpServer(String basePath, SSLContext tls) throws IOException {
     this.basePath = basePath;
-    server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+    this.tls = tls != null;
+    InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), 0);
+    if (tls == null) {
+      server = HttpServer.create(address, 0);
+    } else {
+      HttpsServer https = HttpsServer.create(address, 0);
+      https.setHttpsConfigurator(
+          new HttpsConfigurator(tls) {
+            @Override
+            public void configure(HttpsParameters params) {
+              SSLParameters parameters = tls.getDefaultSSLParameters();
+              parameters.setWantClientAuth(true);
+              params.setSSLParameters(parameters);
+            }
+          });
+      server = https;
+    }
     server.setExecutor(Executors.newCachedThreadPool());
     server.createContext("/", this::handle);
     route(
@@ -91,7 +142,8 @@ final class FakeWarpServer implements AutoCloseable {
                     + protocolVersions
                     + ",\"server\":{\"name\":\"fake\",\"version\":\"9.8.7\"},\"capabilities\":"
                     + capabilities
-                    + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\"]}}"));
+                    + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\","
+                    + "\"client_certificate\"]}}"));
     route(
         "POST",
         "/v1/auth/token",
@@ -156,8 +208,13 @@ final class FakeWarpServer implements AutoCloseable {
         + (options.isEmpty() ? "" : "&" + options);
   }
 
+  /** The port the fake listens on. */
+  int port() {
+    return server.getAddress().getPort();
+  }
+
   String base() {
-    return "http://127.0.0.1:" + server.getAddress().getPort() + basePath;
+    return (tls ? "https" : "http") + "://127.0.0.1:" + server.getAddress().getPort() + basePath;
   }
 
   List<Request> requests(String method, String pathRegex) {

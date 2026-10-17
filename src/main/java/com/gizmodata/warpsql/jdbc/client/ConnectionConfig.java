@@ -19,6 +19,8 @@ public final class ConnectionConfig {
     TOKEN,
     /** {@code token_exchange} grant with an identity-provider token. */
     SUBJECT_TOKEN,
+    /** {@code client_certificate} grant: the mutual-TLS client certificate (spec §4.4). */
+    CLIENT_CERTIFICATE,
     /** No credential: only unauthenticated endpoints work. */
     NONE
   }
@@ -28,6 +30,7 @@ public final class ConnectionConfig {
   final String password;
   final String token;
   final String subjectToken;
+  final boolean clientCertificateGrant;
   final boolean useEncryption;
   final boolean disableCertificateVerification;
   final boolean useSystemTrustStore;
@@ -57,6 +60,7 @@ public final class ConnectionConfig {
     this.password = builder.password;
     this.token = builder.token;
     this.subjectToken = builder.subjectToken;
+    this.clientCertificateGrant = builder.clientCertificateGrant;
     this.useEncryption = builder.useEncryption;
     this.disableCertificateVerification = builder.disableCertificateVerification;
     this.useSystemTrustStore = builder.useSystemTrustStore;
@@ -84,12 +88,16 @@ public final class ConnectionConfig {
   }
 
   /**
-   * Returns which credential the connection uses; a token wins over a subject token, which wins
-   * over a user name and password.
+   * Returns which credential the connection uses: the client certificate when the configuration
+   * asks for that grant; otherwise a token wins over a subject token, which wins over a user name
+   * and password.
    *
    * @return the credential kind
    */
   public Credential credential() {
+    if (clientCertificateGrant) {
+      return Credential.CLIENT_CERTIFICATE;
+    }
     if (token != null) {
       return Credential.TOKEN;
     }
@@ -147,6 +155,7 @@ public final class ConnectionConfig {
     private String password;
     private String token;
     private String subjectToken;
+    private boolean clientCertificateGrant;
     private boolean useEncryption = true;
     private boolean disableCertificateVerification;
     private boolean useSystemTrustStore = true;
@@ -201,6 +210,17 @@ public final class ConnectionConfig {
       this.password = password;
       this.token = token;
       this.subjectToken = subjectToken;
+      return this;
+    }
+
+    /**
+     * Signs in with the {@code client_certificate} grant (spec §4.4) instead of the credentials.
+     *
+     * @param clientCertificateGrant {@code true} to sign in with the TLS client certificate
+     * @return this builder
+     */
+    public Builder clientCertificateGrant(boolean clientCertificateGrant) {
+      this.clientCertificateGrant = clientCertificateGrant;
       return this;
     }
 
