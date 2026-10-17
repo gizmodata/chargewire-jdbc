@@ -65,12 +65,13 @@ class MetadataIT {
   void productAndDriver() throws SQLException {
     try (Connection connection = SharedServer.connect()) {
       DatabaseMetaData metaData = connection.getMetaData();
-      assertEquals("warp-duckdb", metaData.getDatabaseProductName());
-      assertTrue(
-          metaData.getDatabaseProductVersion().contains("DuckDB"),
-          metaData.getDatabaseProductVersion());
-      assertEquals(0, metaData.getDatabaseMajorVersion());
-      assertEquals(1, metaData.getDatabaseMinorVersion());
+      assertEquals(WarpServer.NAME, metaData.getDatabaseProductName());
+      String version = metaData.getDatabaseProductVersion();
+      java.util.regex.Matcher numbers =
+          java.util.regex.Pattern.compile("(\\d+)\\.(\\d+)").matcher(version);
+      assertTrue(numbers.find(), version);
+      assertEquals(Integer.parseInt(numbers.group(1)), metaData.getDatabaseMajorVersion());
+      assertEquals(Integer.parseInt(numbers.group(2)), metaData.getDatabaseMinorVersion());
       assertEquals(WarpDriver.NAME, metaData.getDriverName());
       assertEquals(WarpDriver.version(), metaData.getDriverVersion());
       assertEquals(4, metaData.getJDBCMajorVersion());
@@ -214,35 +215,62 @@ class MetadataIT {
     }
   }
 
-  @Test
-  @Disabled(
-      "warp-duckdb's table_schema marks every column nullable and sends no IS_AUTO_INCREMENT or"
-          + " REMARKS metadata, and Warp SQL defines no key for a column's default (reported)")
-  void columnsCarryNullabilityCommentsAndDefaults() throws SQLException {
-    try (Connection connection = SharedServer.connect();
-        Statement statement = connection.createStatement()) {
+  private static Map<String, Map<String, String>> describeMetaTable(Connection connection)
+      throws SQLException {
+    try (Statement statement = connection.createStatement()) {
       statement.execute("CREATE SEQUENCE IF NOT EXISTS it_meta_seq START 1");
       statement.execute(
           "CREATE OR REPLACE TABLE it_meta (id INT PRIMARY KEY DEFAULT nextval('it_meta_seq'),"
               + " name VARCHAR NOT NULL, salary DECIMAL(10,2) DEFAULT 50000.00, note VARCHAR)");
       statement.execute("COMMENT ON COLUMN it_meta.name IS 'employee name'");
-      Map<String, Map<String, String>> columns = new HashMap<>();
-      try (ResultSet rows = connection.getMetaData().getColumns(null, null, "it_meta", null)) {
-        while (rows.next()) {
-          columns.put(
-              rows.getString("COLUMN_NAME"),
-              Map.of(
-                  "IS_NULLABLE", rows.getString("IS_NULLABLE"),
-                  "IS_AUTOINCREMENT", rows.getString("IS_AUTOINCREMENT"),
-                  "REMARKS", String.valueOf(rows.getString("REMARKS")),
-                  "COLUMN_DEF", String.valueOf(rows.getString("COLUMN_DEF"))));
+    }
+    Map<String, Map<String, String>> columns = new HashMap<>();
+    try (ResultSet rows = connection.getMetaData().getColumns(null, null, "it_meta", null)) {
+      while (rows.next()) {
+        Map<String, String> column = new HashMap<>();
+        for (String label :
+            List.of(
+                "IS_NULLABLE",
+                "NULLABLE",
+                "IS_AUTOINCREMENT",
+                "REMARKS",
+                "COLUMN_DEF",
+                "COLUMN_SIZE",
+                "DECIMAL_DIGITS")) {
+          column.put(label, String.valueOf(rows.getString(label)));
         }
+        columns.put(rows.getString("COLUMN_NAME"), column);
       }
+    }
+    return columns;
+  }
+
+  @Test
+  void columnsCarryNullabilityAutoIncrementAndPrecision() throws SQLException {
+    try (Connection connection = SharedServer.connect()) {
+      Map<String, Map<String, String>> columns = describeMetaTable(connection);
       assertEquals("NO", columns.get("id").get("IS_NULLABLE"));
+      assertEquals("0", columns.get("id").get("NULLABLE"));
       assertEquals("NO", columns.get("name").get("IS_NULLABLE"));
+      assertEquals("YES", columns.get("salary").get("IS_NULLABLE"));
       assertEquals("YES", columns.get("note").get("IS_NULLABLE"));
-      assertEquals("employee name", columns.get("name").get("REMARKS"));
       assertEquals("YES", columns.get("id").get("IS_AUTOINCREMENT"));
+      assertEquals("NO", columns.get("name").get("IS_AUTOINCREMENT"));
+      assertEquals("10", columns.get("salary").get("COLUMN_SIZE"));
+      assertEquals("2", columns.get("salary").get("DECIMAL_DIGITS"));
+      assertEquals(
+          "10", columns.get("id").get("COLUMN_SIZE"), "an INTEGER's size is in digits, not bits");
+    }
+  }
+
+  @Test
+  @Disabled(
+      "warp-duckdb's table_schema sends no REMARKS for COMMENT ON COLUMN, and Warp SQL defines no"
+          + " key for a column's default (reported)")
+  void columnsCarryCommentsAndDefaults() throws SQLException {
+    try (Connection connection = SharedServer.connect()) {
+      Map<String, Map<String, String>> columns = describeMetaTable(connection);
+      assertEquals("employee name", columns.get("name").get("REMARKS"));
       assertTrue(columns.get("id").get("COLUMN_DEF").contains("nextval"));
       assertTrue(columns.get("salary").get("COLUMN_DEF").contains("50000"));
     }

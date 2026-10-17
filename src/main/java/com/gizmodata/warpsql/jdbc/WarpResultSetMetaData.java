@@ -117,7 +117,10 @@ public final class WarpResultSetMetaData implements ResultSetMetaData {
 
   @Override
   public int getPrecision(int column) throws SQLException {
-    Integer precision = number(column, SqlTypes.PRECISION);
+    Integer precision =
+        SqlTypes.takesPrecisionMetadata(column(column).getType())
+            ? number(column, SqlTypes.PRECISION)
+            : null;
     if (precision != null) {
       return precision;
     }
@@ -127,7 +130,10 @@ public final class WarpResultSetMetaData implements ResultSetMetaData {
 
   @Override
   public int getScale(int column) throws SQLException {
-    Integer scale = number(column, SqlTypes.SCALE);
+    Integer scale =
+        SqlTypes.takesPrecisionMetadata(column(column).getType())
+            ? number(column, SqlTypes.SCALE)
+            : null;
     if (scale != null) {
       return scale;
     }

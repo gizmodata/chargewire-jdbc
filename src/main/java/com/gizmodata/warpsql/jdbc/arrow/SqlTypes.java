@@ -350,6 +350,30 @@ public final class SqlTypes {
     }
   }
 
+  /**
+   * Returns whether the Flight SQL {@link #PRECISION} and {@link #SCALE} keys describe a column of
+   * this type in JDBC's terms: digits of a decimal, or the length of a string or binary. For other
+   * types servers may send something else (DuckDB sends an integer's width in bits), so the Arrow
+   * type decides.
+   *
+   * @param type the Arrow type
+   * @return {@code true} for decimals, strings and binaries
+   */
+  public static boolean takesPrecisionMetadata(ArrowType type) {
+    switch (type.getTypeID()) {
+      case Decimal:
+      case Utf8:
+      case Utf8View:
+      case LargeUtf8:
+      case Binary:
+      case BinaryView:
+      case LargeBinary:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   private static int withFraction(int base, TimeUnit unit) {
     int digits = fractionDigits(unit);
     return digits == 0 ? base : base + 1 + digits;

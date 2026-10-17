@@ -359,7 +359,8 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
   private static Object[] columnRow(Row table, Field field, int position) {
     Map<String, String> metadata = field.getMetadata() == null ? Map.of() : field.getMetadata();
     ArrowType type = field.getType();
-    Integer size = number(metadata.get(SqlTypes.PRECISION));
+    boolean described = SqlTypes.takesPrecisionMetadata(type);
+    Integer size = described ? number(metadata.get(SqlTypes.PRECISION)) : null;
     if (size == null) {
       size = SqlTypes.columnSize(type);
       if (type instanceof ArrowType.FloatingPoint) {
@@ -369,7 +370,7 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
                 : 24;
       }
     }
-    Integer digits = number(metadata.get(SqlTypes.SCALE));
+    Integer digits = described ? number(metadata.get(SqlTypes.SCALE)) : null;
     if (digits == null) {
       digits = SqlTypes.decimalDigits(type);
     }

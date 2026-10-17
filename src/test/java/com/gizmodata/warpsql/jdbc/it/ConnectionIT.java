@@ -22,7 +22,6 @@ import java.sql.SQLNonTransientConnectionException;
 import java.sql.Statement;
 import java.util.Properties;
 import java.util.concurrent.Executors;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -261,9 +260,6 @@ class ConnectionIT {
   }
 
   @Test
-  @Disabled(
-      "warp-duckdb's session document keeps the old schema after SQL USE: GET /sessions/{id}"
-          + " reports main while current_schema() is the new one (reported)")
   void schemaChangedInSqlIsSeenByGetSchema() throws SQLException {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
