@@ -1,7 +1,8 @@
 package com.gizmodata.warpsql.jdbc;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.gizmodata.warpsql.jdbc.client.ResultReader;
+import com.gizmodata.warpsql.jdbc.client.PartitionedResult;
+import com.gizmodata.warpsql.jdbc.client.ResultStream;
 import com.gizmodata.warpsql.jdbc.client.SqlErrors;
 import com.gizmodata.warpsql.jdbc.client.StatementDocument;
 import com.gizmodata.warpsql.jdbc.client.WarpClient;
@@ -24,6 +25,10 @@ import java.util.List;
  * result fetched; the server then retains the result, so a dropped download resumes. {@link
  * #setQueryTimeout(int)} becomes {@code Warp-Statement-Timeout}, and {@link #cancel()} posts the
  * statement's cancel request.
+ *
+ * <p>With {@link #setResultPartitions(int)} above 1 (or the {@code resultPartitions} property), a
+ * server with the {@code result_partitions} capability may split a result into partitions, which
+ * the driver reads over separate connections at once and returns as one result set (spec §6.10).
  */
 public class WarpStatement implements Statement {
   /** The connection the statement belongs to. */
@@ -44,9 +49,13 @@ public class WarpStatement implements Statement {
   private volatile String runningStatementId;
   private volatile boolean cancelRequested;
   private volatile boolean submitting;
+  private int resultPartitions;
+  private boolean anyOrder;
 
   WarpStatement(WarpConnection connection) {
     this.connection = connection;
+    this.resultPartitions = connection.client().config().resultPartitions();
+    this.anyOrder = connection.client().config().anyOrder();
   }
 
   /** Submits one statement in a session. */
@@ -58,7 +67,10 @@ public class WarpStatement implements Statement {
 
   WarpClient.SubmitOptions submitOptions() {
     return new WarpClient.SubmitOptions(
-        queryTimeoutSeconds * 1000L, connection.client().config().async());
+        queryTimeoutSeconds * 1000L,
+        connection.client().config().async(),
+        resultPartitions,
+        anyOrder);
   }
 
   /**
@@ -75,13 +87,14 @@ public class WarpStatement implements Statement {
     warnings = null;
     cancelRequested = false;
     WarpClient client = connection.client();
+    WarpClient.SubmitOptions options = submitOptions();
     WarpClient.Submission submission =
         connection.withSession(
             id -> {
               runningSessionId = id;
               submitting = true;
               try {
-                return submitter.submit(id, submitOptions());
+                return submitter.submit(id, options);
               } finally {
                 submitting = false;
               }
@@ -96,12 +109,13 @@ public class WarpStatement implements Statement {
         cancelOnServer(sessionId, statementId);
       }
       if (submission.arrow() != null) {
-        ResultReader reader =
-            ResultReader.streamed(
+        ResultStream reader =
+            PartitionedResult.streamed(
                 client,
                 connection.allocator(),
                 sessionId,
                 submission.arrow(),
+                options.anyOrder(),
                 () -> cancelRequested);
         if (!Boolean.TRUE.equals(client.config().retainResults())) {
           connection.streaming(reader);
@@ -119,8 +133,13 @@ public class WarpStatement implements Statement {
       }
       if (document.hasRows()) {
         open(
-            ResultReader.fetched(
-                client, connection.allocator(), sessionId, document, () -> cancelRequested));
+            PartitionedResult.fetched(
+                client,
+                connection.allocator(),
+                sessionId,
+                document,
+                options.anyOrder(),
+                () -> cancelRequested));
         producedRows = true;
         return true;
       }
@@ -146,7 +165,7 @@ public class WarpStatement implements Statement {
    * Opens the result and reads up to its first rows, so that a statement that fails as it starts
    * fails here, in {@code execute}, even when the server sent the result's schema first.
    */
-  private void open(ResultReader reader) throws SQLException {
+  private void open(ResultStream reader) throws SQLException {
     String sessionId = runningSessionId;
     WarpResultSet[] holder = new WarpResultSet[1];
     holder[0] =
@@ -166,7 +185,7 @@ public class WarpStatement implements Statement {
 
   /** Frees what the server still holds for a result that was not read to the end, or retained. */
   private void resultSetClosed(
-      WarpResultSet closedSet, ResultReader reader, String sessionId, String statementId) {
+      WarpResultSet closedSet, ResultStream reader, String sessionId, String statementId) {
     connection.streamClosed(reader);
     runningStatementId = null;
     if (resultSet == closedSet) {
@@ -505,6 +524,63 @@ public class WarpStatement implements Statement {
       throw new SQLException("The timeout must not be negative", "HY024");
     }
     queryTimeoutSeconds = seconds;
+  }
+
+  /**
+   * Sets the most partitions of each result to read at once, each over its own connection (spec
+   * §6.10), for statements run afterwards. The default is the {@code resultPartitions} property's.
+   * The server decides how many partitions a result gets, if any; it keeps small results in one.
+   *
+   * @param partitions 1 (one connection per result) to 256
+   * @throws SQLException if the statement is closed or the number is out of range
+   */
+  public void setResultPartitions(int partitions) throws SQLException {
+    checkOpen();
+    if (partitions < 1 || partitions > WarpClient.MAX_RESULT_PARTITIONS) {
+      throw new SQLException(
+          "The partition count must be from 1 to " + WarpClient.MAX_RESULT_PARTITIONS, "HY024");
+    }
+    resultPartitions = partitions;
+  }
+
+  /**
+   * Returns the most partitions of each result to read at once.
+   *
+   * @return 1 to 256
+   * @throws SQLException if the statement is closed
+   */
+  public int getResultPartitions() throws SQLException {
+    checkOpen();
+    return resultPartitions;
+  }
+
+  /**
+   * Sets whether a result read in partitions must keep its row order, for statements run
+   * afterwards. With {@code any}, batches come back as the partitions deliver them, which can be
+   * faster; the order of an {@code ORDER BY} is then lost. The default is the {@code resultOrder}
+   * property's.
+   *
+   * @param order {@code preserve} or {@code any}
+   * @throws SQLException if the statement is closed or the value is neither
+   */
+  public void setResultOrder(String order) throws SQLException {
+    checkOpen();
+    try {
+      anyOrder = WarpDriver.resultOrderIsAny(order);
+    } catch (SQLException e) {
+      throw new SQLException(e.getMessage(), "HY024", e);
+    }
+  }
+
+  /**
+   * Returns whether a result read in partitions must keep its row order.
+   *
+   * @return {@code preserve} or {@code any}
+   * @throws SQLException if the statement is closed
+   */
+  public String getResultOrder() throws SQLException {
+    checkOpen();
+    return anyOrder ? "any" : "preserve";
   }
 
   @Override

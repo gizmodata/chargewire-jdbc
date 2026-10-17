@@ -41,6 +41,8 @@ public final class ConnectionConfig {
   final Boolean retainResults;
   final boolean async;
   final int pollWaitSeconds;
+  final int resultPartitions;
+  final boolean anyOrder;
 
   private ConnectionConfig(Builder builder) {
     String scheme = builder.useEncryption ? "https" : "http";
@@ -68,6 +70,8 @@ public final class ConnectionConfig {
     this.retainResults = builder.retainResults;
     this.async = builder.async;
     this.pollWaitSeconds = builder.pollWaitSeconds;
+    this.resultPartitions = builder.resultPartitions;
+    this.anyOrder = builder.anyOrder;
   }
 
   /**
@@ -116,6 +120,24 @@ public final class ConnectionConfig {
     return retainResults;
   }
 
+  /**
+   * Returns how many partitions of a result to read at once (spec §6.10).
+   *
+   * @return 1 (results in one partition) to 256
+   */
+  public int resultPartitions() {
+    return resultPartitions;
+  }
+
+  /**
+   * Returns whether results may come back in any order when they are split into partitions.
+   *
+   * @return {@code true} for {@code resultOrder=any}
+   */
+  public boolean anyOrder() {
+    return anyOrder;
+  }
+
   /** Builds a {@link ConnectionConfig}. */
   public static final class Builder {
     private String host;
@@ -138,6 +160,8 @@ public final class ConnectionConfig {
     private Boolean retainResults;
     private boolean async;
     private int pollWaitSeconds = 10;
+    private int resultPartitions = 1;
+    private boolean anyOrder;
 
     /**
      * Sets the host and port.
@@ -240,6 +264,19 @@ public final class ConnectionConfig {
       this.retainResults = retainResults;
       this.async = async;
       this.pollWaitSeconds = pollWaitSeconds;
+      return this;
+    }
+
+    /**
+     * Sets how results are read (spec §6.10).
+     *
+     * @param resultPartitions the most partitions of a result to read at once; 1 for none
+     * @param anyOrder the rows of a split result may come back in any order
+     * @return this builder
+     */
+    public Builder partitions(int resultPartitions, boolean anyOrder) {
+      this.resultPartitions = resultPartitions;
+      this.anyOrder = anyOrder;
       return this;
     }
 

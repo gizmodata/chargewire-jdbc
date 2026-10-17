@@ -1,6 +1,6 @@
 package com.gizmodata.warpsql.jdbc;
 
-import com.gizmodata.warpsql.jdbc.client.ResultReader;
+import com.gizmodata.warpsql.jdbc.client.ResultStream;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -73,10 +73,10 @@ abstract class ResultBatches implements AutoCloseable {
 
   /** A server result, streamed batch by batch. */
   static final class Streamed extends ResultBatches {
-    private final ResultReader reader;
+    private final ResultStream reader;
     private final List<Field> columns;
 
-    Streamed(ResultReader reader) {
+    Streamed(ResultStream reader) {
       this.reader = reader;
       this.columns = userColumns(reader.schema(), reader.dictionaries());
     }

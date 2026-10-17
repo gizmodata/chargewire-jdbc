@@ -3,7 +3,7 @@ package com.gizmodata.warpsql.jdbc;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gizmodata.warpsql.jdbc.client.ConnectionConfig;
-import com.gizmodata.warpsql.jdbc.client.ResultReader;
+import com.gizmodata.warpsql.jdbc.client.ResultStream;
 import com.gizmodata.warpsql.jdbc.client.WarpClient;
 import java.sql.Array;
 import java.sql.Blob;
@@ -54,7 +54,7 @@ public final class WarpConnection implements Connection {
   private final BufferAllocator allocator;
   private final Set<WarpStatement> statements = ConcurrentHashMap.newKeySet();
   private final Set<WarpResultSet> metadataResults = ConcurrentHashMap.newKeySet();
-  private final Set<ResultReader> unreadStreams = ConcurrentHashMap.newKeySet();
+  private final Set<ResultStream> unreadStreams = ConcurrentHashMap.newKeySet();
   private final long resultBufferSize;
   private final Object sessionLock = new Object();
 
@@ -195,7 +195,7 @@ public final class WarpConnection implements Connection {
   <T> T withSession(SessionCall<T> call, boolean needsEngine) throws SQLException {
     checkOpen();
     if (needsEngine) {
-      for (ResultReader stream : unreadStreams) {
+      for (ResultStream stream : unreadStreams) {
         stream.buffer(resultBufferSize);
       }
     }
@@ -311,11 +311,11 @@ public final class WarpConnection implements Connection {
   }
 
   /** Notes a result that streams without retention, so it is buffered before other work. */
-  void streaming(ResultReader stream) {
+  void streaming(ResultStream stream) {
     unreadStreams.add(stream);
   }
 
-  void streamClosed(ResultReader stream) {
+  void streamClosed(ResultStream stream) {
     unreadStreams.remove(stream);
   }
 

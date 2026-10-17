@@ -7,6 +7,9 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
@@ -15,7 +18,8 @@ import java.util.regex.Pattern;
  * A TCP proxy in front of a server that breaks connections on purpose: after a request matching a
  * pattern goes through, it lets a given number of response bytes back and then closes both sides,
  * the way a proxy timeout or a network failure would. It breaks the first {@code times} such
- * responses and forwards everything else untouched.
+ * responses and forwards everything else untouched. It also records the requests it forwards and
+ * how many connections were open at once.
  */
 final class ChaosProxy implements AutoCloseable {
   private final ServerSocket listener;
@@ -25,6 +29,11 @@ final class ChaosProxy implements AutoCloseable {
   private final AtomicInteger cutsLeft;
   private final AtomicInteger cuts = new AtomicInteger();
   private final AtomicLong bytesFromServer = new AtomicLong();
+  private final ConcurrentLinkedQueue<String> requests = new ConcurrentLinkedQueue<>();
+  private final AtomicInteger open = new AtomicInteger();
+  private final AtomicInteger mostOpen = new AtomicInteger();
+  private static final Pattern REQUEST_LINE =
+      Pattern.compile("(?m)^(?:GET|POST|DELETE|PATCH|PUT) \\S+(?= HTTP/1\\.1)");
 
   ChaosProxy(int targetPort, String requestPattern, long cutAfterBytes, int times)
       throws IOException {
@@ -52,6 +61,16 @@ final class ChaosProxy implements AutoCloseable {
     return bytesFromServer.get();
   }
 
+  /** The request lines forwarded so far, for example {@code GET /warp/v1/...}. */
+  List<String> requests() {
+    return new ArrayList<>(requests);
+  }
+
+  /** The most client connections that were open at the same time. */
+  int mostOpenConnections() {
+    return mostOpen.get();
+  }
+
   private void accept() {
     while (!listener.isClosed()) {
       Socket client;
@@ -62,6 +81,7 @@ final class ChaosProxy implements AutoCloseable {
       }
       try {
         Socket server = new Socket(InetAddress.getLoopbackAddress(), targetPort);
+        mostOpen.accumulateAndGet(open.incrementAndGet(), Math::max);
         Connection connection = new Connection(client, server);
         start(connection::clientToServer);
         start(connection::serverToClient);
@@ -87,6 +107,7 @@ final class ChaosProxy implements AutoCloseable {
     private final Socket server;
     private volatile long armedAt = -1;
     private long fromServer;
+    private final AtomicInteger pipesOpen = new AtomicInteger(2);
 
     Connection(Socket client, Socket server) {
       this.client = client;
@@ -99,7 +120,12 @@ final class ChaosProxy implements AutoCloseable {
           OutputStream out = server.getOutputStream()) {
         byte[] buffer = new byte[16384];
         for (int read; (read = in.read(buffer)) >= 0; ) {
-          recent.append(new String(buffer, 0, read, StandardCharsets.ISO_8859_1));
+          String text = new String(buffer, 0, read, StandardCharsets.ISO_8859_1);
+          java.util.regex.Matcher line = REQUEST_LINE.matcher(text);
+          while (line.find()) {
+            requests.add(line.group());
+          }
+          recent.append(text);
           if (recent.length() > 8192) {
             recent.delete(0, recent.length() - 8192);
           }
@@ -150,6 +176,9 @@ final class ChaosProxy implements AutoCloseable {
     }
 
     private void closeBoth() {
+      if (pipesOpen.decrementAndGet() == 0) {
+        open.decrementAndGet();
+      }
       try {
         client.close();
       } catch (IOException e) {

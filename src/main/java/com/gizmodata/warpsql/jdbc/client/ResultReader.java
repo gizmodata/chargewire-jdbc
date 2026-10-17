@@ -31,7 +31,9 @@ import org.apache.arrow.vector.util.TransferPair;
  * <p>A stream that breaks off, whether the connection dropped or the statement failed mid-stream
  * (spec §6.6), is explained by the statement document: a failed or cancelled statement raises its
  * own error, and a succeeded statement whose result the server retained is fetched again from the
- * next unread batch (spec §6.5). A result with several partitions is read partition by partition.
+ * next unread batch (spec §6.5). A result with several partitions is read partition by partition,
+ * unless the reader is for one partition only: {@link PartitionedResult} reads the partitions of a
+ * split result (spec §6.10) concurrently, with one reader each.
  *
  * <p>{@link #buffer(long)} reads the rest of the stream into memory at once. The connection does
  * that before it sends anything else that needs the session, because a server may hold a session's
@@ -40,7 +42,7 @@ import org.apache.arrow.vector.util.TransferPair;
  *
  * <p>Internal API.
  */
-public final class ResultReader implements AutoCloseable {
+public final class ResultReader implements ResultStream {
   private static final int MAX_RESUMES = 3;
 
   private final WarpClient client;
@@ -48,6 +50,7 @@ public final class ResultReader implements AutoCloseable {
   private final String sessionId;
   private final String statementId;
   private final BooleanSupplier cancelRequested;
+  private final boolean onePartition;
   private List<StatementDocument.Partition> partitions;
   private int partition;
   private long batchesRead;
@@ -72,12 +75,14 @@ public final class ResultReader implements AutoCloseable {
       BufferAllocator allocator,
       String sessionId,
       String statementId,
-      BooleanSupplier cancelRequested) {
+      BooleanSupplier cancelRequested,
+      boolean onePartition) {
     this.client = client;
     this.allocator = allocator;
     this.sessionId = sessionId;
     this.statementId = statementId;
     this.cancelRequested = cancelRequested;
+    this.onePartition = onePartition;
   }
 
   /**
@@ -99,9 +104,66 @@ public final class ResultReader implements AutoCloseable {
       WarpClient.ArrowResponse response,
       BooleanSupplier cancelRequested)
       throws SQLException {
+    return streamed(client, allocator, sessionId, response, cancelRequested, false);
+  }
+
+  /**
+   * Reads a result streaming in a submission's response, either all of it or, for a result split
+   * into partitions (spec §6.10), partition 0 only.
+   *
+   * @param client the client
+   * @param allocator where batches are allocated
+   * @param sessionId the session
+   * @param response the streaming response
+   * @param cancelRequested whether the application cancelled the statement
+   * @param onePartition read partition 0 only, never the partitions after it
+   * @return a reader positioned before the first batch
+   * @throws SQLException if the stream fails before its schema, with the statement's error
+   */
+  static ResultReader streamed(
+      WarpClient client,
+      BufferAllocator allocator,
+      String sessionId,
+      WarpClient.ArrowResponse response,
+      BooleanSupplier cancelRequested,
+      boolean onePartition)
+      throws SQLException {
     ResultReader result =
-        new ResultReader(client, allocator, sessionId, response.statementId(), cancelRequested);
+        new ResultReader(
+            client, allocator, sessionId, response.statementId(), cancelRequested, onePartition);
     result.start(response.body());
+    return result;
+  }
+
+  /**
+   * Fetches one partition of a result (spec §6.4), and only that one, from its first batch.
+   *
+   * @param client the client
+   * @param allocator where batches are allocated
+   * @param sessionId the session
+   * @param statementId the statement
+   * @param partitions the result's partitions from its statement document, or {@code null} when
+   *     they are known only from the streamed response's headers (all on this server)
+   * @param position the partition's position in {@code partitions}, which is also its index
+   * @param cancelRequested whether the application cancelled the statement
+   * @return a reader positioned before the partition's first batch
+   * @throws SQLException if the partition cannot be fetched, with the statement's error when it
+   *     failed
+   */
+  static ResultReader partition(
+      WarpClient client,
+      BufferAllocator allocator,
+      String sessionId,
+      String statementId,
+      List<StatementDocument.Partition> partitions,
+      int position,
+      BooleanSupplier cancelRequested)
+      throws SQLException {
+    ResultReader result =
+        new ResultReader(client, allocator, sessionId, statementId, cancelRequested, true);
+    result.partitions = partitions;
+    result.partition = position;
+    result.start(result.open(0));
     return result;
   }
 
@@ -124,7 +186,8 @@ public final class ResultReader implements AutoCloseable {
       BooleanSupplier cancelRequested)
       throws SQLException {
     ResultReader result =
-        new ResultReader(client, allocator, sessionId, document.statementId(), cancelRequested);
+        new ResultReader(
+            client, allocator, sessionId, document.statementId(), cancelRequested, false);
     result.partitions = document.partitions().isEmpty() ? null : document.partitions();
     result.start(result.open(0));
     return result;
@@ -340,7 +403,7 @@ public final class ResultReader implements AutoCloseable {
         continue;
       }
       drainBody();
-      if (partitions != null && partition + 1 < partitions.size()) {
+      if (!onePartition && partitions != null && partition + 1 < partitions.size()) {
         partition++;
         batchesRead = 0;
         start(open(0));

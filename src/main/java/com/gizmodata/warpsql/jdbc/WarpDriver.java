@@ -1,6 +1,7 @@
 package com.gizmodata.warpsql.jdbc;
 
 import com.gizmodata.warpsql.jdbc.client.ConnectionConfig;
+import com.gizmodata.warpsql.jdbc.client.WarpClient;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
@@ -152,6 +153,14 @@ public final class WarpDriver implements Driver {
       throw invalid(WarpProperty.IPC_COMPRESSION, compression, "none or zstd");
     }
     String retain = WarpProperty.RETAIN_RESULTS.get(properties);
+    long partitions = number(properties, WarpProperty.RESULT_PARTITIONS);
+    if (partitions < 1 || partitions > WarpClient.MAX_RESULT_PARTITIONS) {
+      throw invalid(
+          WarpProperty.RESULT_PARTITIONS,
+          Long.toString(partitions),
+          "a number from 1 to " + WarpClient.MAX_RESULT_PARTITIONS);
+    }
+    boolean anyOrder = resultOrderIsAny(WarpProperty.RESULT_ORDER.get(properties));
     return new ConnectionConfig.Builder()
         .address(url.host, url.port)
         .basePath(WarpProperty.BASE_PATH.get(properties))
@@ -175,7 +184,26 @@ public final class WarpDriver implements Driver {
             retain == null ? null : bool(properties, WarpProperty.RETAIN_RESULTS),
             bool(properties, WarpProperty.ASYNC),
             (int) number(properties, WarpProperty.POLL_WAIT))
+        .partitions((int) partitions, anyOrder)
         .build();
+  }
+
+  /**
+   * Reads a {@code resultOrder} value.
+   *
+   * @param value {@code preserve} or {@code any}, in any case
+   * @return {@code true} for {@code any}
+   * @throws SQLException for any other value
+   */
+  static boolean resultOrderIsAny(String value) throws SQLException {
+    String order = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    if ("any".equals(order)) {
+      return true;
+    }
+    if (!"preserve".equals(order)) {
+      throw invalid(WarpProperty.RESULT_ORDER, value, "preserve or any");
+    }
+    return false;
   }
 
   static boolean bool(Map<String, String> properties, WarpProperty property) throws SQLException {

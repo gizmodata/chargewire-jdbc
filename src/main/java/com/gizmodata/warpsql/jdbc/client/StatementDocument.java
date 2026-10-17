@@ -72,6 +72,7 @@ public final class StatementDocument {
   private final byte[] schema;
   private final List<Partition> partitions;
   private final boolean retained;
+  private final String partitionOrder;
 
   private StatementDocument(
       String statementId,
@@ -82,7 +83,8 @@ public final class StatementDocument {
       long rowsAffected,
       byte[] schema,
       List<Partition> partitions,
-      boolean retained) {
+      boolean retained,
+      String partitionOrder) {
     this.statementId = statementId;
     this.state = state;
     this.error = error;
@@ -92,6 +94,7 @@ public final class StatementDocument {
     this.schema = schema;
     this.partitions = partitions;
     this.retained = retained;
+    this.partitionOrder = partitionOrder;
   }
 
   /**
@@ -123,7 +126,9 @@ public final class StatementDocument {
     byte[] schema = null;
     List<Partition> partitions = Collections.emptyList();
     boolean retained = false;
+    String partitionOrder = null;
     if (result != null && result.isObject()) {
+      partitionOrder = result.path("partition_order").asText(null);
       rows = "rows".equals(result.path("kind").asText());
       JsonNode affected = result.get("rows_affected");
       rowsAffected = affected == null || affected.isNull() ? -1 : affected.asLong();
@@ -143,7 +148,16 @@ public final class StatementDocument {
       }
     }
     return new StatementDocument(
-        id, state, error, cancelReason, rows, rowsAffected, schema, partitions, retained);
+        id,
+        state,
+        error,
+        cancelReason,
+        rows,
+        rowsAffected,
+        schema,
+        partitions,
+        retained,
+        partitionOrder);
   }
 
   /**
@@ -225,5 +239,15 @@ public final class StatementDocument {
    */
   public boolean retained() {
     return retained;
+  }
+
+  /**
+   * Returns how a result split into several partitions spreads its rows over them (spec §6.10).
+   *
+   * @return {@code interleaved} or {@code any}, or {@code null} for one partition, a split not
+   *     decided yet, or partitions on other servers
+   */
+  public String partitionOrder() {
+    return partitionOrder;
   }
 }

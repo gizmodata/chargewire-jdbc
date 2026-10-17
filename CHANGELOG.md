@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Partitioned results (Warp SQL spec §6.10): with `resultPartitions=<n>` (1 to 256, default 1),
+  on servers with the `result_partitions` capability, the driver sends
+  `Warp-Result-Partitions` and `Warp-Result-Order`, and reads a result the server splits over
+  one HTTP connection per partition, all at once, with a few batches buffered per partition, as
+  one `ResultSet`. `resultOrder=preserve` (the default) rebuilds the result's order from the
+  interleaved partitions, so `ORDER BY` holds; `resultOrder=any` returns batches as they arrive.
+  Both work on the streamed path (the `Warp-Result-Partitions`/`Warp-Result-Order` response
+  headers) and with `async=true` (`result.partitions` and `partition_order`), and for prepared
+  statements; `WarpStatement.setResultPartitions`/`setResultOrder` set them per statement. A
+  result is complete only when every partition ended with its end-of-stream marker: any partition
+  that breaks off fails the whole result with the statement's error, a retained partition first
+  resumes from its own next batch, and closing the result, `cancel()` or `setMaxRows` stop every
+  partition's download.
+
 - `getColumns` reports `COLUMN_DEF` from the server's `WARP:SQL:COLUMN_DEFAULT` (warp-sql
   0d5a36c). The tests for typed-NULL, list and interval parameters and for column
   comments and defaults run again: the server bugs they were disabled for are fixed.

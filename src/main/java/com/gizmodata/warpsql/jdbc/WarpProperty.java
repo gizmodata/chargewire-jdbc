@@ -69,7 +69,20 @@ public enum WarpProperty {
   RESULT_BUFFER_SIZE(
       "resultBufferSize",
       "134217728",
-      "Bytes an unread result may buffer when another statement needs the session");
+      "Bytes an unread result may buffer when another statement needs the session"),
+  /**
+   * The most partitions of a result to read at once, each over its own connection (spec §6.10);
+   * {@code 1} reads every result over one connection.
+   */
+  RESULT_PARTITIONS(
+      "resultPartitions",
+      "1",
+      "Partitions of a result to read at once over separate connections (1 to 256; 1: one)"),
+  /** Whether the rows of a result split into partitions must keep their order. */
+  RESULT_ORDER(
+      "resultOrder",
+      "preserve",
+      "preserve or any: whether a result read in partitions must keep its row order");
 
   private final String key;
   private final String defaultValue;
@@ -118,6 +131,8 @@ public enum WarpProperty {
       info.choices = new String[] {"true", "false"};
     } else if (this == IPC_COMPRESSION) {
       info.choices = new String[] {"none", "zstd"};
+    } else if (this == RESULT_ORDER) {
+      info.choices = new String[] {"preserve", "any"};
     }
     return info;
   }

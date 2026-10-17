@@ -49,6 +49,9 @@ public final class WarpClient implements AutoCloseable {
   private static final int MAX_ATTEMPTS = 3;
   private static final int MAX_ERROR_BODY = 1 << 20;
 
+  /** The most partitions a client may ask for (spec §6.10). */
+  public static final int MAX_RESULT_PARTITIONS = 256;
+
   /** How long to poll a statement without long-polling. */
   private static final long SHORT_POLLING_NANOS = Duration.ofMillis(250).toNanos();
 
@@ -413,16 +416,43 @@ public final class WarpClient implements AutoCloseable {
   public static final class SubmitOptions {
     final long timeoutMillis;
     final boolean async;
+    final int resultPartitions;
+    final boolean anyOrder;
+
+    /**
+     * Creates submit options for a result in one partition.
+     *
+     * @param timeoutMillis {@code Warp-Statement-Timeout}, or 0 for none
+     * @param async submit with {@code respond-async} and expect a status document
+     */
+    public SubmitOptions(long timeoutMillis, boolean async) {
+      this(timeoutMillis, async, 1, false);
+    }
 
     /**
      * Creates submit options.
      *
      * @param timeoutMillis {@code Warp-Statement-Timeout}, or 0 for none
      * @param async submit with {@code respond-async} and expect a status document
+     * @param resultPartitions {@code Warp-Result-Partitions}: the most partitions to read at once
+     *     (spec §6.10); 1 asks for none
+     * @param anyOrder {@code Warp-Result-Order: any}: the rows' order does not matter
      */
-    public SubmitOptions(long timeoutMillis, boolean async) {
+    public SubmitOptions(
+        long timeoutMillis, boolean async, int resultPartitions, boolean anyOrder) {
       this.timeoutMillis = timeoutMillis;
       this.async = async;
+      this.resultPartitions = resultPartitions;
+      this.anyOrder = anyOrder;
+    }
+
+    /**
+     * Returns whether the submission asks for {@code Warp-Result-Order: any}.
+     *
+     * @return {@code true} if the rows' order does not matter
+     */
+    public boolean anyOrder() {
+      return anyOrder;
     }
   }
 
@@ -468,10 +498,37 @@ public final class WarpClient implements AutoCloseable {
   public static final class ArrowResponse {
     private final InputStream body;
     private final String statementId;
+    private final String partitions;
+    private final String order;
 
     ArrowResponse(InputStream body, String statementId) {
+      this(body, statementId, null, null);
+    }
+
+    ArrowResponse(InputStream body, String statementId, String partitions, String order) {
       this.body = body;
       this.statementId = statementId;
+      this.partitions = partitions;
+      this.order = order;
+    }
+
+    /**
+     * Returns the {@code Warp-Result-Partitions} header of a streamed result (spec §6.10): how many
+     * partitions the result is split into, this response being partition 0.
+     *
+     * @return the header's value, or {@code null} for a result in one partition
+     */
+    public String partitions() {
+      return partitions;
+    }
+
+    /**
+     * Returns the {@code Warp-Result-Order} header of a streamed result split into partitions.
+     *
+     * @return {@code interleaved} or {@code any}, or {@code null}
+     */
+    public String order() {
+      return order;
     }
 
     /**
@@ -585,6 +642,12 @@ public final class WarpClient implements AutoCloseable {
               if (config.retainResults != null) {
                 builder.header("Warp-Retain-Result", config.retainResults.toString());
               }
+              if (options.resultPartitions > 1 && hasCapability("result_partitions")) {
+                builder.header(
+                    "Warp-Result-Partitions",
+                    Integer.toString(Math.min(options.resultPartitions, MAX_RESULT_PARTITIONS)));
+                builder.header("Warp-Result-Order", options.anyOrder ? "any" : "preserve");
+              }
               acceptCompression(builder);
               return builder;
             },
@@ -595,7 +658,10 @@ public final class WarpClient implements AutoCloseable {
       return new Submission(
           null,
           new ArrowResponse(
-              response.body(), response.headers().firstValue("Warp-Statement-Id").orElse(null)));
+              response.body(),
+              response.headers().firstValue("Warp-Statement-Id").orElse(null),
+              response.headers().firstValue("Warp-Result-Partitions").orElse(null),
+              response.headers().firstValue("Warp-Result-Order").orElse(null)));
     }
     return new Submission(statementDocument(readJson(response)), null);
   }
