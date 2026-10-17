@@ -27,12 +27,14 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Any server with warp-duckdb's flags ({@code --host}, {@code --port}, {@code --username},
  * {@code --tls-cert}, {@code --tls-key}) works. For another one, name its password variable, its
- * client-CA flag and its product name (Hardcharger: {@code HARDCHARGER_PASSWORD}, {@code
- * --mtls-ca-cert}, {@code Hardcharger}):
+ * client-CA flag, its user-name flag and its product name (Hardcharger: {@code
+ * HARDCHARGER_ADMIN_PASSWORD}, {@code --mtls-ca-cert}, {@code --admin-username}, {@code
+ * Hardcharger}):
  *
  * <pre>
  * WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV  (default WARP_DUCKDB_PASSWORD)
  * WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG     (default --tls-client-ca)
+ * WARP_SQL_JDBC_TEST_SERVER_USERNAME_FLAG (default --username)
  * WARP_SQL_JDBC_TEST_SERVER_NAME          (default warp-duckdb)
  * </pre>
  */
@@ -46,6 +48,10 @@ final class WarpServer implements AutoCloseable {
   /** The flag that makes the server require client certificates from a CA file. */
   static final String MTLS_FLAG =
       environment("WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG", "--tls-client-ca");
+
+  /** The flag that names the server's administrator. */
+  private static final String USERNAME_FLAG =
+      environment("WARP_SQL_JDBC_TEST_SERVER_USERNAME_FLAG", "--username");
 
   private static final String PASSWORD_VARIABLE =
       environment("WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV", "WARP_DUCKDB_PASSWORD");
@@ -123,7 +129,7 @@ final class WarpServer implements AutoCloseable {
                   "127.0.0.1",
                   "--port",
                   Integer.toString(port),
-                  "--username",
+                  USERNAME_FLAG,
                   USER));
       command.addAll(List.of(extraArgs));
       ProcessBuilder builder =
