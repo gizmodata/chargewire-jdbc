@@ -186,7 +186,8 @@ class MetadataIT {
         assertEquals(names.size(), rows.getInt("ORDINAL_POSITION"));
         assertEquals("child", rows.getString("TABLE_NAME"));
         if (name.equals("amount")) {
-          assertEquals("DECIMAL(12,3)", rows.getString("TYPE_NAME"));
+          // The base type, as GizmoSQL 1.x reports it; the digits are separate.
+          assertEquals("DECIMAL", rows.getString("TYPE_NAME"));
           assertEquals(12, rows.getInt("COLUMN_SIZE"));
           assertEquals(3, rows.getInt("DECIMAL_DIGITS"));
           assertEquals(10, rows.getInt("NUM_PREC_RADIX"));
@@ -341,13 +342,24 @@ class MetadataIT {
   }
 
   @Test
-  void typeInfoIsEmptyWhenTheServerHasNoEndpoint() throws SQLException {
+  void typeInfoListsTheServersTypesOrderedByDataType() throws SQLException {
     try (Connection connection = SharedServer.connect()) {
       ResultSet rows = connection.getMetaData().getTypeInfo();
       assertEquals(18, rows.getMetaData().getColumnCount());
       assertEquals("TYPE_NAME", rows.getMetaData().getColumnLabel(1));
-      assertFalse(rows.next(), "warp-duckdb has no type-info endpoint");
+      Map<String, Integer> dataTypes = new HashMap<>();
+      int previous = Integer.MIN_VALUE;
+      while (rows.next()) {
+        int dataType = rows.getInt("DATA_TYPE");
+        assertTrue(dataType >= previous, "getTypeInfo is ordered by DATA_TYPE");
+        previous = dataType;
+        dataTypes.putIfAbsent(rows.getString("TYPE_NAME"), dataType);
+      }
       rows.close();
+      assertEquals(Types.INTEGER, dataTypes.get("integer"));
+      assertEquals(Types.BIGINT, dataTypes.get("bigint"));
+      assertEquals(Types.VARCHAR, dataTypes.get("varchar"));
+      assertEquals(Types.DECIMAL, dataTypes.get("decimal"));
     }
   }
 
