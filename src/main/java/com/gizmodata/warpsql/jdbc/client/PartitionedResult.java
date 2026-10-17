@@ -605,6 +605,26 @@ public final class PartitionedResult implements ResultStream {
       }
     } catch (SQLException e) {
       heldError = e;
+      return;
+    }
+    // Every partition has ended: wait for the readers to let go of their connections, so
+    // the statement that made the session buffer this result finds them released.
+    awaitReaders();
+  }
+
+  private void awaitReaders() {
+    long deadline = System.nanoTime() + CLOSE_WAIT_NANOS;
+    for (Thread thread : threads) {
+      long left = deadline - System.nanoTime();
+      if (left <= 0 || thread == Thread.currentThread()) {
+        continue;
+      }
+      try {
+        thread.join(Math.max(1, TimeUnit.NANOSECONDS.toMillis(left)));
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
     }
   }
 
