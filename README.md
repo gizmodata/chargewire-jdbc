@@ -1,9 +1,30 @@
-# warp-sql-jdbc
+<p align="center">
+  <a href="https://github.com/gizmodata/warp-sql">
+    <img src="docs/assets/warp-sql-jdbc-banner.svg" alt="Warp SQL JDBC: one jar, Java 17+, no gRPC. By GizmoData." width="100%">
+  </a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/JDBC-4.2-red.svg?logo=openjdk" alt="JDBC 4.2">
+  <img src="https://img.shields.io/badge/Java-17%2B-orange.svg?logo=openjdk" alt="Java 17+">
+  <a href="https://github.com/gizmodata/warp-sql"><img src="https://img.shields.io/badge/protocol-Warp%20SQL-31a8db.svg" alt="Warp SQL protocol"></a>
+  <img src="https://img.shields.io/badge/JVM%20flags-none%20needed-brightgreen.svg" alt="No JVM flags needed">
+  <img src="https://img.shields.io/badge/gRPC-not%20needed-lightgrey.svg" alt="No gRPC">
+  <a href="https://github.com/gizmodata/hardcharger"><img src="https://img.shields.io/badge/tested%20with-Hardcharger-f15a24.svg" alt="Tested with Hardcharger"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-brightgreen.svg" alt="Apache 2.0 license"></a>
+  <a href="https://gizmodata.com"><img src="https://img.shields.io/badge/by-GizmoData-f15a24.svg" alt="GizmoData"></a>
+</p>
+
+<h3 align="center">Warp SQL for Java applications and JDBC tools: drop in one jar.</h3>
+
+---
+
+## ☕ What is it?
 
 A JDBC driver for the [Warp SQL protocol](https://github.com/gizmodata/warp-sql): SQL over
 plain HTTP, with results and parameters as Apache Arrow IPC streams. It is generic: it talks to
 any server that implements the Warp SQL spec, and is tested against the reference server,
-`warp-duckdb`.
+`warp-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
 **Status: 0.1.0-SNAPSHOT**, written against Warp SQL draft 0.1.0. Nothing is published yet.
 
@@ -16,7 +37,7 @@ any server that implements the Warp SQL spec, and is tested against the referenc
 - TLS by default, with PEM or trust-store roots, mutual TLS, and an explicit development-only
   switch to skip verification
 
-## Build
+## 🛠️ Build
 
 ```bash
 mvn package            # unit tests, then target/warp-sql-jdbc.jar
@@ -25,7 +46,7 @@ mvn verify             # also the integration tests (needs a server binary; see 
 
 `target/warp-sql-jdbc.jar` is the driver: put it on the class path, nothing else.
 
-## Connect
+## 🚀 Connect
 
 ```
 jdbc:warp://host[:port][/catalog][?key=value&...]
@@ -81,7 +102,7 @@ For a local server without TLS, add `useEncryption=false`.
 
 `WarpDataSource` takes the same URL and properties.
 
-## How statements run
+## 🧠 How statements run
 
 - **Streamed (the default).** One `POST` runs the statement and streams its result; statements
   without rows answer with a document carrying the update count. `setQueryTimeout` becomes
@@ -116,7 +137,7 @@ For a local server without TLS, add `useEncryption=false`.
 Every request that creates a statement carries an `Idempotency-Key`, so retrying one whose response
 was lost cannot run it twice. An expired access token is renewed with the connection's credential.
 
-## Types
+## 🔢 Types
 
 | Arrow | JDBC type | `getObject` returns |
 |---|---|---|
@@ -145,7 +166,7 @@ zone), `BigInteger` and `UUID`. A timestamp without a time zone is a wall-clock 
 a `Calendar` never shifts it. Numbers that do not fit the requested type raise SQLSTATE `22003`
 rather than wrap around, and text that does not parse raises `22018`.
 
-## Errors
+## ⚠️ Errors
 
 Server errors are RFC 9457 problem documents. The driver raises the `SQLException` subclass that
 their SQLSTATE calls for (the server's, or one that follows from the problem's `code`), with the
@@ -157,7 +178,7 @@ HTTP status as the vendor code. The problem itself is the cause:
 }
 ```
 
-## DBeaver and other tools
+## 🦫 DBeaver and other tools
 
 1. **Database > Driver Manager > New.**
 2. Driver name `Warp SQL`; class name `com.gizmodata.warpsql.jdbc.WarpDriver`; URL template
@@ -169,20 +190,20 @@ HTTP status as the vendor code. The problem itself is the cause:
 
 No JVM options are needed. Keep DBeaver's default of a separate connection for metadata reads.
 
-## Not supported
+## 🚫 Not supported
 
 Generated keys (use `INSERT ... RETURNING`), savepoints, stored procedure calls, scrollable or
 updatable result sets, named cursors, `Array.getResultSet`, struct parameters, and index metadata
 (Warp SQL has no index endpoint, so `getIndexInfo` is empty). `getTypeInfo` is empty on servers
 without the `type-info` endpoint. Bulk ingest (`POST .../ingest`) has no JDBC API.
 
-## Running on newer JDKs
+## 🆕 Running on newer JDKs
 
 The driver targets Java 17 and runs on newer JDKs; CI runs its unit tests on 17, 21 and 25. On
 JDK 24 and later the JVM prints a one-time warning about `sun.misc.Unsafe`, which Arrow uses to
 allocate memory; start the JVM with `--sun-misc-unsafe-memory-access=allow` to silence it.
 
-## Testing
+## ✅ Testing
 
 Unit tests (`mvn package`) need nothing else. Integration tests (`mvn verify`) start a Warp SQL
 server for themselves on a free port, with a fresh password and an empty home directory:
@@ -226,6 +247,13 @@ come from `dev/generate-test-certs.sh`.
 
 Formatting is google-java-format, checked by Spotless: `mvn spotless:apply`.
 
-## License
+## 📄 License
 
 [Apache License 2.0](LICENSE).
+
+---
+
+<p align="center">
+  <a href="https://gizmodata.com"><img src="docs/assets/gizmodata-logo.png" alt="GizmoData" width="56"></a><br>
+  <sub>Built by <a href="https://gizmodata.com">GizmoData</a></sub>
+</p>
