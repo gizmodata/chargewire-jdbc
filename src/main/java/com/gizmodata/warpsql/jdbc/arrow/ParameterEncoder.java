@@ -58,6 +58,7 @@ import org.apache.arrow.vector.UInt1Vector;
 import org.apache.arrow.vector.UInt2Vector;
 import org.apache.arrow.vector.UInt4Vector;
 import org.apache.arrow.vector.UInt8Vector;
+import org.apache.arrow.vector.UuidVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -503,6 +504,8 @@ public final class ParameterEncoder {
       ((VarBinaryVector) vector).setSafe(row, toBytes(value));
     } else if (vector instanceof LargeVarBinaryVector) {
       ((LargeVarBinaryVector) vector).setSafe(row, toBytes(value));
+    } else if (vector instanceof UuidVector) {
+      ((UuidVector) vector).setSafe(row, toUuid(value));
     } else if (vector instanceof FixedSizeBinaryVector) {
       FixedSizeBinaryVector binary = (FixedSizeBinaryVector) vector;
       byte[] bytes = toBytes(value);
@@ -537,7 +540,9 @@ public final class ParameterEncoder {
   }
 
   private static void setNull(FieldVector vector, int row) {
-    if (vector instanceof BaseFixedWidthVector) {
+    if (vector instanceof UuidVector) {
+      ((UuidVector) vector).getUnderlyingVector().setNull(row);
+    } else if (vector instanceof BaseFixedWidthVector) {
       ((BaseFixedWidthVector) vector).setNull(row);
     } else if (vector instanceof BaseVariableWidthVector) {
       ((BaseVariableWidthVector) vector).setNull(row);
@@ -745,6 +750,24 @@ public final class ParameterEncoder {
       return ((String) value).getBytes(StandardCharsets.UTF_8);
     }
     throw unparseable(value.getClass().getSimpleName(), "binary", null);
+  }
+
+  private static UUID toUuid(Object value) throws SQLException {
+    if (value instanceof UUID) {
+      return (UUID) value;
+    }
+    if (value instanceof String) {
+      try {
+        return UUID.fromString(((String) value).trim());
+      } catch (IllegalArgumentException e) {
+        throw unparseable(value, "UUID", e);
+      }
+    }
+    if (value instanceof byte[] && ((byte[]) value).length == 16) {
+      ByteBuffer bytes = ByteBuffer.wrap((byte[]) value);
+      return new UUID(bytes.getLong(), bytes.getLong());
+    }
+    throw unparseable(value.getClass().getSimpleName(), "UUID", null);
   }
 
   private static ZoneId zone(Calendar calendar) {

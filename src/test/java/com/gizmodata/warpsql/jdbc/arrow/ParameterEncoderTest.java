@@ -33,6 +33,7 @@ import java.util.UUID;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.extension.UuidType;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.types.DateUnit;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
@@ -40,6 +41,7 @@ import org.apache.arrow.vector.types.IntervalUnit;
 import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -260,6 +262,26 @@ class ParameterEncoderTest {
     assertEquals(7L, values[5]);
     assertEquals(3.0, values[6]);
     assertEquals((short) 200, values[7]);
+  }
+
+  @Test
+  void uuidParametersForServersThatDeclareThem() throws Exception {
+    UUID uuid = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
+    Schema schema =
+        new Schema(
+            List.of(
+                new Field("1", FieldType.nullable(UuidType.INSTANCE), null),
+                new Field("2", FieldType.nullable(UuidType.INSTANCE), null),
+                new Field("3", FieldType.nullable(UuidType.INSTANCE), null)));
+    ParameterEncoder.Value[] row = {value(uuid), value(uuid.toString()), value(null)};
+    Decoded decoded = encode(schema, List.<ParameterEncoder.Value[]>of(row));
+    assertEquals(uuid, decoded.rows.get(0)[0]);
+    assertEquals(uuid, decoded.rows.get(0)[1]);
+    assertEquals(null, decoded.rows.get(0)[2]);
+    assertCode(
+        "22018",
+        new Schema(List.of(new Field("1", FieldType.nullable(UuidType.INSTANCE), null))),
+        "nope");
   }
 
   @Test
