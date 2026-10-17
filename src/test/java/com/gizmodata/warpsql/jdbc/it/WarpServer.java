@@ -12,20 +12,48 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A {@code warp-duckdb} (or any server with its command-line interface) started for the tests on a
- * free port, with a fresh password and its own empty home directory.
+ * A Warp SQL server started for the tests on a free port, with a fresh password, its own empty home
+ * directory and an environment of its own.
  *
  * <p>The binary comes from {@code WARP_SQL_JDBC_TEST_SERVER_BINARY}, or else from a sibling {@code
- * warp-sql} checkout ({@code ../warp-sql/cpp/build/warp-duckdb}). Without one, every test that
- * needs a server fails: these tests gate changes, and a skipped gate looks like a passed one.
+ * warp-sql} checkout ({@code ../warp-sql/cpp/build-main/warp-duckdb}, then {@code
+ * .../build/warp-duckdb}). Without one, every test that needs a server fails: these tests gate
+ * changes, and a skipped gate looks like a passed one.
+ *
+ * <p>Any server with warp-duckdb's flags ({@code --host}, {@code --port}, {@code --username},
+ * {@code --tls-cert}, {@code --tls-key}) works. For another one, name its password variable, its
+ * client-CA flag and its product name (Hardcharger: {@code HARDCHARGER_PASSWORD}, {@code
+ * --mtls-ca-cert}, {@code Hardcharger}):
+ *
+ * <pre>
+ * WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV  (default WARP_DUCKDB_PASSWORD)
+ * WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG     (default --tls-client-ca)
+ * WARP_SQL_JDBC_TEST_SERVER_NAME          (default warp-duckdb)
+ * </pre>
  */
 final class WarpServer implements AutoCloseable {
   static final String USER = "warp";
   private static final String BINARY_VARIABLE = "WARP_SQL_JDBC_TEST_SERVER_BINARY";
+
+  /** The server's product name, as DatabaseMetaData reports it. */
+  static final String NAME = environment("WARP_SQL_JDBC_TEST_SERVER_NAME", "warp-duckdb");
+
+  /** The flag that makes the server require client certificates from a CA file. */
+  static final String MTLS_FLAG =
+      environment("WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG", "--tls-client-ca");
+
+  private static final String PASSWORD_VARIABLE =
+      environment("WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV", "WARP_DUCKDB_PASSWORD");
+
+  private static String environment(String name, String fallback) {
+    String value = System.getenv(name);
+    return value == null || value.isEmpty() ? fallback : value;
+  }
 
   final int port;
 
@@ -57,18 +85,19 @@ final class WarpServer implements AutoCloseable {
       }
       return path;
     }
-    Path sibling =
-        Path.of(System.getProperty("user.dir"), "..", "warp-sql", "cpp", "build", "warp-duckdb")
-            .normalize();
-    if (Files.isExecutable(sibling)) {
-      return sibling;
+    Path checkout = Path.of(System.getProperty("user.dir"), "..", "warp-sql", "cpp").normalize();
+    for (String build : List.of("build-main", "build")) {
+      Path sibling = checkout.resolve(build).resolve("warp-duckdb");
+      if (Files.isExecutable(sibling)) {
+        return sibling;
+      }
     }
     return fail(
         "No Warp SQL server to test against: set "
             + BINARY_VARIABLE
-            + " to a warp-duckdb binary (looked for "
-            + sibling
-            + " too)");
+            + " to a server binary (looked in "
+            + checkout
+            + "/build-main and /build too)");
   }
 
   /** Starts a plain-HTTP server. */
@@ -88,13 +117,27 @@ final class WarpServer implements AutoCloseable {
       Path log = home.resolve("server.log");
       List<String> command =
           new ArrayList<>(
-              List.of(binary.toString(), "--host", "127.0.0.1", "--port", Integer.toString(port)));
+              List.of(
+                  binary.toString(),
+                  "--host",
+                  "127.0.0.1",
+                  "--port",
+                  Integer.toString(port),
+                  "--username",
+                  USER));
       command.addAll(List.of(extraArgs));
       ProcessBuilder builder =
           new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile());
-      builder.environment().put("WARP_DUCKDB_PASSWORD", password);
-      // DuckDB reads secrets and settings from the home directory: keep the developer's away.
-      builder.environment().put("HOME", home.toString());
+      // Only what the server needs: servers also read settings and credentials from variables
+      // a developer's shell may export (GIZMOSQL_PASSWORD, for one), and DuckDB reads secrets
+      // from the home directory.
+      Map<String, String> environment = builder.environment();
+      String path = environment.get("PATH");
+      environment.clear();
+      environment.put("PATH", path == null ? "/usr/bin:/bin" : path);
+      environment.put("HOME", home.toString());
+      environment.put("TMPDIR", home.toString());
+      environment.put(PASSWORD_VARIABLE, password);
       Process process = builder.start();
       WarpServer server = new WarpServer(port, password, tls, process, home, log);
       Runtime.getRuntime().addShutdownHook(new Thread(server::close));

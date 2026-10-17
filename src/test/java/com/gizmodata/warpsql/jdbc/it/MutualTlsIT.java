@@ -34,7 +34,7 @@ class MutualTlsIT {
             cert("server.pem"),
             "--tls-key",
             cert("server-key.pem"),
-            "--tls-client-ca",
+            WarpServer.MTLS_FLAG,
             cert("ca.pem"));
   }
 
