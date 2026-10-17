@@ -202,13 +202,15 @@ Other servers run the same suite when told how they differ from `warp-duckdb`:
 | `WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV` | `WARP_DUCKDB_PASSWORD` | The environment variable it reads its password from |
 | `WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG` | `--tls-client-ca` | Its flag for the CA that client certificates must chain to |
 | `WARP_SQL_JDBC_TEST_SERVER_NAME` | `warp-duckdb` | The product name its `server-info` reports |
+| `WARP_SQL_JDBC_TEST_SERVER_USERNAME_FLAG` | `--username` | The flag that names its administrator |
 
 For example, for Hardcharger:
 
 ```bash
 WARP_SQL_JDBC_TEST_SERVER_BINARY=/path/to/hardcharger/server/build/hardcharger \
-WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_PASSWORD \
+WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD \
 WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG=--mtls-ca-cert \
+WARP_SQL_JDBC_TEST_SERVER_USERNAME_FLAG=--admin-username \
 WARP_SQL_JDBC_TEST_SERVER_NAME=Hardcharger \
 mvn verify
 ```
