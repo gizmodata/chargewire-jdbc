@@ -48,6 +48,10 @@ public final class WarpClient implements AutoCloseable {
   private static final String JSON = "application/json";
   private static final int MAX_ATTEMPTS = 3;
   private static final int MAX_ERROR_BODY = 1 << 20;
+
+  /** How long to poll a statement without long-polling. */
+  private static final long SHORT_POLLING_NANOS = Duration.ofMillis(250).toNanos();
+
   /** Renew a token this long before the server says it expires. */
   private static final long TOKEN_MARGIN_NANOS = Duration.ofSeconds(30).toNanos();
 
@@ -103,7 +107,8 @@ public final class WarpClient implements AutoCloseable {
     // Until the connection is up, wait for answers no longer than for the TCP connect: opening a
     // connection must not hang on a server that accepts connections but never answers.
     WarpClient client =
-        new WarpClient(config, userAgent, requestTimeout != null ? requestTimeout : config.connectTimeout);
+        new WarpClient(
+            config, userAgent, requestTimeout != null ? requestTimeout : config.connectTimeout);
     try {
       client.discover();
       client.signIn();
@@ -121,15 +126,6 @@ public final class WarpClient implements AutoCloseable {
    */
   public ObjectNode newObject() {
     return mapper.createObjectNode();
-  }
-
-  /**
-   * Returns the JSON mapper the client uses.
-   *
-   * @return the mapper
-   */
-  public ObjectMapper mapper() {
-    return mapper;
   }
 
   /**
@@ -242,7 +238,9 @@ public final class WarpClient implements AutoCloseable {
   private void requestToken(ConnectionConfig.Credential credential) throws SQLException {
     ObjectNode body = newObject();
     if (credential == ConnectionConfig.Credential.PASSWORD) {
-      body.put("grant_type", "password").put("username", config.user).put("password", config.password);
+      body.put("grant_type", "password")
+          .put("username", config.user)
+          .put("password", config.password);
     } else {
       body.put("grant_type", "token_exchange").put("subject_token", config.subjectToken);
     }
@@ -260,7 +258,8 @@ public final class WarpClient implements AutoCloseable {
     JsonNode doc = json(response, "token");
     String token = doc.path("access_token").asText(null);
     if (token == null || token.isEmpty()) {
-      throw new SQLNonTransientConnectionException("The token response has no access_token", "08001");
+      throw new SQLNonTransientConnectionException(
+          "The token response has no access_token", "08001");
     }
     long expiresIn = doc.path("expires_in").asLong(0);
     synchronized (tokenLock) {
@@ -520,11 +519,7 @@ public final class WarpClient implements AutoCloseable {
   public JsonNode prepare(String sessionId, String sql) throws SQLException {
     byte[] body = bytes(newObject().put("sql", sql));
     return json(
-        send(
-            () -> postJson(sessionUri(sessionId, "/prepared"), body),
-            handlerBytes(),
-            false,
-            true),
+        send(() -> postJson(sessionUri(sessionId, "/prepared"), body), handlerBytes(), false, true),
         "prepared statement");
   }
 
@@ -540,11 +535,7 @@ public final class WarpClient implements AutoCloseable {
    * @throws SQLException if the server refuses the execution
    */
   public Submission executePrepared(
-      String sessionId,
-      String preparedId,
-      String contentType,
-      byte[] body,
-      SubmitOptions options)
+      String sessionId, String preparedId, String contentType, byte[] body, SubmitOptions options)
       throws SQLException {
     URI target = sessionUri(sessionId, "/prepared/" + preparedId + "/execute");
     return execute(target, contentType, body, options);
@@ -649,19 +640,26 @@ public final class WarpClient implements AutoCloseable {
    * @return the terminal statement document
    * @throws SQLException on any error, or if the waiting thread is interrupted
    */
-  public StatementDocument awaitTerminal(String sessionId, String statementId)
-      throws SQLException {
-    long pauseMillis = 20;
-    // Ask once without waiting: a statement that is already finished needs no long-poll, and
-    // some servers hold a long-poll on a finished statement for its whole wait.
-    int wait = 0;
+  public StatementDocument awaitTerminal(String sessionId, String statementId) throws SQLException {
+    // Most statements finish within milliseconds, so poll briefly before long-polling: a server
+    // may hold a long-poll for its whole wait when the statement finished just before it arrived
+    // (spec §6.3 lets it). Long-poll waits then grow from a second to pollWait.
+    long shortPollsEnd = System.nanoTime() + SHORT_POLLING_NANOS;
+    long pauseMillis = 1;
+    int wait = 1;
     for (; ; ) {
-      StatementDocument document = status(sessionId, statementId, wait);
-      wait = config.pollWaitSeconds;
+      boolean longPoll =
+          hasCapability("long_poll")
+              && config.pollWaitSeconds > 0
+              && System.nanoTime() - shortPollsEnd > 0;
+      StatementDocument document =
+          status(sessionId, statementId, longPoll ? Math.min(wait, config.pollWaitSeconds) : 0);
       if (document.state().isTerminal()) {
         return document;
       }
-      if (!hasCapability("long_poll")) {
+      if (longPoll) {
+        wait = Math.min(wait * 2, config.pollWaitSeconds);
+      } else {
         try {
           Thread.sleep(pauseMillis);
         } catch (InterruptedException e) {
@@ -730,8 +728,8 @@ public final class WarpClient implements AutoCloseable {
   }
 
   /**
-   * Closes a statement and frees its result (spec §6.8); one the server no longer has is
-   * already closed.
+   * Closes a statement and frees its result (spec §6.8); one the server no longer has is already
+   * closed.
    *
    * @param sessionId the session
    * @param statementId the statement
@@ -769,7 +767,10 @@ public final class WarpClient implements AutoCloseable {
     char separator = '?';
     for (Map.Entry<String, String> parameter : parameters.entrySet()) {
       if (parameter.getValue() != null) {
-        path.append(separator).append(parameter.getKey()).append('=').append(encode(parameter.getValue()));
+        path.append(separator)
+            .append(parameter.getKey())
+            .append('=')
+            .append(encode(parameter.getValue()));
         separator = '&';
       }
     }
