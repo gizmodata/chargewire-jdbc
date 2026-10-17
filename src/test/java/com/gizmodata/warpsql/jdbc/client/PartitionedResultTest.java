@@ -184,7 +184,7 @@ class PartitionedResultTest {
     for (FakePartition part : parts.subList(1, parts.size())) {
       others.add(() -> part);
     }
-    return new PartitionedResult("q_test", allocator, parts.get(0), others, order);
+    return new PartitionedResult("q_test", allocator, parts.get(0), others, order, () -> false);
   }
 
   private static List<Long> readAll(PartitionedResult result) throws SQLException {
@@ -313,6 +313,53 @@ class PartitionedResultTest {
     }
   }
 
+  /**
+   * Partition 1 ends with a cancellation nobody asked for (the server stopped the statement because
+   * partition 0's connection broke); partition 0 then reports the broken connection.
+   */
+  private SQLException consequentialCancel(boolean applicationCancelled) throws Exception {
+    FakePartition first = new FakePartition(List.of(new long[] {1}));
+    first.failure = new SQLException("the connection broke; set retainResults", "08006");
+    first.gate = new CountDownLatch(1);
+    first.gateBefore = 1;
+    FakePartition second = new FakePartition(List.of());
+    second.failure = new SQLException("the statement was cancelled (client)", "57014");
+    Thread opener =
+        new Thread(
+            () -> {
+              try {
+                Thread.sleep(200);
+              } catch (InterruptedException e) {
+                return;
+              }
+              first.gate.countDown();
+            });
+    opener.start();
+    try (PartitionedResult result =
+        new PartitionedResult(
+            "q_test",
+            allocator,
+            first,
+            List.of(() -> second),
+            PartitionedResult.Order.INTERLEAVED,
+            () -> applicationCancelled)) {
+      return assertTimeoutPreemptively(
+          LIMIT, () -> assertThrows(SQLException.class, () -> readAll(result)));
+    } finally {
+      opener.join();
+    }
+  }
+
+  @Test
+  void aCancellationCausedByAnotherPartitionReportsThatPartitionsError() throws Exception {
+    assertEquals("08006", consequentialCancel(false).getSQLState());
+  }
+
+  @Test
+  void aCancellationTheApplicationAskedForIsReportedAsSuch() throws Exception {
+    assertEquals("57014", consequentialCancel(true).getSQLState());
+  }
+
   @Test
   void anOpenThatFailsFailsTheResult() throws Exception {
     FakePartition first = new FakePartition(List.of(new long[] {1}));
@@ -322,7 +369,8 @@ class PartitionedResultTest {
               throw new SQLException("statement failed", "42000");
             });
     try (PartitionedResult result =
-        new PartitionedResult("q_test", allocator, first, others, PartitionedResult.Order.ANY)) {
+        new PartitionedResult(
+            "q_test", allocator, first, others, PartitionedResult.Order.ANY, () -> false)) {
       SQLException error =
           assertTimeoutPreemptively(
               LIMIT, () -> assertThrows(SQLException.class, () -> readAll(result)));

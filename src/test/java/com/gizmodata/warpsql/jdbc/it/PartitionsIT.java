@@ -385,7 +385,7 @@ class PartitionsIT {
         PreparedStatement statement =
             connection.prepareStatement("SELECT i FROM range(?) t(i) ORDER BY i")) {
       WarpStatement warp = statement.unwrap(WarpStatement.class);
-      assertEquals(1, warp.getResultPartitions(), "off by default");
+      assertEquals(8, warp.getResultPartitions(), "8 by default");
       warp.setResultPartitions(4);
       assertEquals("preserve", warp.getResultOrder());
       assertThrows(SQLException.class, () -> warp.setResultPartitions(0));

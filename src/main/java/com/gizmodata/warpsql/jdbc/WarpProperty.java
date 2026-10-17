@@ -72,11 +72,12 @@ public enum WarpProperty {
       "Bytes an unread result may buffer when another statement needs the session"),
   /**
    * The most partitions of a result to read at once, each over its own connection (spec §6.10);
-   * {@code 1} reads every result over one connection.
+   * {@code 1} reads every result over one connection. The server decides: a result of fewer than
+   * two batches comes as one stream, and a server without the capability is never asked.
    */
   RESULT_PARTITIONS(
       "resultPartitions",
-      "1",
+      "8",
       "Partitions of a result to read at once over separate connections (1 to 256; 1: one)"),
   /** Whether the rows of a result split into partitions must keep their order. */
   RESULT_ORDER(

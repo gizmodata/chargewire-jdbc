@@ -68,6 +68,9 @@ public final class PartitionedResult implements ResultStream {
     ResultStream open() throws SQLException;
   }
 
+  /** How long a failure that is only a consequence waits for the partition that caused it. */
+  private static final long CAUSE_WAIT_NANOS = 2_000_000_000L;
+
   private final String statementId;
   private final BufferAllocator allocator;
   private final Schema schema;
@@ -81,6 +84,8 @@ public final class PartitionedResult implements ResultStream {
   private final Condition changed = lock.newCondition();
   private SQLException failure;
   private volatile boolean closed;
+  private final BooleanSupplier cancelRequested;
+  private int running; // partition threads still running, guarded by lock
 
   // The reading thread's state, guarded by this.
   private Batch current;
@@ -136,8 +141,10 @@ public final class PartitionedResult implements ResultStream {
       BufferAllocator allocator,
       ResultStream first,
       List<Opener> others,
-      Order order) {
+      Order order,
+      BooleanSupplier cancelRequested) {
     this.statementId = statementId;
+    this.cancelRequested = cancelRequested;
     this.allocator = allocator;
     this.schema = first.schema();
     this.order = order;
@@ -164,6 +171,7 @@ public final class PartitionedResult implements ResultStream {
       thread.setDaemon(true);
       threads[i] = thread;
     }
+    running = count;
     for (Thread thread : threads) {
       thread.start();
     }
@@ -224,7 +232,7 @@ public final class PartitionedResult implements ResultStream {
               ResultReader.partition(
                   client, allocator, sessionId, statementId, null, position, cancelRequested));
     }
-    return new PartitionedResult(statementId, allocator, first, others, order);
+    return new PartitionedResult(statementId, allocator, first, others, order, cancelRequested);
   }
 
   /**
@@ -273,7 +281,7 @@ public final class PartitionedResult implements ResultStream {
                   position,
                   cancelRequested));
     }
-    return new PartitionedResult(statementId, allocator, first, others, order);
+    return new PartitionedResult(statementId, allocator, first, others, order, cancelRequested);
   }
 
   private static int partitionCount(String header) throws SQLException {
@@ -352,6 +360,13 @@ public final class PartitionedResult implements ResultStream {
           // Freeing buffers cannot fail in a way the reader can act on.
         }
       }
+      lock.lock();
+      try {
+        running--;
+        changed.signalAll();
+      } finally {
+        lock.unlock();
+      }
     }
   }
 
@@ -376,6 +391,12 @@ public final class PartitionedResult implements ResultStream {
       while (!closed && failure == null && lane.batches.size() >= LANE_DEPTH) {
         changed.await();
       }
+      if (failure != null && !closed && consequentialCancel(failure)) {
+        // Keep reading, without keeping the rows: this partition may be the one whose
+        // failure caused the cancellation, and its stream says how when it ends.
+        batch.close();
+        return true;
+      }
       if (closed || failure != null) {
         return false;
       }
@@ -389,12 +410,23 @@ public final class PartitionedResult implements ResultStream {
     }
   }
 
-  /** Records the result's failure, the first one only, and stops every partition. */
+  /**
+   * Records the result's failure, the first one only, and stops every partition. One exception: a
+   * cancellation the application did not ask for is usually the server reacting to another
+   * partition's failure (its connection broke, so the server stopped the statement), so that
+   * partition's own error replaces it when it comes.
+   */
   private void fail(SQLException error) {
     boolean first = false;
     lock.lock();
     try {
       if (failure == null && !closed) {
+        failure = error;
+        // A consequential cancellation stops nothing yet: the server has stopped the statement,
+        // so the other partitions end on their own, and the one that caused it can say why.
+        first = !consequentialCancel(error);
+        changed.signalAll();
+      } else if (failure != null && consequentialCancel(failure) && !isCancel(error)) {
         failure = error;
         first = true;
         changed.signalAll();
@@ -405,6 +437,15 @@ public final class PartitionedResult implements ResultStream {
     if (first) {
       stopStreams();
     }
+  }
+
+  private static boolean isCancel(SQLException error) {
+    return "57014".equals(error.getSQLState());
+  }
+
+  /** A cancellation the application did not ask for. */
+  private boolean consequentialCancel(SQLException error) {
+    return isCancel(error) && !cancelRequested.getAsBoolean();
   }
 
   private void stopStreams() {
@@ -422,11 +463,25 @@ public final class PartitionedResult implements ResultStream {
   private Batch nextBatch() throws SQLException {
     lock.lock();
     try {
+      long causeDeadline = 0;
       for (; ; ) {
         if (closed) {
           throw new SQLException("The result was closed", "24000");
         }
         if (failure != null) {
+          // A cancellation nobody asked for: give the partition that caused it a moment to
+          // report its own error, which explains the failure better.
+          if (consequentialCancel(failure) && running > 0) {
+            long now = System.nanoTime();
+            if (causeDeadline == 0) {
+              causeDeadline = now + CAUSE_WAIT_NANOS;
+            }
+            if (now < causeDeadline) {
+              changed.awaitNanos(causeDeadline - now);
+              continue;
+            }
+            stopStreams();
+          }
           throw failure;
         }
         Batch batch = order == Order.INTERLEAVED ? nextInterleaved() : nextAny();

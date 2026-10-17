@@ -99,7 +99,7 @@ For a local server without TLS, add `useEncryption=false`.
 | `retainResults` | server's | `true` asks the server to keep results, so a dropped download resumes; `false` asks it not to |
 | `ipcCompression` | `none` | `zstd` accepts ZSTD-compressed Arrow buffers, if the server offers them |
 | `resultBufferSize` | `134217728` | Bytes an unread result may buffer when another statement needs its session (see below) |
-| `resultPartitions` | `1` | Read up to this many partitions of a result at once, each over its own connection (1 to 256; see below) |
+| `resultPartitions` | `8` | Read up to this many partitions of a result at once, each over its own connection (1 to 256; 1: one stream; see below) |
 | `resultOrder` | `preserve` | `any` lets a result read in partitions come back in any row order, which can be faster |
 
 `WarpDataSource` takes the same URL and properties.
@@ -120,13 +120,14 @@ For a local server without TLS, add `useEncryption=false`.
 - **Resumption.** If a download breaks off and the server retained the result, the driver fetches
   it again from the next unread batch. A result that was not retained cannot be resumed; set
   `retainResults=true` to have the server keep results (at the cost of its memory).
-- **Partitioned results.** With `resultPartitions` above 1, on a server with the
+- **Partitioned results** (by default). With `resultPartitions` above 1 (8 unless set), on a server with the
   `result_partitions` capability, the driver asks the server to split large results
   (`Warp-Result-Partitions`, spec §6.10) and reads every partition at once, each over its own HTTP
   connection on its own thread, a few batches ahead, into one `ResultSet`. With the default
   `resultOrder=preserve` it takes the batches back round robin in partition order, so an
   `ORDER BY` keeps its order; with `resultOrder=any` it takes whichever partition has a batch
-  ready. The server decides how many partitions a result gets and keeps small results in one. If
+  ready. The server decides how many partitions a result gets and keeps small results (fewer
+  than two batches) in one; a server without the capability never sees the request. If
   any partition breaks off, the whole result fails with the statement's error (a retained
   partition resumes from its next batch first); closing the result or `cancel()` stops every
   partition. Per statement: `statement.unwrap(WarpStatement.class).setResultPartitions(4)` and

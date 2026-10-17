@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `resultPartitions` defaults to 8 (was 1): large results are split and read over several
+  connections at once. The server decides: a result of fewer than two batches still comes as
+  one stream, and a server without `result_partitions` never sees the request. Set
+  `resultPartitions=1` for one stream. The driver has no bulk-ingest path (batches of a
+  prepared statement are bound parameters, spec §7), so partitioned ingest (§8.3) does not
+  apply to it.
+
+### Fixed
+
+- A split result whose partition's connection broke reported "the statement was cancelled"
+  (57014), the server's reaction, instead of the broken connection (08006, with the advice
+  to set `retainResults`), whenever another partition saw the cancellation first. A
+  cancellation the application didn't ask for now waits (up to 2 s) for the partition that
+  caused it to report its own error.
+
 ### Added
 
 - Partitioned results (Warp SQL spec §6.10): with `resultPartitions=<n>` (1 to 256, default 1),

@@ -160,7 +160,7 @@ public final class ConnectionConfig {
     private Boolean retainResults;
     private boolean async;
     private int pollWaitSeconds = 10;
-    private int resultPartitions = 1;
+    private int resultPartitions = 8;
     private boolean anyOrder;
 
     /**
