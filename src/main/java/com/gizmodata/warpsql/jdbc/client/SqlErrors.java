@@ -14,6 +14,7 @@ import java.sql.SQLTimeoutException;
 import java.sql.SQLTransactionRollbackException;
 import java.sql.SQLTransientConnectionException;
 import java.sql.SQLTransientException;
+import java.util.regex.Pattern;
 
 /**
  * Turns Warp SQL problem documents into {@link SQLException}s of the right subclass.
@@ -23,6 +24,8 @@ import java.sql.SQLTransientException;
  * follows from the SQLSTATE's class, as {@link SQLException}'s subclasses are defined.
  */
 public final class SqlErrors {
+  private static final Pattern SQLSTATE = Pattern.compile("[0-9A-Z]{5}");
+
   private SqlErrors() {}
 
   /**
@@ -33,7 +36,7 @@ public final class SqlErrors {
    */
   public static SQLException toSqlException(WarpProblem problem) {
     String sqlState =
-        problem.sqlState() != null && problem.sqlState().length() == 5
+        problem.sqlState() != null && SQLSTATE.matcher(problem.sqlState()).matches()
             ? problem.sqlState()
             : defaultSqlState(problem);
     SQLException error = create(problem, problem.message(), sqlState);
@@ -117,7 +120,7 @@ public final class SqlErrors {
     if ("statement_timeout".equals(problem.code())) {
       return new SQLTimeoutException(message, sqlState, vendorCode);
     }
-    if (problem.status() == 429 || "server_draining".equals(problem.code())) {
+    if (problem.status() == 429 || problem.status() == 503) {
       return sqlState.startsWith("08")
           ? new SQLTransientConnectionException(message, sqlState, vendorCode)
           : new SQLTransientException(message, sqlState, vendorCode);

@@ -243,7 +243,8 @@ final class TlsContexts {
 
     private static void skip(byte[] der, int[] position, int tag) throws GeneralSecurityException {
       expect(der, position, tag);
-      position[0] += readLength(der, position);
+      int length = readLength(der, position);
+      position[0] += length;
     }
 
     private static int readLength(byte[] der, int[] position) throws GeneralSecurityException {

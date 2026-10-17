@@ -245,13 +245,16 @@ final class NestedAccessors {
               : ((DenseUnionVector) vector).getTypeId(row);
       return members.computeIfAbsent(
           typeId,
-          id ->
-              Accessors.create(
-                  (FieldVector)
-                      (vector instanceof UnionVector
-                          ? ((UnionVector) vector).getVectorByType(id)
-                          : ((DenseUnionVector) vector).getVectorByType(id.byteValue())),
-                  dictionaries));
+          id -> {
+            ValueVector member =
+                vector instanceof UnionVector
+                    ? ((UnionVector) vector).getVectorByType(id)
+                    : ((DenseUnionVector) vector).getVectorByType(id.byteValue());
+            // A row without a member (Arrow Java's null type id) is null.
+            return member == null
+                ? new NullAccessor(vector)
+                : Accessors.create((FieldVector) member, dictionaries);
+          });
     }
 
     private int index(int row) {
