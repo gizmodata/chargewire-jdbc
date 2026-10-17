@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Test;
 class ProtocolIT {
   /** Runs until stopped. */
   private static final String ENDLESS = "SELECT count(*) FROM range(100000000000) t(i)";
+
   /** About 2 million rows in several batches; the sum of i is 1999999000000. */
   private static final String BIG = "SELECT i, i * 2 AS j FROM range(2000000) t(i)";
 
@@ -85,7 +86,8 @@ class ProtocolIT {
       ExecutorService executor = Executors.newSingleThreadExecutor();
       try {
         Future<SQLException> running =
-            executor.submit(() -> assertThrows(SQLException.class, () -> statement.execute(ENDLESS)));
+            executor.submit(
+                () -> assertThrows(SQLException.class, () -> statement.execute(ENDLESS)));
         Thread.sleep(700);
         statement.cancel();
         assertEquals("statement_cancelled", WarpProblem.codeOf(running.get()));
@@ -105,7 +107,8 @@ class ProtocolIT {
         SQLTimeoutException error =
             assertTimeoutPreemptively(
                 Duration.ofSeconds(30),
-                () -> assertThrows(SQLTimeoutException.class, () -> statement.executeQuery(ENDLESS)));
+                () ->
+                    assertThrows(SQLTimeoutException.class, () -> statement.executeQuery(ENDLESS)));
         assertEquals("statement_timeout", WarpProblem.codeOf(error), mode);
         statement.setQueryTimeout(0);
         try (ResultSet rows = statement.executeQuery("SELECT 1")) {
@@ -126,7 +129,8 @@ class ProtocolIT {
       }
       assertFalse(statement.execute("CREATE TEMP TABLE async_t AS SELECT * FROM range(10) t(i)"));
       assertEquals(10, statement.executeUpdate("INSERT INTO async_t SELECT * FROM range(10)"));
-      try (PreparedStatement select = connection.prepareStatement("SELECT sum(i) FROM async_t WHERE i < ?")) {
+      try (PreparedStatement select =
+          connection.prepareStatement("SELECT sum(i) FROM async_t WHERE i < ?")) {
         select.setInt(1, 5);
         try (ResultSet rows = select.executeQuery()) {
           assertTrue(rows.next());
@@ -161,7 +165,8 @@ class ProtocolIT {
   @Test
   void retainedResultResumesAfterTheConnectionBreaks() throws Exception {
     WarpServer server = SharedServer.get();
-    try (ChaosProxy proxy = new ChaosProxy(server.port, "GET /warp/v1/sessions/\\S+/result", 300_000, 1);
+    try (ChaosProxy proxy =
+            new ChaosProxy(server.port, "GET /warp/v1/sessions/\\S+/result", 300_000, 1);
         Connection connection =
             DriverManager.getConnection(
                 "jdbc:warp://127.0.0.1:" + proxy.port() + "?async=true", server.properties());
@@ -175,10 +180,12 @@ class ProtocolIT {
   @Test
   void retainedStreamedResultResumesAfterTheConnectionBreaks() throws Exception {
     WarpServer server = SharedServer.get();
-    try (ChaosProxy proxy = new ChaosProxy(server.port, "POST /warp/v1/sessions/\\S+/statements", 300_000, 1);
+    try (ChaosProxy proxy =
+            new ChaosProxy(server.port, "POST /warp/v1/sessions/\\S+/statements", 300_000, 1);
         Connection connection =
             DriverManager.getConnection(
-                "jdbc:warp://127.0.0.1:" + proxy.port() + "?retainResults=true", server.properties());
+                "jdbc:warp://127.0.0.1:" + proxy.port() + "?retainResults=true",
+                server.properties());
         Statement statement = connection.createStatement();
         ResultSet rows = statement.executeQuery(BIG)) {
       assertBigResult(rows);
@@ -189,7 +196,8 @@ class ProtocolIT {
   @Test
   void unretainedStreamedResultFailsWhenTheConnectionBreaks() throws Exception {
     WarpServer server = SharedServer.get();
-    try (ChaosProxy proxy = new ChaosProxy(server.port, "POST /warp/v1/sessions/\\S+/statements", 300_000, 1);
+    try (ChaosProxy proxy =
+            new ChaosProxy(server.port, "POST /warp/v1/sessions/\\S+/statements", 300_000, 1);
         Connection connection =
             DriverManager.getConnection(
                 "jdbc:warp://127.0.0.1:" + proxy.port(), server.properties());
@@ -243,7 +251,8 @@ class ProtocolIT {
   void resultsStreamWithoutLoadingEverything() throws SQLException {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement();
-        ResultSet rows = statement.executeQuery("SELECT i, repeat('x', 100) AS pad FROM range(20000000) t(i)")) {
+        ResultSet rows =
+            statement.executeQuery("SELECT i, repeat('x', 100) AS pad FROM range(20000000) t(i)")) {
       // About 2 GB of text in all: reading it only works batch by batch.
       long count = 0;
       while (rows.next() && count < 5_000_000) {
@@ -456,7 +465,9 @@ class ProtocolIT {
 
   private static String warnings(Connection connection) throws SQLException {
     StringBuilder text = new StringBuilder();
-    for (SQLWarning warning = connection.getWarnings(); warning != null; warning = warning.getNextWarning()) {
+    for (SQLWarning warning = connection.getWarnings();
+        warning != null;
+        warning = warning.getNextWarning()) {
       text.append(warning.getMessage()).append('\n');
     }
     return text.toString();
@@ -475,7 +486,8 @@ class ProtocolIT {
         assertEquals("lost_options", rows.getString(1), "the schema was replayed");
       }
       assertNotEquals(before, sessionOf(connection));
-      assertTrue(warnings(connection).contains("no longer had session " + before), warnings(connection));
+      assertTrue(
+          warnings(connection).contains("no longer had session " + before), warnings(connection));
       assertEquals("01000", connection.getWarnings().getSQLState());
       assertEquals("lost_options", connection.getSchema());
     }
@@ -544,7 +556,8 @@ class ProtocolIT {
     assertTrue(connection.isClosed());
     assertFalse(connection.isValid(1));
     assertEquals(404, raw.get("/warp/v1/sessions/" + session).statusCode());
-    assertEquals("08003", assertThrows(SQLException.class, connection::createStatement).getSQLState());
+    assertEquals(
+        "08003", assertThrows(SQLException.class, connection::createStatement).getSQLState());
   }
 
   // ---- The JVM the driver runs in ----
@@ -559,7 +572,8 @@ class ProtocolIT {
     zstd.setProperty("ipcCompression", "zstd");
     try (Connection connection = SharedServer.connect(zstd);
         PreparedStatement select =
-            connection.prepareStatement("SELECT ?::DECIMAL(10,2) AS d, ?::BLOB AS b, [1, 2] AS l")) {
+            connection.prepareStatement(
+                "SELECT ?::DECIMAL(10,2) AS d, ?::BLOB AS b, [1, 2] AS l")) {
       select.setBigDecimal(1, new java.math.BigDecimal("1.25"));
       select.setBytes(2, new byte[] {1, 2, 3});
       try (ResultSet rows = select.executeQuery()) {

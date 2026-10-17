@@ -15,14 +15,21 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
-/** TLS set-up: PEM keys and the trust sources (ported from {@code ClientAuthenticationUtilsTest}). */
+/**
+ * TLS set-up: PEM keys and the trust sources (ported from {@code ClientAuthenticationUtilsTest}).
+ */
 class TlsContextsTest {
   private static Path cert(String name) {
     return Path.of("src", "test", "resources", "certs", name);
   }
 
   @ParameterizedTest
-  @CsvSource({"client-key.pem, RSA", "client-key-pkcs1.pem, RSA", "ec-key-sec1.pem, EC", "ec-key-pkcs8.pem, EC"})
+  @CsvSource({
+    "client-key.pem, RSA",
+    "client-key-pkcs1.pem, RSA",
+    "ec-key-sec1.pem, EC",
+    "ec-key-pkcs8.pem, EC"
+  })
   void readsPemPrivateKeys(String file, String algorithm) throws Exception {
     PrivateKey key = TlsContexts.readPrivateKey(cert(file));
     assertEquals(algorithm, key.getAlgorithm());
@@ -42,16 +49,26 @@ class TlsContextsTest {
   @Test
   void refusesEncryptedAndMissingKeys(@TempDir Path directory) throws Exception {
     Path encrypted = directory.resolve("encrypted.pem");
-    Files.writeString(encrypted, "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n");
+    Files.writeString(
+        encrypted,
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n");
     GeneralSecurityException error =
         assertThrows(GeneralSecurityException.class, () -> TlsContexts.readPrivateKey(encrypted));
     assertTrue(error.getMessage().contains("openssl pkcs8"), error.getMessage());
-    assertThrows(GeneralSecurityException.class, () -> TlsContexts.readPrivateKey(cert("ca.pem")),
+    assertThrows(
+        GeneralSecurityException.class,
+        () -> TlsContexts.readPrivateKey(cert("ca.pem")),
         "a certificate is not a key");
   }
 
-  private static ConnectionConfig config(boolean system, Path roots, Path trustStore, String password,
-      Path clientCertificate, Path clientKey, boolean insecure) {
+  private static ConnectionConfig config(
+      boolean system,
+      Path roots,
+      Path trustStore,
+      String password,
+      Path clientCertificate,
+      Path clientKey,
+      boolean insecure) {
     return new ConnectionConfig.Builder()
         .address("localhost", 1)
         .tls(true, insecure, system, roots, trustStore, password, clientCertificate, clientKey)
@@ -62,23 +79,43 @@ class TlsContextsTest {
   void buildsContextsForEachTrustSource() throws Exception {
     assertNotNull(TlsContexts.create(config(true, null, null, null, null, null, false)));
     assertNotNull(TlsContexts.create(config(false, cert("ca.pem"), null, null, null, null, false)));
-    assertNotNull(TlsContexts.create(config(false, null, cert("truststore.p12"), "changeit", null, null, false)));
-    assertNotNull(TlsContexts.create(config(false, null, null, null, null, null, true)),
+    assertNotNull(
+        TlsContexts.create(
+            config(false, null, cert("truststore.p12"), "changeit", null, null, false)));
+    assertNotNull(
+        TlsContexts.create(config(false, null, null, null, null, null, true)),
         "skipping verification needs no trust source");
-    assertNotNull(TlsContexts.create(
-        config(false, cert("ca.pem"), null, null, cert("client.pem"), cert("client-key.pem"), false)));
+    assertNotNull(
+        TlsContexts.create(
+            config(
+                false,
+                cert("ca.pem"),
+                null,
+                null,
+                cert("client.pem"),
+                cert("client-key.pem"),
+                false)));
   }
 
   @Test
   void refusesAnImpossibleTrustSetUp() {
-    GeneralSecurityException none = assertThrows(GeneralSecurityException.class,
-        () -> TlsContexts.create(config(false, null, null, null, null, null, false)));
+    GeneralSecurityException none =
+        assertThrows(
+            GeneralSecurityException.class,
+            () -> TlsContexts.create(config(false, null, null, null, null, null, false)));
     assertTrue(none.getMessage().contains("no trusted certificates"));
-    assertThrows(GeneralSecurityException.class,
-        () -> TlsContexts.create(config(false, cert("client-key.pem"), null, null, null, null, false)),
+    assertThrows(
+        GeneralSecurityException.class,
+        () ->
+            TlsContexts.create(
+                config(false, cert("client-key.pem"), null, null, null, null, false)),
         "a key is not a certificate");
-    GeneralSecurityException half = assertThrows(GeneralSecurityException.class,
-        () -> TlsContexts.create(config(true, null, null, null, cert("client.pem"), null, false)));
+    GeneralSecurityException half =
+        assertThrows(
+            GeneralSecurityException.class,
+            () ->
+                TlsContexts.create(
+                    config(true, null, null, null, cert("client.pem"), null, false)));
     assertTrue(half.getMessage().contains("both clientCertificate and clientKey"));
   }
 }

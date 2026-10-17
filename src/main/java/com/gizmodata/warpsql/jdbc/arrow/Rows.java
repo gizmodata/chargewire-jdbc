@@ -25,8 +25,8 @@ public final class Rows {
    * @return the batch
    * @throws SQLException if a value does not fit its column
    */
-  public static VectorSchemaRoot toRoot(BufferAllocator allocator, Schema schema, List<Object[]> rows)
-      throws SQLException {
+  public static VectorSchemaRoot toRoot(
+      BufferAllocator allocator, Schema schema, List<Object[]> rows) throws SQLException {
     VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
     try {
       root.allocateNew();

@@ -65,10 +65,12 @@ class TypesIT {
       SQLDataException overflow = assertThrows(SQLDataException.class, () -> rows.getLong("h"));
       assertEquals("22003", overflow.getSQLState());
       assertEquals(new BigInteger("18446744073709551615"), rows.getObject("h", BigInteger.class));
-      assertEquals(new BigDecimal("170141183460469231731687303715884105727"), rows.getBigDecimal("i"));
+      assertEquals(
+          new BigDecimal("170141183460469231731687303715884105727"), rows.getBigDecimal("i"));
       assertEquals(-1, rows.getInt("a"));
       assertEquals(255, rows.getInt("e"));
-      assertEquals("22003", assertThrows(SQLDataException.class, () -> rows.getByte("e")).getSQLState());
+      assertEquals(
+          "22003", assertThrows(SQLDataException.class, () -> rows.getByte("e")).getSQLState());
       assertTrue(rows.getBoolean("a"));
       assertEquals(-3.0, rows.getDouble("c"));
       assertEquals(BigDecimal.valueOf(-4), rows.getBigDecimal("d"));
@@ -96,7 +98,9 @@ class TypesIT {
       assertEquals(2.25, rows.getObject("d"));
       assertEquals(new BigDecimal("2.25"), rows.getBigDecimal("d"));
       assertTrue(Double.isNaN(rows.getDouble("nan")));
-      assertEquals("22003", assertThrows(SQLDataException.class, () -> rows.getBigDecimal("nan")).getSQLState());
+      assertEquals(
+          "22003",
+          assertThrows(SQLDataException.class, () -> rows.getBigDecimal("nan")).getSQLState());
       assertEquals(new BigDecimal("123.45"), rows.getObject("dec"));
       assertEquals("123.45", rows.getString("dec"));
       assertEquals(123, rows.getInt("dec"), "the fraction is dropped toward zero");
@@ -124,7 +128,8 @@ class TypesIT {
                     + " 'a1b2c3d4-0000-4000-8000-000000000001'::UUID u, 'ab'::ENUM('ab', 'cd') e")) {
       assertEquals("héllo ✓", rows.getString("s"));
       assertEquals("héllo ✓", rows.getObject("s"));
-      assertArrayEquals("héllo ✓".getBytes(java.nio.charset.StandardCharsets.UTF_8), rows.getBytes("s"));
+      assertArrayEquals(
+          "héllo ✓".getBytes(java.nio.charset.StandardCharsets.UTF_8), rows.getBytes("s"));
       assertArrayEquals(new byte[] {0, (byte) 0xff}, rows.getBytes("b"));
       assertArrayEquals(new byte[] {0, (byte) 0xff}, (byte[]) rows.getObject("b"));
       assertArrayEquals(new byte[] {0, (byte) 0xff}, rows.getBlob("b").getBytes(1, 2));
@@ -133,7 +138,8 @@ class TypesIT {
       assertEquals(1, rows.getInt("t"));
       assertEquals("true", rows.getString("t"));
       assertEquals(42, rows.getInt("n"), "numeric text converts");
-      assertEquals("22018", assertThrows(SQLDataException.class, () -> rows.getInt("s")).getSQLState());
+      assertEquals(
+          "22018", assertThrows(SQLDataException.class, () -> rows.getInt("s")).getSQLState());
       UUID uuid = UUID.fromString("a1b2c3d4-0000-4000-8000-000000000001");
       assertEquals(uuid.toString(), rows.getString("u"));
       assertEquals(uuid, rows.getObject("u", UUID.class));
@@ -164,22 +170,31 @@ class TypesIT {
       assertEquals(Time.valueOf("13:14:15").getTime() + 123, rows.getTime("t").getTime());
       assertEquals("00:00:00", rows.getString("midnight"));
       assertEquals(Timestamp.valueOf("2024-02-29 13:14:15.123456"), rows.getTimestamp("ts"));
-      assertEquals(LocalDateTime.of(2024, 2, 29, 13, 14, 15, 123_456_000), rows.getObject("ts", LocalDateTime.class));
+      assertEquals(
+          LocalDateTime.of(2024, 2, 29, 13, 14, 15, 123_456_000),
+          rows.getObject("ts", LocalDateTime.class));
       assertEquals("2024-02-29 13:14:15.123456", rows.getString("ts"));
       assertEquals(Date.valueOf("2024-02-29"), rows.getDate("ts"));
       assertEquals(123_456_789, rows.getTimestamp("ns").getNanos(), "nanoseconds are kept");
       assertEquals("2024-02-29 13:14:15.123456789", rows.getString("ns"));
-      assertEquals(LocalDateTime.of(1969, 12, 31, 23, 59, 59), rows.getObject("before_epoch", LocalDateTime.class));
-      assertThrows(SQLException.class, () -> rows.getObject("ts", OffsetDateTime.class),
+      assertEquals(
+          LocalDateTime.of(1969, 12, 31, 23, 59, 59),
+          rows.getObject("before_epoch", LocalDateTime.class));
+      assertThrows(
+          SQLException.class,
+          () -> rows.getObject("ts", OffsetDateTime.class),
           "a wall-clock timestamp has no offset");
 
       Calendar utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
       assertEquals(
-          Instant.parse("2024-02-29T13:14:15.123456Z"), rows.getTimestamp("ts", utc).toInstant(),
+          Instant.parse("2024-02-29T13:14:15.123456Z"),
+          rows.getTimestamp("ts", utc).toInstant(),
           "a calendar says which zone the wall clock is in");
       Calendar tokyo = Calendar.getInstance(TimeZone.getTimeZone("Asia/Tokyo"));
-      assertEquals(Instant.parse("2024-02-29T04:14:15.123456Z"), rows.getTimestamp("ts", tokyo).toInstant());
-      assertEquals(Instant.parse("2024-02-28T15:00:00Z").toEpochMilli(), rows.getDate("d", tokyo).getTime());
+      assertEquals(
+          Instant.parse("2024-02-29T04:14:15.123456Z"), rows.getTimestamp("ts", tokyo).toInstant());
+      assertEquals(
+          Instant.parse("2024-02-28T15:00:00Z").toEpochMilli(), rows.getDate("d", tokyo).getTime());
       ResultSetMetaData metaData = rows.getMetaData();
       assertEquals(Types.DATE, metaData.getColumnType(1));
       assertEquals(Types.TIME, metaData.getColumnType(2));
@@ -199,7 +214,10 @@ class TypesIT {
         assertEquals(instant, rows.getTimestamp("tz").toInstant());
         assertEquals(instant, rows.getObject("tz", Instant.class));
         Calendar tokyo = Calendar.getInstance(TimeZone.getTimeZone("Asia/Tokyo"));
-        assertEquals(instant, rows.getTimestamp("tz", tokyo).toInstant(), "a calendar never shifts an instant");
+        assertEquals(
+            instant,
+            rows.getTimestamp("tz", tokyo).toInstant(),
+            "a calendar never shifts an instant");
         OffsetDateTime offset = rows.getObject("tz", OffsetDateTime.class);
         assertEquals(instant, offset.toInstant());
         assertEquals(ZoneOffset.ofHours(-4), offset.getOffset(), "in the session's time zone");
@@ -214,7 +232,9 @@ class TypesIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement();
         ResultSet rows =
-            one(statement, "SELECT INTERVAL '1 year 2 months 3 days 04:05:06.5' i, INTERVAL 90 MINUTE m")) {
+            one(
+                statement,
+                "SELECT INTERVAL '1 year 2 months 3 days 04:05:06.5' i, INTERVAL 90 MINUTE m")) {
       assertEquals(new WarpInterval(14, 3, 14_706_500_000_000L), rows.getObject("i"));
       assertEquals("P1Y2M3DT4H5M6.5S", rows.getString("i"));
       assertEquals(Duration.ofMinutes(90), rows.getObject("m", Duration.class));
@@ -231,11 +251,13 @@ class TypesIT {
                 statement,
                 "SELECT [DATE '2024-01-01', NULL] dates, {'n': 1, 'l': [1.5, 2.5]} s,"
                     + " [{'k': 'a'}, {'k': 'b'}] structs, [1, 2]::INTEGER[2] fixed")) {
-      assertEquals(java.util.Arrays.asList(Date.valueOf("2024-01-01"), null), rows.getObject("dates"));
-      assertEquals("[\"2024-01-01\", null]", rows.getString("dates"));
       assertEquals(
-          "{\"n\": 1, \"l\": [1.5, 2.5]}", rows.getString("s"));
-      assertEquals(List.of(java.util.Map.of("k", "a"), java.util.Map.of("k", "b")), rows.getObject("structs"));
+          java.util.Arrays.asList(Date.valueOf("2024-01-01"), null), rows.getObject("dates"));
+      assertEquals("[\"2024-01-01\", null]", rows.getString("dates"));
+      assertEquals("{\"n\": 1, \"l\": [1.5, 2.5]}", rows.getString("s"));
+      assertEquals(
+          List.of(java.util.Map.of("k", "a"), java.util.Map.of("k", "b")),
+          rows.getObject("structs"));
       assertEquals(List.of(1, 2), rows.getObject("fixed"));
       assertEquals(Types.ARRAY, rows.getMetaData().getColumnType(1));
       assertEquals(Types.STRUCT, rows.getMetaData().getColumnType(2));
@@ -312,9 +334,13 @@ class TypesIT {
         assertTrue(rows.getBoolean("flag"));
         assertEquals(LocalDate.of(1999, 12, 31), rows.getObject("day", LocalDate.class));
         assertEquals(LocalTime.of(23, 59, 58, 999_999_000), rows.getObject("tm", LocalTime.class));
-        assertEquals(LocalDateTime.of(2026, 10, 16, 21, 4, 5, 123_456_000), rows.getObject("ts", LocalDateTime.class));
+        assertEquals(
+            LocalDateTime.of(2026, 10, 16, 21, 4, 5, 123_456_000),
+            rows.getObject("ts", LocalDateTime.class));
         assertEquals(Instant.parse("2026-10-16T19:04:05.5Z"), rows.getObject("tz", Instant.class));
-        assertEquals(UUID.fromString("00000000-0000-4000-8000-00000000abcd"), rows.getObject("u", UUID.class));
+        assertEquals(
+            UUID.fromString("00000000-0000-4000-8000-00000000abcd"),
+            rows.getObject("u", UUID.class));
       }
     }
   }
@@ -344,7 +370,9 @@ class TypesIT {
       select.setObject(1, Duration.ofHours(25).plusMillis(1));
       try (ResultSet rows = select.executeQuery()) {
         assertTrue(rows.next());
-        assertEquals(new WarpInterval(0, 0, Duration.ofHours(25).plusMillis(1).toNanos()), rows.getObject("i"));
+        assertEquals(
+            new WarpInterval(0, 0, Duration.ofHours(25).plusMillis(1).toNanos()),
+            rows.getObject("i"));
       }
     }
   }
@@ -361,9 +389,11 @@ class TypesIT {
       try (ResultSet rows = select.executeQuery()) {
         assertTrue(rows.next());
         assertEquals(
-            LocalDateTime.of(2026, 1, 2, 12, 4, 5), rows.getObject("wall", LocalDateTime.class),
+            LocalDateTime.of(2026, 1, 2, 12, 4, 5),
+            rows.getObject("wall", LocalDateTime.class),
             "the wall clock in the calendar's zone");
-        assertEquals(Instant.parse("2026-01-02T03:04:05Z"), rows.getObject("instant", Instant.class));
+        assertEquals(
+            Instant.parse("2026-01-02T03:04:05Z"), rows.getObject("instant", Instant.class));
       }
     }
   }
@@ -373,7 +403,8 @@ class TypesIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE declared (i INTEGER, v VARCHAR, d DATE)");
-      try (PreparedStatement insert = connection.prepareStatement("INSERT INTO declared VALUES (?, ?, ?)")) {
+      try (PreparedStatement insert =
+          connection.prepareStatement("INSERT INTO declared VALUES (?, ?, ?)")) {
         insert.setString(1, "12");
         insert.setInt(2, 34);
         insert.setString(3, "2026-10-17");
@@ -384,7 +415,8 @@ class TypesIT {
         SQLDataException error = assertThrows(SQLDataException.class, insert::executeUpdate);
         assertEquals("22003", error.getSQLState(), "an INTEGER parameter cannot hold 2^40");
         insert.setDouble(1, 1.5);
-        assertEquals("22003", assertThrows(SQLDataException.class, insert::executeUpdate).getSQLState());
+        assertEquals(
+            "22003", assertThrows(SQLDataException.class, insert::executeUpdate).getSQLState());
       }
       try (ResultSet rows = one(statement, "SELECT * FROM declared")) {
         assertEquals(12, rows.getInt(1));
@@ -400,7 +432,8 @@ class TypesIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE pmd (i INTEGER, v VARCHAR, ts TIMESTAMP)");
-      try (PreparedStatement insert = connection.prepareStatement("INSERT INTO pmd VALUES (?, ?, ?)")) {
+      try (PreparedStatement insert =
+          connection.prepareStatement("INSERT INTO pmd VALUES (?, ?, ?)")) {
         java.sql.ParameterMetaData metaData = insert.getParameterMetaData();
         assertEquals(3, metaData.getParameterCount());
         assertEquals(Types.INTEGER, metaData.getParameterType(1));
@@ -409,7 +442,9 @@ class TypesIT {
         assertEquals(java.sql.ParameterMetaData.parameterModeIn, metaData.getParameterMode(1));
       }
       try (PreparedStatement select = connection.prepareStatement("SELECT ?")) {
-        assertEquals(Types.OTHER, select.getParameterMetaData().getParameterType(1),
+        assertEquals(
+            Types.OTHER,
+            select.getParameterMetaData().getParameterType(1),
             "the server does not know an unconstrained parameter's type");
       }
     }

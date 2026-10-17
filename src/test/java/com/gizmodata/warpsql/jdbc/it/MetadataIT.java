@@ -38,7 +38,8 @@ class MetadataIT {
           "CREATE OR REPLACE TABLE meta.child (id BIGINT PRIMARY KEY, pa INTEGER, pb VARCHAR,"
               + " amount DECIMAL(12,3), at_time TIMESTAMP, note VARCHAR NOT NULL,"
               + " FOREIGN KEY (pa, pb) REFERENCES meta.parent (a, b))");
-      statement.execute("CREATE OR REPLACE VIEW meta.child_view AS SELECT id, note FROM meta.child");
+      statement.execute(
+          "CREATE OR REPLACE VIEW meta.child_view AS SELECT id, note FROM meta.child");
     }
   }
 
@@ -65,7 +66,9 @@ class MetadataIT {
     try (Connection connection = SharedServer.connect()) {
       DatabaseMetaData metaData = connection.getMetaData();
       assertEquals("warp-duckdb", metaData.getDatabaseProductName());
-      assertTrue(metaData.getDatabaseProductVersion().contains("DuckDB"), metaData.getDatabaseProductVersion());
+      assertTrue(
+          metaData.getDatabaseProductVersion().contains("DuckDB"),
+          metaData.getDatabaseProductVersion());
       assertEquals(0, metaData.getDatabaseMajorVersion());
       assertEquals(1, metaData.getDatabaseMinorVersion());
       assertEquals(WarpDriver.NAME, metaData.getDriverName());
@@ -122,8 +125,16 @@ class MetadataIT {
       ResultSet rows = metaData.getTables(null, "meta", null, null);
       assertEquals(
           List.of(
-              "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS", "TYPE_CAT",
-              "TYPE_SCHEM", "TYPE_NAME", "SELF_REFERENCING_COL_NAME", "REF_GENERATION"),
+              "TABLE_CAT",
+              "TABLE_SCHEM",
+              "TABLE_NAME",
+              "TABLE_TYPE",
+              "REMARKS",
+              "TYPE_CAT",
+              "TYPE_SCHEM",
+              "TYPE_NAME",
+              "SELF_REFERENCING_COL_NAME",
+              "REF_GENERATION"),
           labels(rows));
       Map<String, String> types = new HashMap<>();
       while (rows.next()) {
@@ -132,7 +143,8 @@ class MetadataIT {
         types.put(rows.getString("TABLE_NAME"), rows.getString("TABLE_TYPE"));
       }
       rows.close();
-      assertEquals(Map.of("parent", "BASE TABLE", "child", "BASE TABLE", "child_view", "VIEW"), types);
+      assertEquals(
+          Map.of("parent", "BASE TABLE", "child", "BASE TABLE", "child_view", "VIEW"), types);
       assertEquals(
           List.of("child_view"),
           column(metaData.getTables(null, "meta", "%", new String[] {"VIEW"}), "TABLE_NAME"));
@@ -140,7 +152,8 @@ class MetadataIT {
           List.of("child", "child_view"),
           column(metaData.getTables("memory", "meta", "child%", null), "TABLE_NAME"));
       assertEquals(
-          List.of(), column(metaData.getTables(null, null, "x' OR '1'='1", null), "TABLE_NAME"),
+          List.of(),
+          column(metaData.getTables(null, null, "x' OR '1'='1", null), "TABLE_NAME"),
           "patterns are values, not SQL");
     }
   }
@@ -151,7 +164,9 @@ class MetadataIT {
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE get_tables_test (id INTEGER)");
       List<String> names =
-          column(connection.getMetaData().getTables(null, null, "get_tables_test", null), "TABLE_NAME");
+          column(
+              connection.getMetaData().getTables(null, null, "get_tables_test", null),
+              "TABLE_NAME");
       assertEquals(List.of("get_tables_test"), names);
     }
   }
@@ -192,7 +207,9 @@ class MetadataIT {
           column(connection.getMetaData().getColumns(null, "meta", "child", "p_"), "COLUMN_NAME");
       assertEquals(List.of("pa", "pb"), filtered, "column patterns use LIKE");
       List<String> escaped =
-          column(connection.getMetaData().getColumns(null, "meta", "child", "at\\_time"), "COLUMN_NAME");
+          column(
+              connection.getMetaData().getColumns(null, "meta", "child", "at\\_time"),
+              "COLUMN_NAME");
       assertEquals(List.of("at_time"), escaped);
     }
   }
@@ -247,7 +264,10 @@ class MetadataIT {
       assertEquals(2, rows.getShort("KEY_SEQ"));
       assertFalse(rows.next());
       rows.close();
-      assertEquals(List.of(), column(connection.getMetaData().getPrimaryKeys(null, "meta", "child_view"), "COLUMN_NAME"));
+      assertEquals(
+          List.of(),
+          column(
+              connection.getMetaData().getPrimaryKeys(null, "meta", "child_view"), "COLUMN_NAME"));
     }
   }
 
@@ -290,7 +310,9 @@ class MetadataIT {
   void crossReference() throws SQLException {
     try (Connection connection = SharedServer.connect()) {
       assertForeignKey(
-          connection.getMetaData().getCrossReference(null, "meta", "parent", null, "meta", "child"));
+          connection
+              .getMetaData()
+              .getCrossReference(null, "meta", "parent", null, "meta", "child"));
     }
   }
 

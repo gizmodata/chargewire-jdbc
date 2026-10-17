@@ -31,9 +31,13 @@ class SqlTypesTest {
     assertEquals(Types.INTEGER, SqlTypes.jdbcType(new ArrowType.Int(16, false)));
     assertEquals(Types.BIGINT, SqlTypes.jdbcType(new ArrowType.Int(32, false)));
     assertEquals(Types.NUMERIC, SqlTypes.jdbcType(new ArrowType.Int(64, false)));
-    assertEquals(Types.REAL, SqlTypes.jdbcType(new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE)));
-    assertEquals(Types.REAL, SqlTypes.jdbcType(new ArrowType.FloatingPoint(FloatingPointPrecision.HALF)));
-    assertEquals(Types.DOUBLE, SqlTypes.jdbcType(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)));
+    assertEquals(
+        Types.REAL, SqlTypes.jdbcType(new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE)));
+    assertEquals(
+        Types.REAL, SqlTypes.jdbcType(new ArrowType.FloatingPoint(FloatingPointPrecision.HALF)));
+    assertEquals(
+        Types.DOUBLE,
+        SqlTypes.jdbcType(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)));
     assertEquals(Types.BOOLEAN, SqlTypes.jdbcType(ArrowType.Bool.INSTANCE));
     assertEquals(Types.VARCHAR, SqlTypes.jdbcType(ArrowType.Utf8.INSTANCE));
     assertEquals(Types.VARCHAR, SqlTypes.jdbcType(ArrowType.Utf8View.INSTANCE));
@@ -45,33 +49,50 @@ class SqlTypesTest {
     assertEquals(Types.DECIMAL, SqlTypes.jdbcType(new ArrowType.Decimal(10, 2, 128)));
     assertEquals(Types.DATE, SqlTypes.jdbcType(new ArrowType.Date(DateUnit.DAY)));
     assertEquals(Types.TIME, SqlTypes.jdbcType(new ArrowType.Time(TimeUnit.MICROSECOND, 64)));
-    assertEquals(Types.TIMESTAMP, SqlTypes.jdbcType(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)));
-    assertEquals(Types.TIMESTAMP_WITH_TIMEZONE, SqlTypes.jdbcType(new ArrowType.Timestamp(TimeUnit.SECOND, "UTC")));
-    assertEquals(Types.OTHER, SqlTypes.jdbcType(new ArrowType.Interval(IntervalUnit.MONTH_DAY_NANO)));
+    assertEquals(
+        Types.TIMESTAMP, SqlTypes.jdbcType(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)));
+    assertEquals(
+        Types.TIMESTAMP_WITH_TIMEZONE,
+        SqlTypes.jdbcType(new ArrowType.Timestamp(TimeUnit.SECOND, "UTC")));
+    assertEquals(
+        Types.OTHER, SqlTypes.jdbcType(new ArrowType.Interval(IntervalUnit.MONTH_DAY_NANO)));
     assertEquals(Types.OTHER, SqlTypes.jdbcType(new ArrowType.Duration(TimeUnit.SECOND)));
     assertEquals(Types.ARRAY, SqlTypes.jdbcType(ArrowType.List.INSTANCE));
     assertEquals(Types.ARRAY, SqlTypes.jdbcType(new ArrowType.FixedSizeList(2)));
     assertEquals(Types.ARRAY, SqlTypes.jdbcType(ArrowType.LargeList.INSTANCE));
     assertEquals(Types.STRUCT, SqlTypes.jdbcType(ArrowType.Struct.INSTANCE));
     assertEquals(Types.JAVA_OBJECT, SqlTypes.jdbcType(new ArrowType.Map(false)));
-    assertEquals(Types.JAVA_OBJECT, SqlTypes.jdbcType(new ArrowType.Union(UnionMode.Sparse, new int[0])));
+    assertEquals(
+        Types.JAVA_OBJECT, SqlTypes.jdbcType(new ArrowType.Union(UnionMode.Sparse, new int[0])));
     assertEquals(Types.NULL, SqlTypes.jdbcType(ArrowType.Null.INSTANCE));
     assertEquals(Types.OTHER, SqlTypes.jdbcType(UuidType.INSTANCE));
   }
 
   @Test
   void typeNamesPreferTheServers() {
-    Field named = new Field("c", new FieldType(true, new ArrowType.Int(32, true), null,
-        Map.of(SqlTypes.TYPE_NAME, "INT4")), null);
+    Field named =
+        new Field(
+            "c",
+            new FieldType(
+                true, new ArrowType.Int(32, true), null, Map.of(SqlTypes.TYPE_NAME, "INT4")),
+            null);
     assertEquals("INT4", SqlTypes.typeName(named));
     assertEquals("INTEGER", SqlTypes.typeName(Field.nullable("c", new ArrowType.Int(32, true))));
     assertEquals("UBIGINT", SqlTypes.typeName(Field.nullable("c", new ArrowType.Int(64, false))));
-    assertEquals("DECIMAL(10,2)", SqlTypes.typeName(Field.nullable("c", new ArrowType.Decimal(10, 2, 128))));
-    assertEquals("TIMESTAMP WITH TIME ZONE",
+    assertEquals(
+        "DECIMAL(10,2)", SqlTypes.typeName(Field.nullable("c", new ArrowType.Decimal(10, 2, 128))));
+    assertEquals(
+        "TIMESTAMP WITH TIME ZONE",
         SqlTypes.typeName(Field.nullable("c", new ArrowType.Timestamp(TimeUnit.SECOND, "UTC"))));
-    assertEquals("VARCHAR[]", SqlTypes.typeName(new Field("l", FieldType.nullable(ArrowType.List.INSTANCE),
-        List.of(Field.nullable("item", ArrowType.Utf8.INSTANCE)))));
-    assertEquals("UUID", SqlTypes.typeName(new Field("u", FieldType.nullable(UuidType.INSTANCE), null)));
+    assertEquals(
+        "VARCHAR[]",
+        SqlTypes.typeName(
+            new Field(
+                "l",
+                FieldType.nullable(ArrowType.List.INSTANCE),
+                List.of(Field.nullable("item", ArrowType.Utf8.INSTANCE)))));
+    assertEquals(
+        "UUID", SqlTypes.typeName(new Field("u", FieldType.nullable(UuidType.INSTANCE), null)));
   }
 
   @Test
@@ -113,9 +134,12 @@ class SqlTypesTest {
     assertEquals(new ArrowType.Int(32, true), SqlTypes.arrowType(Types.INTEGER));
     assertEquals(ArrowType.Utf8.INSTANCE, SqlTypes.arrowType(Types.NVARCHAR));
     assertEquals(ArrowType.Binary.INSTANCE, SqlTypes.arrowType(Types.BLOB));
-    assertEquals(new ArrowType.Timestamp(TimeUnit.MICROSECOND, "UTC"),
+    assertEquals(
+        new ArrowType.Timestamp(TimeUnit.MICROSECOND, "UTC"),
         SqlTypes.arrowType(Types.TIMESTAMP_WITH_TIMEZONE));
-    assertNull(SqlTypes.arrowType(Types.DECIMAL), "a decimal needs its precision; let the server infer it");
+    assertNull(
+        SqlTypes.arrowType(Types.DECIMAL),
+        "a decimal needs its precision; let the server infer it");
     assertNull(SqlTypes.arrowType(Types.OTHER));
   }
 }

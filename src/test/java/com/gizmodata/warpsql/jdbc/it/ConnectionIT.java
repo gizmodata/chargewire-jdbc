@@ -1,7 +1,6 @@
 package com.gizmodata.warpsql.jdbc.it;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -60,7 +59,8 @@ class ConnectionIT {
     WarpServer server = SharedServer.get();
     Properties properties = server.properties();
     properties.setProperty("useEncryption", "true");
-    try (Connection connection = DriverManager.getConnection(server.url("useEncryption=false"), properties)) {
+    try (Connection connection =
+        DriverManager.getConnection(server.url("useEncryption=false"), properties)) {
       assertTrue(connection.isValid(2));
     }
   }
@@ -68,7 +68,8 @@ class ConnectionIT {
   @Test
   void wrongPasswordIsRefused() {
     WarpServer server = SharedServer.get();
-    for (String password : new String[] {server.password + "x", server.password.split(":")[0], ""}) {
+    for (String password :
+        new String[] {server.password + "x", server.password.split(":")[0], ""}) {
       Properties properties = server.properties();
       properties.setProperty("password", password);
       SQLInvalidAuthorizationSpecException error =
@@ -87,7 +88,8 @@ class ConnectionIT {
     Properties properties = server.properties();
     properties.setProperty("user", "nobody");
     SQLException error =
-        assertThrows(SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
+        assertThrows(
+            SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
     assertEquals("invalid_credentials", WarpProblem.codeOf(error));
   }
 
@@ -150,7 +152,9 @@ class ConnectionIT {
     SQLNonTransientConnectionException error =
         assertThrows(
             SQLNonTransientConnectionException.class,
-            () -> DriverManager.getConnection("jdbc:warp://127.0.0.1:1?useEncryption=false&user=u&password=p"));
+            () ->
+                DriverManager.getConnection(
+                    "jdbc:warp://127.0.0.1:1?useEncryption=false&user=u&password=p"));
     assertEquals("08001", error.getSQLState());
   }
 
@@ -160,7 +164,8 @@ class ConnectionIT {
     Properties properties = server.properties();
     properties.setProperty("basePath", "/warp/v1/health");
     SQLException error =
-        assertThrows(SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
+        assertThrows(
+            SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
     assertEquals("08001", error.getSQLState(), error.getMessage());
   }
 
@@ -170,7 +175,8 @@ class ConnectionIT {
     Properties properties = server.properties();
     properties.remove("useEncryption");
     SQLException error =
-        assertThrows(SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
+        assertThrows(
+            SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
     assertEquals("08001", error.getSQLState(), error.getMessage());
   }
 
@@ -194,7 +200,8 @@ class ConnectionIT {
     Properties properties = server.properties();
     properties.setProperty("schema", "from_url");
     try (Connection connection =
-        DriverManager.getConnection("jdbc:warp://127.0.0.1:" + server.port + "/memory", properties)) {
+        DriverManager.getConnection(
+            "jdbc:warp://127.0.0.1:" + server.port + "/memory", properties)) {
       assertEquals("memory", connection.getCatalog());
       assertEquals("from_url", connection.getSchema());
     }
@@ -208,7 +215,8 @@ class ConnectionIT {
             SQLException.class,
             () ->
                 DriverManager.getConnection(
-                    "jdbc:warp://127.0.0.1:" + server.port + "/no_such_catalog", server.properties()));
+                    "jdbc:warp://127.0.0.1:" + server.port + "/no_such_catalog",
+                    server.properties()));
     assertEquals("invalid_option_value", WarpProblem.codeOf(error));
   }
 
@@ -223,7 +231,8 @@ class ConnectionIT {
         assertTrue(rows.next());
         assertEquals("other_schema", rows.getString(1));
       }
-      SQLException error = assertThrows(SQLException.class, () -> connection.setSchema("no_such_schema"));
+      SQLException error =
+          assertThrows(SQLException.class, () -> connection.setSchema("no_such_schema"));
       assertEquals("HY024", error.getSQLState());
       assertTrue(error.getMessage().contains("invalid_option_value"), error.getMessage());
       assertEquals("other_schema", connection.getSchema(), "a refused option changes nothing");
@@ -276,10 +285,14 @@ class ConnectionIT {
           connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
       assertThrows(
           SQLFeatureNotSupportedException.class,
-          () -> connection.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY));
+          () ->
+              connection.createStatement(
+                  ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY));
       assertThrows(
           SQLFeatureNotSupportedException.class,
-          () -> connection.prepareStatement("SELECT 1", ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE));
+          () ->
+              connection.prepareStatement(
+                  "SELECT 1", ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE));
       assertEquals(ResultSet.HOLD_CURSORS_OVER_COMMIT, connection.getHoldability());
     }
   }

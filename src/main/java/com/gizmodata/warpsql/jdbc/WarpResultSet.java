@@ -38,8 +38,7 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Field;
 
 /**
- * A forward-only, read-only result that streams Arrow batches: only the current batch is in
- * memory.
+ * A forward-only, read-only result that streams Arrow batches: only the current batch is in memory.
  */
 public final class WarpResultSet implements ResultSet {
   private final WarpStatement statement;
@@ -213,8 +212,7 @@ public final class WarpResultSet implements ResultSet {
   @Override
   public int findColumn(String columnLabel) throws SQLException {
     checkOpen();
-    Integer index =
-        columnLabel == null ? null : labels.get(columnLabel.toLowerCase(Locale.ROOT));
+    Integer index = columnLabel == null ? null : labels.get(columnLabel.toLowerCase(Locale.ROOT));
     if (index == null) {
       throw new SQLException("No column named '" + columnLabel + "'", "42S22");
     }
@@ -1030,8 +1028,7 @@ public final class WarpResultSet implements ResultSet {
   }
 
   @Override
-  public void updateCharacterStream(String label, Reader reader, int length)
-      throws SQLException {
+  public void updateCharacterStream(String label, Reader reader, int length) throws SQLException {
     throw readOnly();
   }
 
@@ -1131,8 +1128,7 @@ public final class WarpResultSet implements ResultSet {
   }
 
   @Override
-  public void updateNCharacterStream(String label, Reader reader, long length)
-      throws SQLException {
+  public void updateNCharacterStream(String label, Reader reader, long length) throws SQLException {
     throw readOnly();
   }
 
@@ -1162,8 +1158,7 @@ public final class WarpResultSet implements ResultSet {
   }
 
   @Override
-  public void updateCharacterStream(String label, Reader reader, long length)
-      throws SQLException {
+  public void updateCharacterStream(String label, Reader reader, long length) throws SQLException {
     throw readOnly();
   }
 
@@ -1173,8 +1168,7 @@ public final class WarpResultSet implements ResultSet {
   }
 
   @Override
-  public void updateBlob(String label, InputStream inputStream, long length)
-      throws SQLException {
+  public void updateBlob(String label, InputStream inputStream, long length) throws SQLException {
     throw readOnly();
   }
 

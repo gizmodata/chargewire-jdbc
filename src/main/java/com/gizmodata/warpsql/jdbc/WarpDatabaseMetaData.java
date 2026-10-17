@@ -30,9 +30,9 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 
 /**
- * Database metadata from Warp SQL's metadata endpoints (spec §10), whose results have Arrow
- * Flight SQL's schemas, and from {@code server-info}. Metadata Warp SQL has no endpoint for
- * (procedures, privileges, indexes, user-defined types) is an empty result with JDBC's columns.
+ * Database metadata from Warp SQL's metadata endpoints (spec §10), whose results have Arrow Flight
+ * SQL's schemas, and from {@code server-info}. Metadata Warp SQL has no endpoint for (procedures,
+ * privileges, indexes, user-defined types) is an empty result with JDBC's columns.
  */
 public final class WarpDatabaseMetaData implements DatabaseMetaData {
   private static final Pattern VERSION = Pattern.compile("(\\d+)\\.(\\d+)");
@@ -227,7 +227,9 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
   public ResultSet getSchemas(String catalog, String schemaPattern) throws SQLException {
     List<Object[]> rows = new ArrayList<>();
     for (Row row :
-        fetch("db-schemas", parameters("catalog", catalog, "db_schema_filter_pattern", schemaPattern))) {
+        fetch(
+            "db-schemas",
+            parameters("catalog", catalog, "db_schema_filter_pattern", schemaPattern))) {
       rows.add(new Object[] {row.text("db_schema_name"), row.text("catalog_name")});
     }
     return result(columns("TABLE_SCHEM", "TABLE_CATALOG"), rows);
@@ -267,21 +269,34 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
             row.text("db_schema_name"),
             row.text("table_name"),
             row.text("table_type"),
-            null, null, null, null, null, null
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
           });
     }
     return result(
         columns(
-            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS", "TYPE_CAT",
-            "TYPE_SCHEM", "TYPE_NAME", "SELF_REFERENCING_COL_NAME", "REF_GENERATION"),
+            "TABLE_CAT",
+            "TABLE_SCHEM",
+            "TABLE_NAME",
+            "TABLE_TYPE",
+            "REMARKS",
+            "TYPE_CAT",
+            "TYPE_SCHEM",
+            "TYPE_NAME",
+            "SELF_REFERENCING_COL_NAME",
+            "REF_GENERATION"),
         rows);
   }
 
   /**
    * {@inheritDoc}
    *
-   * <p>Built from each table's Arrow schema ({@code include_schema=true}) and its Flight SQL
-   * column metadata keys.
+   * <p>Built from each table's Arrow schema ({@code include_schema=true}) and its Flight SQL column
+   * metadata keys.
    */
   @Override
   public ResultSet getColumns(
@@ -314,11 +329,29 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
     }
     return result(
         columns(
-            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE:int", "TYPE_NAME",
-            "COLUMN_SIZE:int", "BUFFER_LENGTH:int", "DECIMAL_DIGITS:int", "NUM_PREC_RADIX:int",
-            "NULLABLE:int", "REMARKS", "COLUMN_DEF", "SQL_DATA_TYPE:int", "SQL_DATETIME_SUB:int",
-            "CHAR_OCTET_LENGTH:int", "ORDINAL_POSITION:int", "IS_NULLABLE", "SCOPE_CATALOG",
-            "SCOPE_SCHEMA", "SCOPE_TABLE", "SOURCE_DATA_TYPE:short", "IS_AUTOINCREMENT",
+            "TABLE_CAT",
+            "TABLE_SCHEM",
+            "TABLE_NAME",
+            "COLUMN_NAME",
+            "DATA_TYPE:int",
+            "TYPE_NAME",
+            "COLUMN_SIZE:int",
+            "BUFFER_LENGTH:int",
+            "DECIMAL_DIGITS:int",
+            "NUM_PREC_RADIX:int",
+            "NULLABLE:int",
+            "REMARKS",
+            "COLUMN_DEF",
+            "SQL_DATA_TYPE:int",
+            "SQL_DATETIME_SUB:int",
+            "CHAR_OCTET_LENGTH:int",
+            "ORDINAL_POSITION:int",
+            "IS_NULLABLE",
+            "SCOPE_CATALOG",
+            "SCOPE_SCHEMA",
+            "SCOPE_TABLE",
+            "SOURCE_DATA_TYPE:short",
+            "IS_AUTOINCREMENT",
             "IS_GENERATEDCOLUMN"),
         rows);
   }
@@ -330,14 +363,18 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
     if (size == null) {
       size = SqlTypes.columnSize(type);
       if (type instanceof ArrowType.FloatingPoint) {
-        size = ((ArrowType.FloatingPoint) type).getPrecision() == FloatingPointPrecision.DOUBLE ? 53 : 24;
+        size =
+            ((ArrowType.FloatingPoint) type).getPrecision() == FloatingPointPrecision.DOUBLE
+                ? 53
+                : 24;
       }
     }
     Integer digits = number(metadata.get(SqlTypes.SCALE));
     if (digits == null) {
       digits = SqlTypes.decimalDigits(type);
     }
-    Integer radix = SqlTypes.isNumeric(type) ? (type instanceof ArrowType.FloatingPoint ? 2 : 10) : null;
+    Integer radix =
+        SqlTypes.isNumeric(type) ? (type instanceof ArrowType.FloatingPoint ? 2 : 10) : null;
     String autoIncrement = metadata.get(SqlTypes.IS_AUTO_INCREMENT);
     return new Object[] {
       table.text("catalog_name"),
@@ -362,7 +399,9 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       null,
       null,
       null,
-      autoIncrement == null ? "" : "1".equals(autoIncrement) || "true".equalsIgnoreCase(autoIncrement) ? "YES" : "NO",
+      autoIncrement == null
+          ? ""
+          : "1".equals(autoIncrement) || "true".equalsIgnoreCase(autoIncrement) ? "YES" : "NO",
       ""
     };
   }
@@ -378,11 +417,11 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
   // ---- Keys ----
 
   @Override
-  public ResultSet getPrimaryKeys(String catalog, String schema, String table)
-      throws SQLException {
+  public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
     List<Object[]> rows = new ArrayList<>();
     for (Row row :
-        fetch("primary-keys", parameters("catalog", catalog, "db_schema", schema, "table", table))) {
+        fetch(
+            "primary-keys", parameters("catalog", catalog, "db_schema", schema, "table", table))) {
       rows.add(
           new Object[] {
             row.text("catalog_name"),
@@ -394,17 +433,31 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
           });
     }
     return result(
-        columns("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "KEY_SEQ:short", "PK_NAME"),
+        columns(
+            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "KEY_SEQ:short", "PK_NAME"),
         rows);
   }
 
   private static final Schema KEY_COLUMNS =
       columns(
-          "PKTABLE_CAT", "PKTABLE_SCHEM", "PKTABLE_NAME", "PKCOLUMN_NAME", "FKTABLE_CAT",
-          "FKTABLE_SCHEM", "FKTABLE_NAME", "FKCOLUMN_NAME", "KEY_SEQ:short", "UPDATE_RULE:short",
-          "DELETE_RULE:short", "FK_NAME", "PK_NAME", "DEFERRABILITY:short");
+          "PKTABLE_CAT",
+          "PKTABLE_SCHEM",
+          "PKTABLE_NAME",
+          "PKCOLUMN_NAME",
+          "FKTABLE_CAT",
+          "FKTABLE_SCHEM",
+          "FKTABLE_NAME",
+          "FKCOLUMN_NAME",
+          "KEY_SEQ:short",
+          "UPDATE_RULE:short",
+          "DELETE_RULE:short",
+          "FK_NAME",
+          "PK_NAME",
+          "DEFERRABILITY:short");
 
-  /** Flight SQL's rule codes are JDBC's: cascade 0, restrict 1, set null 2, no action 3, default 4. */
+  /**
+   * Flight SQL's rule codes are JDBC's: cascade 0, restrict 1, set null 2, no action 3, default 4.
+   */
   private ResultSet keys(String kind, Map<String, String> parameters) throws SQLException {
     List<Object[]> rows = new ArrayList<>();
     for (Row row : fetch(kind, parameters)) {
@@ -432,13 +485,15 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
   @Override
   public ResultSet getImportedKeys(String catalog, String schema, String table)
       throws SQLException {
-    return keys("imported-keys", parameters("catalog", catalog, "db_schema", schema, "table", table));
+    return keys(
+        "imported-keys", parameters("catalog", catalog, "db_schema", schema, "table", table));
   }
 
   @Override
   public ResultSet getExportedKeys(String catalog, String schema, String table)
       throws SQLException {
-    return keys("exported-keys", parameters("catalog", catalog, "db_schema", schema, "table", table));
+    return keys(
+        "exported-keys", parameters("catalog", catalog, "db_schema", schema, "table", table));
   }
 
   @Override
@@ -465,11 +520,24 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
 
   private static final Schema TYPE_INFO_COLUMNS =
       columns(
-          "TYPE_NAME", "DATA_TYPE:int", "PRECISION:int", "LITERAL_PREFIX", "LITERAL_SUFFIX",
-          "CREATE_PARAMS", "NULLABLE:short", "CASE_SENSITIVE:bool", "SEARCHABLE:short",
-          "UNSIGNED_ATTRIBUTE:bool", "FIXED_PREC_SCALE:bool", "AUTO_INCREMENT:bool",
-          "LOCAL_TYPE_NAME", "MINIMUM_SCALE:short", "MAXIMUM_SCALE:short", "SQL_DATA_TYPE:int",
-          "SQL_DATETIME_SUB:int", "NUM_PREC_RADIX:int");
+          "TYPE_NAME",
+          "DATA_TYPE:int",
+          "PRECISION:int",
+          "LITERAL_PREFIX",
+          "LITERAL_SUFFIX",
+          "CREATE_PARAMS",
+          "NULLABLE:short",
+          "CASE_SENSITIVE:bool",
+          "SEARCHABLE:short",
+          "UNSIGNED_ATTRIBUTE:bool",
+          "FIXED_PREC_SCALE:bool",
+          "AUTO_INCREMENT:bool",
+          "LOCAL_TYPE_NAME",
+          "MINIMUM_SCALE:short",
+          "MAXIMUM_SCALE:short",
+          "SQL_DATA_TYPE:int",
+          "SQL_DATETIME_SUB:int",
+          "NUM_PREC_RADIX:int");
 
   /**
    * {@inheritDoc}
@@ -538,9 +606,19 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "NON_UNIQUE:bool", "INDEX_QUALIFIER",
-            "INDEX_NAME", "TYPE:short", "ORDINAL_POSITION:short", "COLUMN_NAME", "ASC_OR_DESC",
-            "CARDINALITY:long", "PAGES:long", "FILTER_CONDITION"));
+            "TABLE_CAT",
+            "TABLE_SCHEM",
+            "TABLE_NAME",
+            "NON_UNIQUE:bool",
+            "INDEX_QUALIFIER",
+            "INDEX_NAME",
+            "TYPE:short",
+            "ORDINAL_POSITION:short",
+            "COLUMN_NAME",
+            "ASC_OR_DESC",
+            "CARDINALITY:long",
+            "PAGES:long",
+            "FILTER_CONDITION"));
   }
 
   @Override
@@ -548,8 +626,15 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "RESERVED1", "RESERVED2",
-            "RESERVED3", "REMARKS", "PROCEDURE_TYPE:short", "SPECIFIC_NAME"));
+            "PROCEDURE_CAT",
+            "PROCEDURE_SCHEM",
+            "PROCEDURE_NAME",
+            "RESERVED1",
+            "RESERVED2",
+            "RESERVED3",
+            "REMARKS",
+            "PROCEDURE_TYPE:short",
+            "SPECIFIC_NAME"));
   }
 
   @Override
@@ -558,11 +643,26 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "COLUMN_NAME", "COLUMN_TYPE:short",
-            "DATA_TYPE:int", "TYPE_NAME", "PRECISION:int", "LENGTH:int", "SCALE:short",
-            "RADIX:short", "NULLABLE:short", "REMARKS", "COLUMN_DEF", "SQL_DATA_TYPE:int",
-            "SQL_DATETIME_SUB:int", "CHAR_OCTET_LENGTH:int", "ORDINAL_POSITION:int",
-            "IS_NULLABLE", "SPECIFIC_NAME"));
+            "PROCEDURE_CAT",
+            "PROCEDURE_SCHEM",
+            "PROCEDURE_NAME",
+            "COLUMN_NAME",
+            "COLUMN_TYPE:short",
+            "DATA_TYPE:int",
+            "TYPE_NAME",
+            "PRECISION:int",
+            "LENGTH:int",
+            "SCALE:short",
+            "RADIX:short",
+            "NULLABLE:short",
+            "REMARKS",
+            "COLUMN_DEF",
+            "SQL_DATA_TYPE:int",
+            "SQL_DATETIME_SUB:int",
+            "CHAR_OCTET_LENGTH:int",
+            "ORDINAL_POSITION:int",
+            "IS_NULLABLE",
+            "SPECIFIC_NAME"));
   }
 
   @Override
@@ -570,8 +670,14 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       String catalog, String schema, String table, String columnNamePattern) throws SQLException {
     return empty(
         columns(
-            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "GRANTOR", "GRANTEE",
-            "PRIVILEGE", "IS_GRANTABLE"));
+            "TABLE_CAT",
+            "TABLE_SCHEM",
+            "TABLE_NAME",
+            "COLUMN_NAME",
+            "GRANTOR",
+            "GRANTEE",
+            "PRIVILEGE",
+            "IS_GRANTABLE"));
   }
 
   @Override
@@ -579,7 +685,12 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "GRANTOR", "GRANTEE", "PRIVILEGE",
+            "TABLE_CAT",
+            "TABLE_SCHEM",
+            "TABLE_NAME",
+            "GRANTOR",
+            "GRANTEE",
+            "PRIVILEGE",
             "IS_GRANTABLE"));
   }
 
@@ -598,8 +709,14 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
 
   private static Schema rowIdentifierColumns() {
     return columns(
-        "SCOPE:short", "COLUMN_NAME", "DATA_TYPE:int", "TYPE_NAME", "COLUMN_SIZE:int",
-        "BUFFER_LENGTH:int", "DECIMAL_DIGITS:short", "PSEUDO_COLUMN:short");
+        "SCOPE:short",
+        "COLUMN_NAME",
+        "DATA_TYPE:int",
+        "TYPE_NAME",
+        "COLUMN_SIZE:int",
+        "BUFFER_LENGTH:int",
+        "DECIMAL_DIGITS:short",
+        "PSEUDO_COLUMN:short");
   }
 
   @Override
@@ -608,7 +725,12 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "CLASS_NAME", "DATA_TYPE:int", "REMARKS",
+            "TYPE_CAT",
+            "TYPE_SCHEM",
+            "TYPE_NAME",
+            "CLASS_NAME",
+            "DATA_TYPE:int",
+            "REMARKS",
             "BASE_TYPE:short"));
   }
 
@@ -617,7 +739,11 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "SUPERTYPE_CAT", "SUPERTYPE_SCHEM",
+            "TYPE_CAT",
+            "TYPE_SCHEM",
+            "TYPE_NAME",
+            "SUPERTYPE_CAT",
+            "SUPERTYPE_SCHEM",
             "SUPERTYPE_NAME"));
   }
 
@@ -633,11 +759,27 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "ATTR_NAME", "DATA_TYPE:int", "ATTR_TYPE_NAME",
-            "ATTR_SIZE:int", "DECIMAL_DIGITS:int", "NUM_PREC_RADIX:int", "NULLABLE:int",
-            "REMARKS", "ATTR_DEF", "SQL_DATA_TYPE:int", "SQL_DATETIME_SUB:int",
-            "CHAR_OCTET_LENGTH:int", "ORDINAL_POSITION:int", "IS_NULLABLE", "SCOPE_CATALOG",
-            "SCOPE_SCHEMA", "SCOPE_TABLE", "SOURCE_DATA_TYPE:short"));
+            "TYPE_CAT",
+            "TYPE_SCHEM",
+            "TYPE_NAME",
+            "ATTR_NAME",
+            "DATA_TYPE:int",
+            "ATTR_TYPE_NAME",
+            "ATTR_SIZE:int",
+            "DECIMAL_DIGITS:int",
+            "NUM_PREC_RADIX:int",
+            "NULLABLE:int",
+            "REMARKS",
+            "ATTR_DEF",
+            "SQL_DATA_TYPE:int",
+            "SQL_DATETIME_SUB:int",
+            "CHAR_OCTET_LENGTH:int",
+            "ORDINAL_POSITION:int",
+            "IS_NULLABLE",
+            "SCOPE_CATALOG",
+            "SCOPE_SCHEMA",
+            "SCOPE_TABLE",
+            "SOURCE_DATA_TYPE:short"));
   }
 
   @Override
@@ -650,7 +792,11 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "FUNCTION_CAT", "FUNCTION_SCHEM", "FUNCTION_NAME", "REMARKS", "FUNCTION_TYPE:short",
+            "FUNCTION_CAT",
+            "FUNCTION_SCHEM",
+            "FUNCTION_NAME",
+            "REMARKS",
+            "FUNCTION_TYPE:short",
             "SPECIFIC_NAME"));
   }
 
@@ -660,10 +806,23 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "FUNCTION_CAT", "FUNCTION_SCHEM", "FUNCTION_NAME", "COLUMN_NAME", "COLUMN_TYPE:short",
-            "DATA_TYPE:int", "TYPE_NAME", "PRECISION:int", "LENGTH:int", "SCALE:short",
-            "RADIX:short", "NULLABLE:short", "REMARKS", "CHAR_OCTET_LENGTH:int",
-            "ORDINAL_POSITION:int", "IS_NULLABLE", "SPECIFIC_NAME"));
+            "FUNCTION_CAT",
+            "FUNCTION_SCHEM",
+            "FUNCTION_NAME",
+            "COLUMN_NAME",
+            "COLUMN_TYPE:short",
+            "DATA_TYPE:int",
+            "TYPE_NAME",
+            "PRECISION:int",
+            "LENGTH:int",
+            "SCALE:short",
+            "RADIX:short",
+            "NULLABLE:short",
+            "REMARKS",
+            "CHAR_OCTET_LENGTH:int",
+            "ORDINAL_POSITION:int",
+            "IS_NULLABLE",
+            "SPECIFIC_NAME"));
   }
 
   @Override
@@ -672,9 +831,18 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     return empty(
         columns(
-            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE:int",
-            "COLUMN_SIZE:int", "DECIMAL_DIGITS:int", "NUM_PREC_RADIX:int", "COLUMN_USAGE",
-            "REMARKS", "CHAR_OCTET_LENGTH:int", "IS_NULLABLE"));
+            "TABLE_CAT",
+            "TABLE_SCHEM",
+            "TABLE_NAME",
+            "COLUMN_NAME",
+            "DATA_TYPE:int",
+            "COLUMN_SIZE:int",
+            "DECIMAL_DIGITS:int",
+            "NUM_PREC_RADIX:int",
+            "COLUMN_USAGE",
+            "REMARKS",
+            "CHAR_OCTET_LENGTH:int",
+            "IS_NULLABLE"));
   }
 
   // ---- Product and driver ----
@@ -826,7 +994,9 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
     return identifierCase("sql_identifier_case") == 1;
   }
 
-  /** Quoted identifiers are case-sensitive, as in standard SQL, unless the server says otherwise. */
+  /**
+   * Quoted identifiers are case-sensitive, as in standard SQL, unless the server says otherwise.
+   */
   @Override
   public boolean supportsMixedCaseQuotedIdentifiers() throws SQLException {
     return identifierCase("sql_quoted_identifier_case") == 0;

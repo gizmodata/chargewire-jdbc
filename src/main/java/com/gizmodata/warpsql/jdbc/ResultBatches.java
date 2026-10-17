@@ -81,10 +81,6 @@ abstract class ResultBatches implements AutoCloseable {
       this.columns = userColumns(reader.schema(), reader.dictionaries());
     }
 
-    ResultReader reader() {
-      return reader;
-    }
-
     @Override
     List<Field> columns() {
       return columns;
@@ -134,7 +130,9 @@ abstract class ResultBatches implements AutoCloseable {
       List<Field> columns = new ArrayList<>();
       for (Field field : schema.getFields()) {
         Dictionary dictionary =
-            field.getDictionary() == null ? null : dictionaries.lookup(field.getDictionary().getId());
+            field.getDictionary() == null
+                ? null
+                : dictionaries.lookup(field.getDictionary().getId());
         if (dictionary == null) {
           columns.add(field);
         } else {

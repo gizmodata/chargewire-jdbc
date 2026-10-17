@@ -83,8 +83,10 @@ class ParameterEncoderTest {
   }
 
   private Decoded one(Object... values) throws Exception {
-    ParameterEncoder.Value[] row = Arrays.stream(values).map(ParameterEncoderTest::value)
-        .toArray(ParameterEncoder.Value[]::new);
+    ParameterEncoder.Value[] row =
+        Arrays.stream(values)
+            .map(ParameterEncoderTest::value)
+            .toArray(ParameterEncoder.Value[]::new);
     return encode(null, List.<ParameterEncoder.Value[]>of(row));
   }
 
@@ -105,10 +107,23 @@ class ParameterEncoderTest {
   @Test
   void infersTypesFromJavaValues() throws Exception {
     Decoded decoded =
-        one(true, (byte) 1, (short) 2, 3, 4L, 1.5f, 2.5, new BigDecimal("12.345"), "text",
-            new byte[] {1}, LocalDate.of(2026, 1, 2), LocalTime.of(1, 2, 3),
-            LocalDateTime.of(2026, 1, 2, 3, 4, 5), Instant.parse("2026-01-02T03:04:05Z"),
-            UUID.fromString("00000000-0000-0000-0000-000000000001"), Duration.ofSeconds(90));
+        one(
+            true,
+            (byte) 1,
+            (short) 2,
+            3,
+            4L,
+            1.5f,
+            2.5,
+            new BigDecimal("12.345"),
+            "text",
+            new byte[] {1},
+            LocalDate.of(2026, 1, 2),
+            LocalTime.of(1, 2, 3),
+            LocalDateTime.of(2026, 1, 2, 3, 4, 5),
+            Instant.parse("2026-01-02T03:04:05Z"),
+            UUID.fromString("00000000-0000-0000-0000-000000000001"),
+            Duration.ofSeconds(90));
     assertEquals(ArrowType.Bool.INSTANCE, decoded.type(0));
     assertEquals(new ArrowType.Int(8, true), decoded.type(1));
     assertEquals(new ArrowType.Int(16, true), decoded.type(2));
@@ -123,7 +138,8 @@ class ParameterEncoderTest {
     assertEquals(new ArrowType.Time(TimeUnit.MICROSECOND, 64), decoded.type(11));
     assertEquals(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null), decoded.type(12));
     assertEquals(new ArrowType.Timestamp(TimeUnit.MICROSECOND, "UTC"), decoded.type(13));
-    assertEquals(ArrowType.Utf8.INSTANCE, decoded.type(14), "UUIDs travel as text the engine casts");
+    assertEquals(
+        ArrowType.Utf8.INSTANCE, decoded.type(14), "UUIDs travel as text the engine casts");
     assertEquals(new ArrowType.Interval(IntervalUnit.MONTH_DAY_NANO), decoded.type(15));
     Object[] row = decoded.rows.get(0);
     assertEquals(new BigDecimal("12.345"), row[7]);
@@ -141,8 +157,12 @@ class ParameterEncoderTest {
 
   @Test
   void decimalsGetAPrecisionThatFits() throws Exception {
-    Decoded decoded = one(new BigDecimal("0.05"), new BigDecimal("1E+3"), new BigInteger("123"),
-        new BigDecimal("1" + "0".repeat(45)));
+    Decoded decoded =
+        one(
+            new BigDecimal("0.05"),
+            new BigDecimal("1E+3"),
+            new BigInteger("123"),
+            new BigDecimal("1" + "0".repeat(45)));
     assertEquals(new ArrowType.Decimal(2, 2, 128), decoded.type(0));
     assertEquals(new ArrowType.Decimal(4, 0, 128), decoded.type(1), "a negative scale becomes 0");
     assertEquals(new ArrowType.Decimal(3, 0, 128), decoded.type(2));
@@ -152,9 +172,14 @@ class ParameterEncoderTest {
 
   @Test
   void batchRowsWidenToACommonType() throws Exception {
-    List<ParameterEncoder.Value[]> rows = List.of(
-        new ParameterEncoder.Value[] {value(1), value(1), value(new BigDecimal("1.5")), value(1), value(null)},
-        new ParameterEncoder.Value[] {value(2L), value(2.5), value(new BigDecimal("123.25")), value("x"), value(null)});
+    List<ParameterEncoder.Value[]> rows =
+        List.of(
+            new ParameterEncoder.Value[] {
+              value(1), value(1), value(new BigDecimal("1.5")), value(1), value(null)
+            },
+            new ParameterEncoder.Value[] {
+              value(2L), value(2.5), value(new BigDecimal("123.25")), value("x"), value(null)
+            });
     Decoded decoded = encode(null, rows);
     assertEquals(new ArrowType.Int(64, true), decoded.type(0));
     assertEquals(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE), decoded.type(1));
@@ -184,7 +209,9 @@ class ParameterEncoderTest {
   void listsInferTheirElementType() throws Exception {
     Decoded decoded = one(new Object[] {1, null, 3}, new int[] {4, 5}, List.of("a"));
     assertEquals(ArrowType.List.INSTANCE, decoded.type(0));
-    assertEquals(new ArrowType.Int(32, true), decoded.schema.getFields().get(0).getChildren().get(0).getType());
+    assertEquals(
+        new ArrowType.Int(32, true),
+        decoded.schema.getFields().get(0).getChildren().get(0).getType());
     assertEquals(Arrays.asList(1, null, 3), decoded.rows.get(0)[0]);
     assertEquals(List.of(4, 5), decoded.rows.get(0)[1]);
     assertEquals(List.of("a"), decoded.rows.get(0)[2]);
@@ -201,12 +228,24 @@ class ParameterEncoderTest {
   @Test
   void declaredTypesWinAndValuesConvert() throws Exception {
     Schema schema =
-        declared(new ArrowType.Int(32, true), ArrowType.Utf8.INSTANCE, new ArrowType.Decimal(10, 3, 128),
-            new ArrowType.Date(DateUnit.DAY), ArrowType.Bool.INSTANCE, ArrowType.Null.INSTANCE,
-            new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE), new ArrowType.Int(8, false));
+        declared(
+            new ArrowType.Int(32, true),
+            ArrowType.Utf8.INSTANCE,
+            new ArrowType.Decimal(10, 3, 128),
+            new ArrowType.Date(DateUnit.DAY),
+            ArrowType.Bool.INSTANCE,
+            ArrowType.Null.INSTANCE,
+            new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE),
+            new ArrowType.Int(8, false));
     ParameterEncoder.Value[] row = {
-      value("12"), value(34), value(new BigDecimal("9.87654")), value("2026-10-17"), value("true"),
-      value(7L), value(3), value(200)
+      value("12"),
+      value(34),
+      value(new BigDecimal("9.87654")),
+      value("2026-10-17"),
+      value("true"),
+      value(7L),
+      value(3),
+      value(200)
     };
     Decoded decoded = encode(schema, List.<ParameterEncoder.Value[]>of(row));
     assertEquals(new ArrowType.Int(32, true), decoded.type(0));
@@ -214,7 +253,8 @@ class ParameterEncoderTest {
     Object[] values = decoded.rows.get(0);
     assertEquals(12, values[0]);
     assertEquals("34", values[1]);
-    assertEquals(new BigDecimal("9.877"), values[2], "decimals round half up to the declared scale");
+    assertEquals(
+        new BigDecimal("9.877"), values[2], "decimals round half up to the declared scale");
     assertEquals(Date.valueOf("2026-10-17"), values[3]);
     assertEquals(true, values[4]);
     assertEquals(7L, values[5]);
@@ -233,25 +273,42 @@ class ParameterEncoderTest {
     assertCode("22003", declared(new ArrowType.Decimal(4, 2, 128)), new BigDecimal("123.45"));
     assertCode("22018", declared(new ArrowType.Date(DateUnit.DAY)), "17/10/2026");
     assertCode("22018", declared(ArrowType.Bool.INSTANCE), "maybe");
-    assertCode("22008", declared(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)),
+    assertCode(
+        "22008",
+        declared(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)),
         LocalDateTime.of(2026, 1, 1, 0, 0, 0, 1));
-    assertCode("22008", declared(new ArrowType.Time(TimeUnit.SECOND, 32)), LocalTime.of(0, 0, 0, 5_000_000));
+    assertCode(
+        "22008",
+        declared(new ArrowType.Time(TimeUnit.SECOND, 32)),
+        LocalTime.of(0, 0, 0, 5_000_000));
     assertCode("22001", declared(new ArrowType.FixedSizeBinary(4)), new byte[] {1, 2});
     assertCode("22018", declared(ArrowType.Utf8.INSTANCE), new byte[] {1});
   }
 
   private void assertCode(String sqlState, Schema declared, Object value) {
-    SQLException error = assertThrows(SQLException.class,
-        () -> encode(declared, List.<ParameterEncoder.Value[]>of(new ParameterEncoder.Value[] {value(value)})));
+    SQLException error =
+        assertThrows(
+            SQLException.class,
+            () ->
+                encode(
+                    declared,
+                    List.<ParameterEncoder.Value[]>of(
+                        new ParameterEncoder.Value[] {value(value)})));
     assertEquals(sqlState, error.getSQLState(), error.getMessage());
     assertTrue(error.getMessage().startsWith("Parameter 1"), error.getMessage());
   }
 
   @Test
   void batchErrorsNameTheRow() {
-    SQLException error = assertThrows(SQLDataException.class, () -> encode(
-        declared(new ArrowType.Int(32, true)),
-        List.of(new ParameterEncoder.Value[] {value(1)}, new ParameterEncoder.Value[] {value("x")})));
+    SQLException error =
+        assertThrows(
+            SQLDataException.class,
+            () ->
+                encode(
+                    declared(new ArrowType.Int(32, true)),
+                    List.of(
+                        new ParameterEncoder.Value[] {value(1)},
+                        new ParameterEncoder.Value[] {value("x")})));
     assertTrue(error.getMessage().startsWith("Parameter 1 of batch row 2"), error.getMessage());
   }
 
@@ -266,7 +323,8 @@ class ParameterEncoderTest {
     Calendar tokyo = Calendar.getInstance(TimeZone.getTimeZone("Asia/Tokyo"));
     Timestamp instant = Timestamp.from(Instant.parse("2026-01-02T03:04:05Z"));
     Schema schema =
-        declared(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null),
+        declared(
+            new ArrowType.Timestamp(TimeUnit.MICROSECOND, null),
             new ArrowType.Timestamp(TimeUnit.MICROSECOND, "UTC"),
             new ArrowType.Timestamp(TimeUnit.MICROSECOND, "UTC"),
             new ArrowType.Timestamp(TimeUnit.MILLISECOND, null));
@@ -281,13 +339,17 @@ class ParameterEncoderTest {
     assertEquals(Timestamp.valueOf("2026-01-02 12:04:05"), values[0], "the wall clock in Tokyo");
     assertEquals(instant, values[1], "an instant is an instant");
     assertEquals(instant, values[2]);
-    assertEquals(Timestamp.valueOf("2026-01-02 03:04:05"), values[3], "an Instant's wall clock is UTC");
+    assertEquals(
+        Timestamp.valueOf("2026-01-02 03:04:05"), values[3], "an Instant's wall clock is UTC");
   }
 
   @Test
   void datesAndTimesFromLegacyTypes() throws Exception {
-    Schema schema = declared(new ArrowType.Date(DateUnit.DAY), new ArrowType.Time(TimeUnit.MILLISECOND, 32));
-    ParameterEncoder.Value[] row = {value(Date.valueOf("2026-10-17")), value(Time.valueOf("13:14:15"))};
+    Schema schema =
+        declared(new ArrowType.Date(DateUnit.DAY), new ArrowType.Time(TimeUnit.MILLISECOND, 32));
+    ParameterEncoder.Value[] row = {
+      value(Date.valueOf("2026-10-17")), value(Time.valueOf("13:14:15"))
+    };
     Object[] values = encode(schema, List.<ParameterEncoder.Value[]>of(row)).rows.get(0);
     assertEquals(Date.valueOf("2026-10-17"), values[0]);
     assertEquals(Time.valueOf("13:14:15"), values[1]);
@@ -301,10 +363,13 @@ class ParameterEncoderTest {
     assertEquals("12", ParameterEncoder.coerce(12, Types.VARCHAR, -1));
     assertEquals(true, ParameterEncoder.coerce(1, Types.BOOLEAN, -1));
     assertEquals(LocalDate.of(2026, 10, 17), ParameterEncoder.coerce("2026-10-17", Types.DATE, -1));
-    assertEquals(Instant.parse("2026-10-17T00:00:00Z"),
+    assertEquals(
+        Instant.parse("2026-10-17T00:00:00Z"),
         ParameterEncoder.coerce("2026-10-17T00:00:00Z", Types.TIMESTAMP_WITH_TIMEZONE, -1));
-    assertEquals("22003", assertThrows(SQLDataException.class,
-        () -> ParameterEncoder.coerce(300, Types.TINYINT, -1)).getSQLState());
+    assertEquals(
+        "22003",
+        assertThrows(SQLDataException.class, () -> ParameterEncoder.coerce(300, Types.TINYINT, -1))
+            .getSQLState());
   }
 
   @Test
@@ -312,10 +377,15 @@ class ParameterEncoderTest {
     assertEquals(5, ParameterEncoder.jsonValue(5));
     assertEquals("x", ParameterEncoder.jsonValue('x'));
     assertEquals("2026-10-17", ParameterEncoder.jsonValue(LocalDate.of(2026, 10, 17)));
-    assertEquals("2026-10-17 01:02:03", ParameterEncoder.jsonValue(Timestamp.valueOf("2026-10-17 01:02:03")));
-    assertEquals("2026-10-17T01:02:03Z", ParameterEncoder.jsonValue(Instant.parse("2026-10-17T01:02:03Z")));
+    assertEquals(
+        "2026-10-17 01:02:03",
+        ParameterEncoder.jsonValue(Timestamp.valueOf("2026-10-17 01:02:03")));
+    assertEquals(
+        "2026-10-17T01:02:03Z", ParameterEncoder.jsonValue(Instant.parse("2026-10-17T01:02:03Z")));
     assertEquals("P1D", ParameterEncoder.jsonValue(Period.ofDays(1)));
-    assertEquals("0A000", assertThrows(SQLException.class,
-        () -> ParameterEncoder.jsonValue(new byte[] {1})).getSQLState());
+    assertEquals(
+        "0A000",
+        assertThrows(SQLException.class, () -> ParameterEncoder.jsonValue(new byte[] {1}))
+            .getSQLState());
   }
 }

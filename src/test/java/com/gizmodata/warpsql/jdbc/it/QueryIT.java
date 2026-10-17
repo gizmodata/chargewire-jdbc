@@ -95,7 +95,8 @@ class QueryIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE prepared_test (id INTEGER, name VARCHAR)");
-      statement.execute("INSERT INTO prepared_test VALUES (1, 'Test1'), (2, 'Test2'), (3, 'Test3')");
+      statement.execute(
+          "INSERT INTO prepared_test VALUES (1, 'Test1'), (2, 'Test2'), (3, 'Test3')");
       try (PreparedStatement prepared =
           connection.prepareStatement("SELECT * FROM prepared_test WHERE id > ? ORDER BY id")) {
         prepared.setInt(1, 1);
@@ -121,7 +122,8 @@ class QueryIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement();
         ResultSet rows =
-            statement.executeQuery("SELECT 42 AS int_col, 'hello' AS str_col, 3.14 AS double_col")) {
+            statement.executeQuery(
+                "SELECT 42 AS int_col, 'hello' AS str_col, 3.14 AS double_col")) {
       ResultSetMetaData metaData = rows.getMetaData();
       assertEquals(3, metaData.getColumnCount());
       assertEquals("int_col", metaData.getColumnName(1));
@@ -224,7 +226,8 @@ class QueryIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE list_test (id INTEGER, anomalies INTEGER[])");
-      statement.execute("INSERT INTO list_test VALUES (1, [0, 1, 2]), (2, [3, 4, 5]), (3, [0, 6, 7])");
+      statement.execute(
+          "INSERT INTO list_test VALUES (1, [0, 1, 2]), (2, [3, 4, 5]), (3, [0, 6, 7])");
       try (ResultSet rows =
           statement.executeQuery(
               "SELECT id FROM list_test WHERE list_has_any(anomalies, [0]) ORDER BY id")) {
@@ -278,7 +281,8 @@ class QueryIT {
             statement.executeQuery("SELECT {'a': 1, 'b': 'x'} AS s, MAP {'k': 2} AS m")) {
       assertTrue(rows.next());
       assertEquals(Map.of("a", 1, "b", "x"), rows.getObject("s"));
-      assertArrayEquals(new Object[] {1, "x"}, rows.getObject("s", java.sql.Struct.class).getAttributes());
+      assertArrayEquals(
+          new Object[] {1, "x"}, rows.getObject("s", java.sql.Struct.class).getAttributes());
       assertEquals(Map.of("k", 2), rows.getObject("m"));
       assertEquals("{\"a\": 1, \"b\": \"x\"}", rows.getString("s"));
     }
@@ -291,7 +295,8 @@ class QueryIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE it_dec(id INT, amount DECIMAL(10,2))");
-      try (PreparedStatement insert = connection.prepareStatement("INSERT INTO it_dec VALUES (?, ?)")) {
+      try (PreparedStatement insert =
+          connection.prepareStatement("INSERT INTO it_dec VALUES (?, ?)")) {
         insert.setInt(1, 1);
         insert.setBigDecimal(2, new BigDecimal("123.45"));
         assertEquals(1, insert.executeUpdate());
@@ -407,7 +412,8 @@ class QueryIT {
           assertFalse(rows.next());
         }
         // The word "returning" inside a literal is just text.
-        assertEquals(1, statement.executeUpdate("INSERT INTO it_returning (name) VALUES ('returning')"));
+        assertEquals(
+            1, statement.executeUpdate("INSERT INTO it_returning (name) VALUES ('returning')"));
         try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM it_returning")) {
           assertTrue(rows.next());
           assertEquals(2, rows.getInt(1));
@@ -441,7 +447,8 @@ class QueryIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
       SQLException error =
-          assertThrows(SQLException.class, () -> statement.executeQuery("CREATE TEMP TABLE it_eq(i INT)"));
+          assertThrows(
+              SQLException.class, () -> statement.executeQuery("CREATE TEMP TABLE it_eq(i INT)"));
       assertEquals("02000", error.getSQLState());
     }
   }
@@ -452,7 +459,8 @@ class QueryIT {
   void preparedReuseAndBatchLedger() throws SQLException {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
-      statement.execute("CREATE TEMP TABLE it_reuse_ledger (id INTEGER PRIMARY KEY, value VARCHAR)");
+      statement.execute(
+          "CREATE TEMP TABLE it_reuse_ledger (id INTEGER PRIMARY KEY, value VARCHAR)");
       try (PreparedStatement insert =
           connection.prepareStatement("INSERT INTO it_reuse_ledger VALUES (?, ?)")) {
         for (int id = 0; id < 20; id++) {
@@ -477,13 +485,15 @@ class QueryIT {
         assertArrayEquals(new int[] {1}, insert.executeBatch(), "a batch of one keeps its count");
       }
       try (ResultSet rows =
-          statement.executeQuery("SELECT count(*), sum(id), max(value) FROM it_reuse_ledger WHERE id < 20")) {
+          statement.executeQuery(
+              "SELECT count(*), sum(id), max(value) FROM it_reuse_ledger WHERE id < 20")) {
         assertTrue(rows.next());
         assertEquals(20, rows.getInt(1));
         assertEquals(190, rows.getInt(2));
         assertEquals("bound ' ; -- value", rows.getString(3));
       }
-      try (ResultSet rows = statement.executeQuery("SELECT count(*), sum(id) FROM it_reuse_ledger")) {
+      try (ResultSet rows =
+          statement.executeQuery("SELECT count(*), sum(id) FROM it_reuse_ledger")) {
         assertTrue(rows.next());
         assertEquals(26, rows.getInt(1));
         assertEquals(325, rows.getInt(2));
@@ -553,7 +563,8 @@ class QueryIT {
       assertArrayEquals(new int[] {2, 1, 3}, statement.executeBatch());
       statement.addBatch("INSERT INTO it_sql_batch VALUES (4)");
       statement.addBatch("INSERT INTO no_such_table VALUES (5)");
-      BatchUpdateException error = assertThrows(BatchUpdateException.class, statement::executeBatch);
+      BatchUpdateException error =
+          assertThrows(BatchUpdateException.class, statement::executeBatch);
       assertArrayEquals(new int[] {1}, error.getUpdateCounts());
       assertEquals("sql_error", WarpProblem.codeOf(error));
     }
@@ -571,7 +582,8 @@ class QueryIT {
         insert.setInt(1, 1);
         assertEquals(1, insert.executeUpdate());
         connection.rollback();
-        try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM it_transaction_ledger")) {
+        try (ResultSet rows =
+            statement.executeQuery("SELECT count(*) FROM it_transaction_ledger")) {
           assertTrue(rows.next());
           assertEquals(0, rows.getInt(1));
         }
@@ -638,7 +650,8 @@ class QueryIT {
       assertEquals(400, error.getErrorCode());
       SQLSyntaxErrorException missing =
           assertThrows(
-              SQLSyntaxErrorException.class, () -> statement.executeQuery("SELECT * FROM nowhere_at_all"));
+              SQLSyntaxErrorException.class,
+              () -> statement.executeQuery("SELECT * FROM nowhere_at_all"));
       assertEquals("sql_error", WarpProblem.codeOf(missing));
       // The statement and connection still work.
       try (ResultSet rows = statement.executeQuery("SELECT 1")) {
@@ -673,7 +686,8 @@ class QueryIT {
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE victims (name VARCHAR)");
       String hostile = "x'); DROP TABLE victims; --";
-      try (PreparedStatement insert = connection.prepareStatement("INSERT INTO victims VALUES (?)")) {
+      try (PreparedStatement insert =
+          connection.prepareStatement("INSERT INTO victims VALUES (?)")) {
         insert.setString(1, hostile);
         insert.executeUpdate();
       }
@@ -690,7 +704,8 @@ class QueryIT {
         PreparedStatement select = connection.prepareStatement("SELECT ? + ?")) {
       select.setInt(1, 1);
       assertEquals("07001", assertThrows(SQLException.class, select::executeQuery).getSQLState());
-      assertEquals("07009", assertThrows(SQLException.class, () -> select.setInt(3, 1)).getSQLState());
+      assertEquals(
+          "07009", assertThrows(SQLException.class, () -> select.setInt(3, 1)).getSQLState());
     }
   }
 

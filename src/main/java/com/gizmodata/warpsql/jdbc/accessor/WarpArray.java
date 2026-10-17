@@ -67,7 +67,8 @@ final class WarpArray implements Array {
 
   @Override
   public ResultSet getResultSet() throws SQLException {
-    throw new SQLFeatureNotSupportedException("Array.getResultSet is not supported; use getArray", "0A000");
+    throw new SQLFeatureNotSupportedException(
+        "Array.getResultSet is not supported; use getArray", "0A000");
   }
 
   @Override

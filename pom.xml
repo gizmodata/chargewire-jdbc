@@ -29,8 +29,10 @@
     <slf4j.version>2.0.20</slf4j.version>
     <zstd-jni.version>1.5.7-23</zstd-jni.version>
     <commons-codec.version>1.23.0</commons-codec.version>
+    <checker-qual.version>4.3.1</checker-qual.version>
     <junit.version>6.1.3</junit.version>
-    <google-java-format.version>1.37.0</google-java-format.version>
+    <!-- Not the newest: Spotless on JDK 17, the build's JDK, allows google-java-format 1.28.0 at most. -->
+    <google-java-format.version>1.28.0</google-java-format.version>
 
     <shaded.jar>${project.build.directory}/warp-sql-jdbc.jar</shaded.jar>
   </properties>
@@ -100,6 +102,14 @@
       <artifactId>slf4j-nop</artifactId>
       <version>${slf4j.version}</version>
       <scope>runtime</scope>
+    </dependency>
+
+    <!-- Annotations on Arrow's API: only the compiler needs them. -->
+    <dependency>
+      <groupId>org.checkerframework</groupId>
+      <artifactId>checker-qual</artifactId>
+      <version>${checker-qual.version}</version>
+      <scope>provided</scope>
     </dependency>
 
     <dependency>

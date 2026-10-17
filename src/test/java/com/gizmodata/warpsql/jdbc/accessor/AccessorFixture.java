@@ -11,8 +11,8 @@ import org.apache.arrow.vector.types.pojo.FieldType;
 import org.junit.jupiter.api.AfterEach;
 
 /**
- * Builds vectors for accessor tests and frees them after each test; a leaked buffer fails the
- * test when the allocator closes.
+ * Builds vectors for accessor tests and frees them after each test; a leaked buffer fails the test
+ * when the allocator closes.
  */
 abstract class AccessorFixture {
   final BufferAllocator allocator = new RootAllocator();

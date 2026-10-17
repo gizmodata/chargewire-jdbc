@@ -72,27 +72,40 @@ class SqlErrorsTest {
 
   @Test
   void theServersSqlStateWinsAndPicksTheSubclass() {
-    assertInstanceOf(SQLIntegrityConstraintViolationException.class,
+    assertInstanceOf(
+        SQLIntegrityConstraintViolationException.class,
         SqlErrors.toSqlException(problem(500, "execution_error", "23505")));
-    assertInstanceOf(SQLDataException.class, SqlErrors.toSqlException(problem(500, "execution_error", "22012")));
-    assertInstanceOf(SQLTransactionRollbackException.class,
+    assertInstanceOf(
+        SQLDataException.class, SqlErrors.toSqlException(problem(500, "execution_error", "22012")));
+    assertInstanceOf(
+        SQLTransactionRollbackException.class,
         SqlErrors.toSqlException(problem(500, "execution_error", "40001")));
     SQLException syntax = SqlErrors.toSqlException(problem(400, "sql_error", "42601"));
     assertInstanceOf(SQLSyntaxErrorException.class, syntax);
     assertEquals("42601", syntax.getSQLState());
-    assertEquals("HY000", SqlErrors.toSqlException(problem(500, "execution_error", "bogus")).getSQLState(),
+    assertEquals(
+        "HY000",
+        SqlErrors.toSqlException(problem(500, "execution_error", "bogus")).getSQLState(),
         "a malformed SQLSTATE is ignored");
   }
 
   @Test
   void unknownCodesMapByStatus() {
-    assertInstanceOf(SQLInvalidAuthorizationSpecException.class,
+    assertInstanceOf(
+        SQLInvalidAuthorizationSpecException.class,
         SqlErrors.toSqlException(problem(401, "future_auth_code", null)));
-    assertInstanceOf(SQLSyntaxErrorException.class, SqlErrors.toSqlException(problem(403, "future", null)));
-    assertInstanceOf(SQLTransientException.class, SqlErrors.toSqlException(problem(429, "future", null)));
-    assertInstanceOf(SQLTransientConnectionException.class, SqlErrors.toSqlException(problem(503, "future", null)));
-    assertInstanceOf(SQLFeatureNotSupportedException.class, SqlErrors.toSqlException(problem(501, "future", null)));
-    assertInstanceOf(SQLNonTransientException.class, SqlErrors.toSqlException(problem(400, "future", null)));
+    assertInstanceOf(
+        SQLSyntaxErrorException.class, SqlErrors.toSqlException(problem(403, "future", null)));
+    assertInstanceOf(
+        SQLTransientException.class, SqlErrors.toSqlException(problem(429, "future", null)));
+    assertInstanceOf(
+        SQLTransientConnectionException.class,
+        SqlErrors.toSqlException(problem(503, "future", null)));
+    assertInstanceOf(
+        SQLFeatureNotSupportedException.class,
+        SqlErrors.toSqlException(problem(501, "future", null)));
+    assertInstanceOf(
+        SQLNonTransientException.class, SqlErrors.toSqlException(problem(400, "future", null)));
     SQLException server = SqlErrors.toSqlException(problem(502, "http_error", null));
     assertEquals(SQLException.class, server.getClass());
     assertEquals("HY000", server.getSQLState());
@@ -101,10 +114,12 @@ class SqlErrorsTest {
   @Test
   void messagesNameTheCodeAndRequest() {
     SQLException error =
-        SqlErrors.toSqlException(new WarpProblem(400, "sql_error", "t", "no such table", null, "r_9", null));
+        SqlErrors.toSqlException(
+            new WarpProblem(400, "sql_error", "t", "no such table", null, "r_9", null));
     assertEquals("no such table [sql_error, request r_9]", error.getMessage());
     SQLException ended =
-        SqlErrors.toSqlException(new WarpProblem(401, "session_ended", "Ended", null, null, null, "killed"));
+        SqlErrors.toSqlException(
+            new WarpProblem(401, "session_ended", "Ended", null, null, null, "killed"));
     assertEquals("Ended [session_ended: killed]", ended.getMessage());
     assertSame(WarpProblem.of(ended), WarpProblem.of(new SQLException("wrapper", ended)));
     assertNull(WarpProblem.of(new SQLException("not from the server")));
@@ -114,15 +129,19 @@ class SqlErrorsTest {
   @Test
   void problemDocumentsParse() throws Exception {
     ObjectMapper mapper = new ObjectMapper();
-    WarpProblem full = Problems.parse(mapper.readTree(
-        "{\"type\":\"urn:warp-sql:error:permission_denied\",\"title\":\"Permission denied\","
-            + "\"status\":403,\"code\":\"permission_denied\",\"detail\":\"SELECT on t\","
-            + "\"sqlstate\":\"42501\",\"request_id\":\"r_5\",\"extra\":1}"), 400);
+    WarpProblem full =
+        Problems.parse(
+            mapper.readTree(
+                "{\"type\":\"urn:warp-sql:error:permission_denied\",\"title\":\"Permission denied\","
+                    + "\"status\":403,\"code\":\"permission_denied\",\"detail\":\"SELECT on t\","
+                    + "\"sqlstate\":\"42501\",\"request_id\":\"r_5\",\"extra\":1}"),
+            400);
     assertEquals(403, full.status());
     assertEquals("permission_denied", full.code());
     assertEquals("42501", full.sqlState());
     assertEquals("r_5", full.requestId());
-    WarpProblem typeOnly = Problems.parse(mapper.readTree("{\"type\":\"urn:warp-sql:error:read_only\"}"), 403);
+    WarpProblem typeOnly =
+        Problems.parse(mapper.readTree("{\"type\":\"urn:warp-sql:error:read_only\"}"), 403);
     assertEquals("read_only", typeOnly.code(), "the code can come from the type URN");
     assertEquals(403, typeOnly.status(), "and the status from the response");
     assertEquals("http_error", Problems.parse(mapper.readTree("{}"), 418).code());
@@ -133,9 +152,12 @@ class SqlErrorsTest {
 
   @Test
   void connectionErrorsAreNotProblems() {
-    assertInstanceOf(SQLNonTransientConnectionException.class,
+    assertInstanceOf(
+        SQLNonTransientConnectionException.class,
         SqlErrors.toSqlException(problem(404, "session_not_found", null)));
-    assertInstanceOf(SQLTimeoutException.class, SqlErrors.toSqlException(problem(0, "statement_timeout", "57014")),
+    assertInstanceOf(
+        SQLTimeoutException.class,
+        SqlErrors.toSqlException(problem(0, "statement_timeout", "57014")),
         "a timeout stays a timeout whatever SQLSTATE the server gives");
   }
 }

@@ -16,20 +16,24 @@ import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A {@code warp-duckdb} (or any server with its command-line interface) started for the tests on
- * a free port, with a fresh password and its own empty home directory.
+ * A {@code warp-duckdb} (or any server with its command-line interface) started for the tests on a
+ * free port, with a fresh password and its own empty home directory.
  *
- * <p>The binary comes from {@code WARP_SQL_JDBC_TEST_SERVER_BINARY}, or else from a sibling
- * {@code warp-sql} checkout ({@code ../warp-sql/cpp/build/warp-duckdb}). Without one, every test
- * that needs a server fails: these tests gate changes, and a skipped gate looks like a passed one.
+ * <p>The binary comes from {@code WARP_SQL_JDBC_TEST_SERVER_BINARY}, or else from a sibling {@code
+ * warp-sql} checkout ({@code ../warp-sql/cpp/build/warp-duckdb}). Without one, every test that
+ * needs a server fails: these tests gate changes, and a skipped gate looks like a passed one.
  */
 final class WarpServer implements AutoCloseable {
   static final String USER = "warp";
   private static final String BINARY_VARIABLE = "WARP_SQL_JDBC_TEST_SERVER_BINARY";
 
   final int port;
-  /** Contains {@code :} and {@code @}: credentials travel as JSON fields, so nothing may split them. */
+
+  /**
+   * Contains {@code :} and {@code @}: credentials travel as JSON fields, so nothing may split them.
+   */
   final String password;
+
   final boolean tls;
   private final Process process;
   private final Path home;
@@ -53,8 +57,9 @@ final class WarpServer implements AutoCloseable {
       }
       return path;
     }
-    Path sibling = Path.of(System.getProperty("user.dir"), "..", "warp-sql", "cpp", "build", "warp-duckdb")
-        .normalize();
+    Path sibling =
+        Path.of(System.getProperty("user.dir"), "..", "warp-sql", "cpp", "build", "warp-duckdb")
+            .normalize();
     if (Files.isExecutable(sibling)) {
       return sibling;
     }
@@ -81,12 +86,12 @@ final class WarpServer implements AutoCloseable {
     try {
       Path home = Files.createTempDirectory("warp-sql-jdbc-server");
       Path log = home.resolve("server.log");
-      List<String> command = new ArrayList<>(List.of(
-          binary.toString(), "--host", "127.0.0.1", "--port", Integer.toString(port)));
+      List<String> command =
+          new ArrayList<>(
+              List.of(binary.toString(), "--host", "127.0.0.1", "--port", Integer.toString(port)));
       command.addAll(List.of(extraArgs));
-      ProcessBuilder builder = new ProcessBuilder(command)
-          .redirectErrorStream(true)
-          .redirectOutput(log.toFile());
+      ProcessBuilder builder =
+          new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile());
       builder.environment().put("WARP_DUCKDB_PASSWORD", password);
       // DuckDB reads secrets and settings from the home directory: keep the developer's away.
       builder.environment().put("HOME", home.toString());

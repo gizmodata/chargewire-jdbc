@@ -14,29 +14,25 @@ import java.sql.SQLException;
 import java.sql.Struct;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
-import java.time.Period;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Calendar;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.apache.arrow.vector.ValueVector;
 
 /**
  * Reads one column of a batch as JDBC values.
  *
- * <p>Getters are only called for rows that are not null ({@link #isNull(int)} first). Each
- * subclass implements the conversions its Arrow type supports; the rest raise {@code 07006}
- * ("restricted data type attribute violation"). Numbers that do not fit the requested type raise
- * {@code 22003} rather than wrap around, and text that does not parse raises {@code 22018}.
+ * <p>Getters are only called for rows that are not null ({@link #isNull(int)} first). Each subclass
+ * implements the conversions its Arrow type supports; the rest raise {@code 07006} ("restricted
+ * data type attribute violation"). Numbers that do not fit the requested type raise {@code 22003}
+ * rather than wrap around, and text that does not parse raises {@code 22018}.
  *
  * <p>Internal API.
  */
@@ -273,8 +269,7 @@ public abstract class Accessor {
    */
   public Time getTime(int row, Calendar calendar) throws SQLException {
     LocalTime time = getLocalTime(row);
-    return new Time(
-        LocalDate.EPOCH.atTime(time).atZone(zone(calendar)).toInstant().toEpochMilli());
+    return new Time(LocalDate.EPOCH.atTime(time).atZone(zone(calendar)).toInstant().toEpochMilli());
   }
 
   /**
@@ -411,10 +406,6 @@ public abstract class Accessor {
       value = getObject(row);
       if (type == UUID.class && value instanceof String) {
         value = parseUuid((String) value);
-      } else if ((type == Duration.class || type == Period.class) && !type.isInstance(value)) {
-        throw cannotConvert(type.getSimpleName());
-      } else if ((type == List.class || type == Map.class) && !type.isInstance(value)) {
-        throw cannotConvert(type.getSimpleName());
       }
       if (!type.isInstance(value)) {
         throw cannotConvert(type.getName());
@@ -450,13 +441,11 @@ public abstract class Accessor {
    * @return a {@code 07006} exception
    */
   protected SQLException cannotConvert(String target) {
-    return new SQLException(
-        "Cannot read a " + typeDescription() + " column as " + target, "07006");
+    return new SQLException("Cannot read a " + typeDescription() + " column as " + target, "07006");
   }
 
   static SQLDataException outOfRange(Object value, String target) {
-    return new SQLDataException(
-        "The value " + value + " does not fit in a " + target, "22003");
+    return new SQLDataException("The value " + value + " does not fit in a " + target, "22003");
   }
 
   static SQLDataException unparseable(String text, String target, Throwable cause) {

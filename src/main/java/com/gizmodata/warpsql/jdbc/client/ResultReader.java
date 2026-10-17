@@ -33,8 +33,8 @@ import org.apache.arrow.vector.util.TransferPair;
  * own error, and a succeeded statement whose result the server retained is fetched again from the
  * next unread batch (spec §6.5). A result with several partitions is read partition by partition.
  *
- * <p>{@link #buffer()} reads the rest of the stream into memory at once. The connection does that
- * before it sends anything else that needs the session, because a server may hold a session's
+ * <p>{@link #buffer(long)} reads the rest of the stream into memory at once. The connection does
+ * that before it sends anything else that needs the session, because a server may hold a session's
  * other work until an unretained result has been read. Methods are synchronized, so the buffering
  * can happen on another thread than the reading.
  *
@@ -150,7 +150,7 @@ public final class ResultReader implements AutoCloseable {
 
   /**
    * Returns the batch most recently loaded. The root object can change after {@link #next()} or
-   * {@link #buffer()}; {@link #generation()} tells when.
+   * {@link #buffer(long)}; {@link #generation()} tells when.
    *
    * @return the current batch
    * @throws SQLException if the stream cannot be read
@@ -177,8 +177,8 @@ public final class ResultReader implements AutoCloseable {
   }
 
   /**
-   * Returns a number that changes whenever the object {@link #root()} returns for the current
-   * batch changes without {@link #next()}, so readers know to look it up again.
+   * Returns a number that changes whenever the object {@link #root()} returns for the current batch
+   * changes without {@link #next()}, so readers know to look it up again.
    *
    * @return the generation
    */

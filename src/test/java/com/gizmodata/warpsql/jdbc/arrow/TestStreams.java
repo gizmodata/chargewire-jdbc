@@ -19,10 +19,12 @@ public final class TestStreams {
   private TestStreams() {}
 
   /** One stream whose batches hold the given rows, ending with the end-of-stream marker. */
-  public static byte[] stream(BufferAllocator allocator, Schema schema, List<List<Object[]>> batches)
+  public static byte[] stream(
+      BufferAllocator allocator, Schema schema, List<List<Object[]>> batches)
       throws IOException, SQLException {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-    try (ArrowIpc.HeapWriteChannel out = new ArrowIpc.HeapWriteChannel(Channels.newChannel(bytes))) {
+    try (ArrowIpc.HeapWriteChannel out =
+        new ArrowIpc.HeapWriteChannel(Channels.newChannel(bytes))) {
       MessageSerializer.serialize(out, schema, IpcOption.DEFAULT);
       for (List<Object[]> rows : batches) {
         try (VectorSchemaRoot root = Rows.toRoot(allocator, schema, rows);

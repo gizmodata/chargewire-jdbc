@@ -74,10 +74,10 @@ import org.apache.arrow.vector.types.pojo.Schema;
 /**
  * Encodes JDBC parameter values as an Arrow IPC stream, one row per execution (spec §7.2).
  *
- * <p>A parameter whose type the server declared is converted to that type; a conversion that
- * would lose information other than decimal rounding fails with {@code 22003} or {@code 22018}.
- * Where the server declared no type (Arrow's null type), the type follows from the Java values,
- * widened across the rows of a batch, or from the {@link Types} hint of a {@code setNull}.
+ * <p>A parameter whose type the server declared is converted to that type; a conversion that would
+ * lose information other than decimal rounding fails with {@code 22003} or {@code 22018}. Where the
+ * server declared no type (Arrow's null type), the type follows from the Java values, widened
+ * across the rows of a batch, or from the {@link Types} hint of a {@code setNull}.
  *
  * <p>Internal API.
  */
@@ -152,8 +152,11 @@ public final class ParameterEncoder {
             set(vector, r, value.value, value.calendar);
           } catch (SQLException e) {
             throw new SQLDataException(
-                "Parameter " + (c + 1) + (rows.size() > 1 ? " of batch row " + (r + 1) : "")
-                    + ": " + e.getMessage(),
+                "Parameter "
+                    + (c + 1)
+                    + (rows.size() > 1 ? " of batch row " + (r + 1) : "")
+                    + ": "
+                    + e.getMessage(),
                 e.getSQLState(),
                 e);
           }
@@ -254,7 +257,9 @@ public final class ParameterEncoder {
     if (value instanceof Time || value instanceof LocalTime) {
       return toTime(value, null).toString();
     }
-    if (value instanceof OffsetDateTime || value instanceof ZonedDateTime || value instanceof Instant) {
+    if (value instanceof OffsetDateTime
+        || value instanceof ZonedDateTime
+        || value instanceof Instant) {
       return toInstant(value, null, true).toString();
     }
     if (value instanceof Duration || value instanceof Period || value instanceof WarpInterval) {
@@ -265,8 +270,7 @@ public final class ParameterEncoder {
 
   // ---- Type inference ----
 
-  private static Field inferField(String name, List<Value[]> rows, int column)
-      throws SQLException {
+  private static Field inferField(String name, List<Value[]> rows, int column) throws SQLException {
     Field inferred = null;
     int hint = NO_TYPE;
     for (Value[] row : rows) {
@@ -355,8 +359,7 @@ public final class ParameterEncoder {
         || value instanceof WarpInterval) {
       return new ArrowType.Interval(IntervalUnit.MONTH_DAY_NANO);
     }
-    throw new SQLException(
-        "Unsupported parameter type " + value.getClass().getName(), "07006");
+    throw new SQLException("Unsupported parameter type " + value.getClass().getName(), "07006");
   }
 
   private static TimeUnit unitFor(int nanos) {
@@ -401,7 +404,9 @@ public final class ParameterEncoder {
     }
     boolean aFloat = a instanceof ArrowType.FloatingPoint;
     boolean bFloat = b instanceof ArrowType.FloatingPoint;
-    if ((aFloat || SqlTypes.isNumeric(a)) && (bFloat || SqlTypes.isNumeric(b)) && (aFloat || bFloat)) {
+    if ((aFloat || SqlTypes.isNumeric(a))
+        && (bFloat || SqlTypes.isNumeric(b))
+        && (aFloat || bFloat)) {
       return new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE);
     }
     if (SqlTypes.isNumeric(a) && SqlTypes.isNumeric(b)) {
@@ -456,12 +461,14 @@ public final class ParameterEncoder {
     if (vector instanceof NullVector) {
       throw new SQLDataException("The parameter's type is NULL, but a value was given", "22023");
     } else if (vector instanceof TinyIntVector) {
-      ((TinyIntVector) vector).setSafe(row, (byte) checkedLong(value, Byte.MIN_VALUE, Byte.MAX_VALUE));
+      ((TinyIntVector) vector)
+          .setSafe(row, (byte) checkedLong(value, Byte.MIN_VALUE, Byte.MAX_VALUE));
     } else if (vector instanceof SmallIntVector) {
       ((SmallIntVector) vector)
           .setSafe(row, (short) checkedLong(value, Short.MIN_VALUE, Short.MAX_VALUE));
     } else if (vector instanceof IntVector) {
-      ((IntVector) vector).setSafe(row, (int) checkedLong(value, Integer.MIN_VALUE, Integer.MAX_VALUE));
+      ((IntVector) vector)
+          .setSafe(row, (int) checkedLong(value, Integer.MIN_VALUE, Integer.MAX_VALUE));
     } else if (vector instanceof BigIntVector) {
       ((BigIntVector) vector).setSafe(row, checkedLong(value, Long.MIN_VALUE, Long.MAX_VALUE));
     } else if (vector instanceof UInt1Vector) {
@@ -548,8 +555,7 @@ public final class ParameterEncoder {
       ((TimeMilliVector) vector)
           .setSafe(row, (int) exactDivide(nanoOfDay, 1_000_000L, "millisecond"));
     } else {
-      ((TimeSecVector) vector)
-          .setSafe(row, (int) exactDivide(nanoOfDay, 1_000_000_000L, "second"));
+      ((TimeSecVector) vector).setSafe(row, (int) exactDivide(nanoOfDay, 1_000_000_000L, "second"));
     }
   }
 
@@ -638,9 +644,7 @@ public final class ParameterEncoder {
 
   private static long checkedLong(Object value, long min, long max) throws SQLException {
     BigInteger integer = exactInteger(value);
-    if (integer.bitLength() > 63
-        || integer.longValue() < min
-        || integer.longValue() > max) {
+    if (integer.bitLength() > 63 || integer.longValue() < min || integer.longValue() > max) {
       throw outOfRange(value, "the parameter's integer type");
     }
     return integer.longValue();

@@ -45,8 +45,8 @@ import org.apache.arrow.vector.types.pojo.Schema;
  * prepared_statements} capability, SQL text submitted with JSON parameters.
  *
  * <p>Parameters travel as an Arrow stream with the server's parameter types, so decimals,
- * timestamps and binaries keep their exact values. {@link #executeBatch()} sends the whole batch
- * as one request, one row per execution.
+ * timestamps and binaries keep their exact values. {@link #executeBatch()} sends the whole batch as
+ * one request, one row per execution.
  */
 public final class WarpPreparedStatement extends WarpStatement implements PreparedStatement {
   private final String sql;
@@ -88,14 +88,18 @@ public final class WarpPreparedStatement extends WarpStatement implements Prepar
     preparedGeneration = connection.sessionGeneration();
     parameterSchema = schema(prepared.path("parameter_schema"));
     resultSchema = schema(prepared.path("result_schema"));
-    int count = parameterSchema == null ? Placeholders.count(sql) : parameterSchema.getFields().size();
+    int count =
+        parameterSchema == null ? Placeholders.count(sql) : parameterSchema.getFields().size();
     if (parameters == null || parameters.length != count) {
       parameters = new ParameterEncoder.Value[count];
     }
   }
 
   private static Schema schema(JsonNode encoded) throws SQLException {
-    if (encoded == null || encoded.isNull() || encoded.isMissingNode() || encoded.asText().isEmpty()) {
+    if (encoded == null
+        || encoded.isNull()
+        || encoded.isMissingNode()
+        || encoded.asText().isEmpty()) {
       return null;
     }
     try {
@@ -107,7 +111,8 @@ public final class WarpPreparedStatement extends WarpStatement implements Prepar
 
   /** Prepares again in a session that replaced the one the statement was prepared in. */
   private void ensurePrepared(String sessionId) throws SQLException {
-    if (preparedGeneration != connection.sessionGeneration() || !sessionId.equals(preparedSessionId)) {
+    if (preparedGeneration != connection.sessionGeneration()
+        || !sessionId.equals(preparedSessionId)) {
       prepare(sessionId);
     }
   }
@@ -139,7 +144,9 @@ public final class WarpPreparedStatement extends WarpStatement implements Prepar
   }
 
   private WarpClient.Submission executeOnce(
-      WarpClient client, String sessionId, List<ParameterEncoder.Value[]> rows,
+      WarpClient client,
+      String sessionId,
+      List<ParameterEncoder.Value[]> rows,
       WarpClient.SubmitOptions options)
       throws SQLException {
     if (rows.get(0).length == 0) {
@@ -214,8 +221,8 @@ public final class WarpPreparedStatement extends WarpStatement implements Prepar
    * {@inheritDoc}
    *
    * <p>The batch goes to the server as one request whose Arrow body has one row per entry. The
-   * server reports one total, so each entry of a batch of several gets {@link
-   * #SUCCESS_NO_INFO}; a batch of one keeps its count.
+   * server reports one total, so each entry of a batch of several gets {@link #SUCCESS_NO_INFO}; a
+   * batch of one keeps its count.
    */
   @Override
   public long[] executeLargeBatch() throws SQLException {
@@ -509,7 +516,8 @@ public final class WarpPreparedStatement extends WarpStatement implements Prepar
   @Override
   @Deprecated
   public void setUnicodeStream(int index, InputStream x, int length) throws SQLException {
-    setString(index, x == null ? null : new String(readBytes(x, length), StandardCharsets.UTF_16BE));
+    setString(
+        index, x == null ? null : new String(readBytes(x, length), StandardCharsets.UTF_16BE));
   }
 
   @Override

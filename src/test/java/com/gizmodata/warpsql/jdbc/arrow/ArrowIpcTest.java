@@ -24,8 +24,11 @@ import org.junit.jupiter.api.Test;
 /** The heap-copy IPC channels, and how an incomplete stream is told from a complete one. */
 class ArrowIpcTest {
   private final BufferAllocator allocator = new RootAllocator();
-  private static final Schema SCHEMA = new Schema(List.of(
-      Field.nullable("i", new ArrowType.Int(64, true)), Field.nullable("s", ArrowType.Utf8.INSTANCE)));
+  private static final Schema SCHEMA =
+      new Schema(
+          List.of(
+              Field.nullable("i", new ArrowType.Int(64, true)),
+              Field.nullable("s", ArrowType.Utf8.INSTANCE)));
 
   @AfterEach
   void close() {
@@ -45,7 +48,8 @@ class ArrowIpcTest {
   /** Reads every batch; returns the rows read, or throws if the input breaks off. */
   private long read(byte[] bytes, boolean[] reachedEnd) throws IOException {
     long rows = 0;
-    try (ArrowIpc.HeapReadChannel channel = new ArrowIpc.HeapReadChannel(new ByteArrayInputStream(bytes));
+    try (ArrowIpc.HeapReadChannel channel =
+            new ArrowIpc.HeapReadChannel(new ByteArrayInputStream(bytes));
         ArrowStreamReader reader = ArrowIpc.reader(channel, allocator)) {
       while (reader.loadNextBatch()) {
         BigIntVector ints = (BigIntVector) reader.getVectorSchemaRoot().getVector(0);

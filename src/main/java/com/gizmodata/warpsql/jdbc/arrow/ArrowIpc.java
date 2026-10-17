@@ -28,9 +28,9 @@ import org.apache.arrow.vector.types.pojo.Schema;
  * Reads and writes Arrow IPC streams.
  *
  * <p>Arrow Java's own channels move bytes through {@link ArrowBuf#nioBuffer()}, which needs {@code
- * --add-opens=java.base/java.nio=ALL-UNNAMED} on JDK 17 and later. The channels here copy through
- * a heap array instead, so the driver works in any JVM without extra options. Arrow buffers are
- * still allocated off-heap with {@code sun.misc.Unsafe}.
+ * --add-opens=java.base/java.nio=ALL-UNNAMED} on JDK 17 and later. The channels here copy through a
+ * heap array instead, so the driver works in any JVM without extra options. Arrow buffers are still
+ * allocated off-heap with {@code sun.misc.Unsafe}.
  */
 public final class ArrowIpc {
   private static final int COPY_CHUNK = 64 * 1024;
@@ -52,7 +52,9 @@ public final class ArrowIpc {
    */
   public static ArrowStreamReader reader(HeapReadChannel channel, BufferAllocator allocator) {
     return new ArrowStreamReader(
-        new MessageChannelReader(channel, allocator), allocator, CommonsCompressionFactory.INSTANCE);
+        new MessageChannelReader(channel, allocator),
+        allocator,
+        CommonsCompressionFactory.INSTANCE);
   }
 
   /**

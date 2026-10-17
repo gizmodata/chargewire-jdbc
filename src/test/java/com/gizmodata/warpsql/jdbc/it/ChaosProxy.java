@@ -95,7 +95,8 @@ final class ChaosProxy implements AutoCloseable {
 
     void clientToServer() {
       StringBuilder recent = new StringBuilder();
-      try (InputStream in = client.getInputStream(); OutputStream out = server.getOutputStream()) {
+      try (InputStream in = client.getInputStream();
+          OutputStream out = server.getOutputStream()) {
         byte[] buffer = new byte[16384];
         for (int read; (read = in.read(buffer)) >= 0; ) {
           recent.append(new String(buffer, 0, read, StandardCharsets.ISO_8859_1));
@@ -121,7 +122,8 @@ final class ChaosProxy implements AutoCloseable {
     }
 
     void serverToClient() {
-      try (InputStream in = server.getInputStream(); OutputStream out = client.getOutputStream()) {
+      try (InputStream in = server.getInputStream();
+          OutputStream out = client.getOutputStream()) {
         byte[] buffer = new byte[16384];
         for (int read; (read = in.read(buffer)) >= 0; ) {
           int allowed = read;

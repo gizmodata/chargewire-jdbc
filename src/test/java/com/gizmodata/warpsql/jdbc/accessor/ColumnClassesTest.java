@@ -28,8 +28,8 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link ColumnClasses} (behind {@code getColumnClassName}) names the class each accessor's
- * {@code getObject} really returns (ported from {@code ArrowFlightJdbcAccessorFactoryTest}).
+ * {@link ColumnClasses} (behind {@code getColumnClassName}) names the class each accessor's {@code
+ * getObject} really returns (ported from {@code ArrowFlightJdbcAccessorFactoryTest}).
  */
 class ColumnClassesTest extends AccessorFixture {
   @Test
@@ -60,18 +60,32 @@ class ColumnClassesTest extends AccessorFixture {
     add(fields, values, new ArrowType.Time(TimeUnit.MILLISECOND, 32), LocalTime.NOON);
     add(fields, values, new ArrowType.Time(TimeUnit.MICROSECOND, 64), LocalTime.NOON);
     add(fields, values, new ArrowType.Time(TimeUnit.NANOSECOND, 64), LocalTime.NOON);
-    add(fields, values, new ArrowType.Timestamp(TimeUnit.MICROSECOND, null), Timestamp.valueOf("2026-01-01 00:00:00"));
-    add(fields, values, new ArrowType.Timestamp(TimeUnit.NANOSECOND, "UTC"), Timestamp.valueOf("2026-01-01 00:00:00"));
+    add(
+        fields,
+        values,
+        new ArrowType.Timestamp(TimeUnit.MICROSECOND, null),
+        Timestamp.valueOf("2026-01-01 00:00:00"));
+    add(
+        fields,
+        values,
+        new ArrowType.Timestamp(TimeUnit.NANOSECOND, "UTC"),
+        Timestamp.valueOf("2026-01-01 00:00:00"));
     add(fields, values, new ArrowType.Interval(IntervalUnit.MONTH_DAY_NANO), Duration.ofSeconds(1));
-    fields.add(new Field("l", FieldType.nullable(ArrowType.List.INSTANCE),
-        List.of(Field.nullable("item", new ArrowType.Int(32, true)))));
+    fields.add(
+        new Field(
+            "l",
+            FieldType.nullable(ArrowType.List.INSTANCE),
+            List.of(Field.nullable("item", new ArrowType.Int(32, true)))));
     values.add(List.of(1));
     Schema schema = new Schema(fields);
-    try (VectorSchemaRoot root = Rows.toRoot(allocator, schema, List.<Object[]>of(values.toArray()))) {
+    try (VectorSchemaRoot root =
+        Rows.toRoot(allocator, schema, List.<Object[]>of(values.toArray()))) {
       for (FieldVector vector : root.getFieldVectors()) {
         Object value = Accessors.create(vector, null).getObject(0);
         Class<?> reported = ColumnClasses.of(vector.getField());
-        assertEquals(reported, reported.isInstance(value) ? reported : value.getClass(),
+        assertEquals(
+            reported,
+            reported.isInstance(value) ? reported : value.getClass(),
             vector.getField().getType().toString());
       }
     }
@@ -84,9 +98,12 @@ class ColumnClassesTest extends AccessorFixture {
 
   @Test
   void specialCases() {
-    assertEquals(UUID.class, ColumnClasses.of(new Field("u", FieldType.nullable(UuidType.INSTANCE), null)));
-    assertEquals(Date.class, ColumnClasses.of(Field.nullable("d", new ArrowType.Date(DateUnit.DAY))));
-    assertEquals(Time.class, ColumnClasses.of(Field.nullable("t", new ArrowType.Time(TimeUnit.SECOND, 32))));
+    assertEquals(
+        UUID.class, ColumnClasses.of(new Field("u", FieldType.nullable(UuidType.INSTANCE), null)));
+    assertEquals(
+        Date.class, ColumnClasses.of(Field.nullable("d", new ArrowType.Date(DateUnit.DAY))));
+    assertEquals(
+        Time.class, ColumnClasses.of(Field.nullable("t", new ArrowType.Time(TimeUnit.SECOND, 32))));
     assertEquals(Object.class, ColumnClasses.of(Field.nullable("n", ArrowType.Null.INSTANCE)));
   }
 }

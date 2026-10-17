@@ -17,24 +17,34 @@ import org.apache.arrow.vector.types.pojo.Field;
 public final class SqlTypes {
   /** Field metadata key: the database's own name for the column's type. */
   public static final String TYPE_NAME = "ARROW:FLIGHT:SQL:TYPE_NAME";
+
   /** Field metadata key: the column's catalog. */
   public static final String CATALOG_NAME = "ARROW:FLIGHT:SQL:CATALOG_NAME";
+
   /** Field metadata key: the column's schema. */
   public static final String SCHEMA_NAME = "ARROW:FLIGHT:SQL:DB_SCHEMA_NAME";
+
   /** Field metadata key: the column's table. */
   public static final String TABLE_NAME = "ARROW:FLIGHT:SQL:TABLE_NAME";
+
   /** Field metadata key: precision, or a character column's length. */
   public static final String PRECISION = "ARROW:FLIGHT:SQL:PRECISION";
+
   /** Field metadata key: scale. */
   public static final String SCALE = "ARROW:FLIGHT:SQL:SCALE";
+
   /** Field metadata key: {@code 1} if the column is auto-incremented. */
   public static final String IS_AUTO_INCREMENT = "ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT";
+
   /** Field metadata key: {@code 1} if comparisons are case-sensitive. */
   public static final String IS_CASE_SENSITIVE = "ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE";
+
   /** Field metadata key: {@code 1} if the column is read-only. */
   public static final String IS_READ_ONLY = "ARROW:FLIGHT:SQL:IS_READ_ONLY";
+
   /** Field metadata key: {@code 1} if the column can be used in a WHERE clause. */
   public static final String IS_SEARCHABLE = "ARROW:FLIGHT:SQL:IS_SEARCHABLE";
+
   /** Field metadata key: the column's comment. */
   public static final String REMARKS = "ARROW:FLIGHT:SQL:REMARKS";
 

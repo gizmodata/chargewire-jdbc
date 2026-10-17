@@ -63,7 +63,6 @@ final class NumberAccessors {
       return !signed && width == 64 && raw < 0;
     }
 
-
     @Override
     public Object getObject(int row) {
       long value = raw(row);
@@ -138,7 +137,6 @@ final class NumberAccessors {
       return vector instanceof Float8Vector;
     }
 
-
     private float floatValue(int row) {
       return vector instanceof Float4Vector
           ? ((Float4Vector) vector).get(row)
@@ -197,7 +195,6 @@ final class NumberAccessors {
       super(vector);
     }
 
-
     @Override
     public BigDecimal getObject(int row) {
       return vector instanceof DecimalVector
@@ -240,7 +237,6 @@ final class NumberAccessors {
     private boolean value(int row) {
       return ((BitVector) vector).get(row) != 0;
     }
-
 
     @Override
     public Object getObject(int row) {

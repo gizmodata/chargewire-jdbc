@@ -112,6 +112,7 @@ final class WarpUrl {
     if (url == null) {
       return null;
     }
-    return url.replaceAll("(?i)((?:password|token|subjecttoken|truststorepassword)=)[^&;]*", "$1***");
+    return url.replaceAll(
+        "(?i)((?:password|token|subjecttoken|truststorepassword)=)[^&;]*", "$1***");
   }
 }

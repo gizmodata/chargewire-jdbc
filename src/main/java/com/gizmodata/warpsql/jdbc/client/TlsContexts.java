@@ -48,8 +48,7 @@ final class TlsContexts {
     KeyManager[] keyManagers = null;
     if (config.clientCertificate != null || config.clientKey != null) {
       if (config.clientCertificate == null || config.clientKey == null) {
-        throw new GeneralSecurityException(
-            "mutual TLS needs both clientCertificate and clientKey");
+        throw new GeneralSecurityException("mutual TLS needs both clientCertificate and clientKey");
       }
       keyManagers = keyManagers(config.clientCertificate, config.clientKey);
     }
@@ -202,8 +201,21 @@ final class TlsContexts {
   /** Minimal DER encoding, enough to wrap PKCS#1 and SEC1 keys as PKCS#8. */
   static final class Der {
     private static final byte[] RSA_ALGORITHM = {
-      0x30, 0x0d, 0x06, 0x09, 0x2a, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xf7, 0x0d, 0x01, 0x01,
-      0x01, 0x05, 0x00
+      0x30,
+      0x0d,
+      0x06,
+      0x09,
+      0x2a,
+      (byte) 0x86,
+      0x48,
+      (byte) 0x86,
+      (byte) 0xf7,
+      0x0d,
+      0x01,
+      0x01,
+      0x01,
+      0x05,
+      0x00
     };
     private static final byte[] EC_PUBLIC_KEY_OID = {
       0x06, 0x07, 0x2a, (byte) 0x86, 0x48, (byte) 0xce, 0x3d, 0x02, 0x01

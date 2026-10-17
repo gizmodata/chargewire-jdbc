@@ -18,7 +18,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/** Mutual TLS: the server requires a client certificate (ported from {@code ConnectionMutualTlsTest}). */
+/**
+ * Mutual TLS: the server requires a client certificate (ported from {@code
+ * ConnectionMutualTlsTest}).
+ */
 class MutualTlsIT {
   private static WarpServer server;
 
@@ -27,9 +30,12 @@ class MutualTlsIT {
     server =
         WarpServer.start(
             true,
-            "--tls-cert", cert("server.pem"),
-            "--tls-key", cert("server-key.pem"),
-            "--tls-client-ca", cert("ca.pem"));
+            "--tls-cert",
+            cert("server.pem"),
+            "--tls-key",
+            cert("server-key.pem"),
+            "--tls-client-ca",
+            cert("ca.pem"));
   }
 
   @AfterAll
@@ -59,8 +65,10 @@ class MutualTlsIT {
   @Test
   void withoutAClientCertificateTheServerRefuses() {
     SQLException error =
-        assertThrows(SQLException.class, () -> DriverManager.getConnection(server.url(""), trusting()));
-    assertTrue(error.getSQLState().startsWith("08"), error.getSQLState() + " " + error.getMessage());
+        assertThrows(
+            SQLException.class, () -> DriverManager.getConnection(server.url(""), trusting()));
+    assertTrue(
+        error.getSQLState().startsWith("08"), error.getSQLState() + " " + error.getMessage());
   }
 
   @Test
@@ -71,7 +79,8 @@ class MutualTlsIT {
         assertThrows(
             SQLNonTransientConnectionException.class,
             () -> DriverManager.getConnection(server.url(""), properties));
-    assertTrue(error.getMessage().contains("both clientCertificate and clientKey"), error.getMessage());
+    assertTrue(
+        error.getMessage().contains("both clientCertificate and clientKey"), error.getMessage());
   }
 
   @Test

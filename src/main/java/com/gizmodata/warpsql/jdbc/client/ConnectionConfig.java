@@ -46,9 +46,10 @@ public final class ConnectionConfig {
     String scheme = builder.useEncryption ? "https" : "http";
     int port = builder.port > 0 ? builder.port : builder.useEncryption ? 443 : 80;
     String host = builder.host.contains(":") ? "[" + builder.host + "]" : builder.host;
-    String basePath = builder.basePath.endsWith("/")
-        ? builder.basePath.substring(0, builder.basePath.length() - 1)
-        : builder.basePath;
+    String basePath =
+        builder.basePath.endsWith("/")
+            ? builder.basePath.substring(0, builder.basePath.length() - 1)
+            : builder.basePath;
     this.baseUri = URI.create(scheme + "://" + host + ":" + port + basePath);
     this.user = builder.user;
     this.password = builder.password;
@@ -67,15 +68,6 @@ public final class ConnectionConfig {
     this.retainResults = builder.retainResults;
     this.async = builder.async;
     this.pollWaitSeconds = builder.pollWaitSeconds;
-  }
-
-  /**
-   * Returns the URI the protocol is mounted at, for example {@code https://db:443/warp}.
-   *
-   * @return the base URI, without a trailing slash
-   */
-  public URI baseUri() {
-    return baseUri;
   }
 
   /**
@@ -122,15 +114,6 @@ public final class ConnectionConfig {
    */
   public Boolean retainResults() {
     return retainResults;
-  }
-
-  /**
-   * Returns how long a status long-poll may wait on the server.
-   *
-   * @return seconds
-   */
-  public int pollWaitSeconds() {
-    return pollWaitSeconds;
   }
 
   /** Builds a {@link ConnectionConfig}. */

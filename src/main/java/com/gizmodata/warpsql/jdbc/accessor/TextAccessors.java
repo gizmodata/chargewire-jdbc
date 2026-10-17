@@ -27,7 +27,6 @@ final class TextAccessors {
       this.bytes = bytes;
     }
 
-
     @Override
     public String getObject(int row) {
       return getString(row);
@@ -135,7 +134,6 @@ final class TextAccessors {
       this.bytes = bytes;
     }
 
-
     @Override
     public byte[] getObject(int row) {
       return bytes.apply(row);
@@ -160,7 +158,6 @@ final class TextAccessors {
       super(vector);
       this.bytes = bytes;
     }
-
 
     @Override
     public UUID getObject(int row) {

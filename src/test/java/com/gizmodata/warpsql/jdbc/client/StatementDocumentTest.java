@@ -21,12 +21,13 @@ class StatementDocumentTest {
 
   @Test
   void rowsResult() throws Exception {
-    StatementDocument document = parse(
-        "{\"statement_id\":\"q_1\",\"state\":\"succeeded\",\"progress\":{\"fraction\":1},"
-            + "\"result\":{\"kind\":\"rows\",\"schema\":\"AQID\",\"partitions\":["
-            + "{\"index\":0,\"location\":null,\"batches\":2,\"rows\":10},"
-            + "{\"index\":1,\"location\":\"https://node2:443/warp\"}],"
-            + "\"retained\":true,\"expires_at\":\"2026-10-16T22:04:05Z\"},\"future\":true}");
+    StatementDocument document =
+        parse(
+            "{\"statement_id\":\"q_1\",\"state\":\"succeeded\",\"progress\":{\"fraction\":1},"
+                + "\"result\":{\"kind\":\"rows\",\"schema\":\"AQID\",\"partitions\":["
+                + "{\"index\":0,\"location\":null,\"batches\":2,\"rows\":10},"
+                + "{\"index\":1,\"location\":\"https://node2:443/warp\"}],"
+                + "\"retained\":true,\"expires_at\":\"2026-10-16T22:04:05Z\"},\"future\":true}");
     assertEquals("q_1", document.statementId());
     assertEquals(StatementDocument.State.SUCCEEDED, document.state());
     assertTrue(document.state().isTerminal());
@@ -41,25 +42,29 @@ class StatementDocumentTest {
 
   @Test
   void updateResults() throws Exception {
-    StatementDocument counted = parse(
-        "{\"statement_id\":\"q_2\",\"state\":\"succeeded\",\"result\":{\"kind\":\"update\",\"rows_affected\":42}}");
+    StatementDocument counted =
+        parse(
+            "{\"statement_id\":\"q_2\",\"state\":\"succeeded\",\"result\":{\"kind\":\"update\",\"rows_affected\":42}}");
     assertFalse(counted.hasRows());
     assertEquals(42, counted.rowsAffected());
     StatementDocument ddl =
-        parse("{\"statement_id\":\"q_3\",\"state\":\"succeeded\",\"result\":{\"kind\":\"update\"}}");
+        parse(
+            "{\"statement_id\":\"q_3\",\"state\":\"succeeded\",\"result\":{\"kind\":\"update\"}}");
     assertEquals(-1, ddl.rowsAffected(), "DDL has no count");
   }
 
   @Test
   void failedAndCancelled() throws Exception {
-    StatementDocument failed = parse(
-        "{\"statement_id\":\"q_4\",\"state\":\"failed\",\"result\":null,"
-            + "\"error\":{\"code\":\"execution_error\",\"detail\":\"boom\",\"status\":500}}");
+    StatementDocument failed =
+        parse(
+            "{\"statement_id\":\"q_4\",\"state\":\"failed\",\"result\":null,"
+                + "\"error\":{\"code\":\"execution_error\",\"detail\":\"boom\",\"status\":500}}");
     assertEquals("execution_error", failed.error().code());
     assertEquals("boom", failed.error().detail());
-    StatementDocument cancelled = parse(
-        "{\"statement_id\":\"q_5\",\"state\":\"cancelled\",\"cancel_reason\":\"timeout\","
-            + "\"error\":{\"code\":\"statement_timeout\"}}");
+    StatementDocument cancelled =
+        parse(
+            "{\"statement_id\":\"q_5\",\"state\":\"cancelled\",\"cancel_reason\":\"timeout\","
+                + "\"error\":{\"code\":\"statement_timeout\"}}");
     assertEquals("timeout", cancelled.cancelReason());
     assertEquals("statement_timeout", cancelled.error().code());
   }
@@ -73,6 +78,8 @@ class StatementDocumentTest {
   @Test
   void rejectsWhatIsNotAStatementDocument() {
     assertThrows(IllegalArgumentException.class, () -> parse("{\"state\":\"running\"}"));
-    assertThrows(IllegalArgumentException.class, () -> parse("{\"statement_id\":\"q\",\"state\":\"exploded\"}"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> parse("{\"statement_id\":\"q\",\"state\":\"exploded\"}"));
   }
 }

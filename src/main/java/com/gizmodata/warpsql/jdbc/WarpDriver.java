@@ -169,8 +169,7 @@ public final class WarpDriver implements Driver {
         .build();
   }
 
-  static boolean bool(Map<String, String> properties, WarpProperty property)
-      throws SQLException {
+  static boolean bool(Map<String, String> properties, WarpProperty property) throws SQLException {
     String value = property.get(properties).trim();
     if ("true".equalsIgnoreCase(value) || "1".equals(value)) {
       return true;

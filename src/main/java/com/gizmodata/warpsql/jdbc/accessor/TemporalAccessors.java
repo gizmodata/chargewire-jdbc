@@ -44,8 +44,7 @@ final class TemporalAccessors {
   static String formatTime(long nanoOfDay) {
     long seconds = nanoOfDay / 1_000_000_000L;
     int nanos = (int) (nanoOfDay % 1_000_000_000L);
-    return String.format(
-            "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+    return String.format("%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
         + fraction(nanos);
   }
 
@@ -70,7 +69,6 @@ final class TemporalAccessors {
     DateAccessor(ValueVector vector) {
       super(vector);
     }
-
 
     @Override
     public LocalDate getLocalDate(int row) {
@@ -113,7 +111,6 @@ final class TemporalAccessors {
       }
       return ((TimeNanoVector) vector).get(row);
     }
-
 
     @Override
     public LocalTime getLocalTime(int row) throws SQLException {
@@ -191,7 +188,6 @@ final class TemporalAccessors {
       }
     }
 
-
     @Override
     public LocalDateTime getLocalDateTime(int row) {
       return LocalDateTime.ofInstant(instant(row), zone == null ? ZoneOffset.UTC : zone);
@@ -230,16 +226,12 @@ final class TemporalAccessors {
 
     @Override
     public Date getDate(int row, Calendar calendar) throws SQLException {
-      return zone == null
-          ? super.getDate(row, calendar)
-          : new Date(instant(row).toEpochMilli());
+      return zone == null ? super.getDate(row, calendar) : new Date(instant(row).toEpochMilli());
     }
 
     @Override
     public Time getTime(int row, Calendar calendar) throws SQLException {
-      return zone == null
-          ? super.getTime(row, calendar)
-          : new Time(instant(row).toEpochMilli());
+      return zone == null ? super.getTime(row, calendar) : new Time(instant(row).toEpochMilli());
     }
 
     @Override
@@ -253,7 +245,8 @@ final class TemporalAccessors {
         return formatDateTime(getLocalDateTime(row));
       }
       ZonedDateTime value = instant(row).atZone(zone);
-      return formatDateTime(value.toLocalDateTime()) + value.getOffset().getId().replace("Z", "+00:00");
+      return formatDateTime(value.toLocalDateTime())
+          + value.getOffset().getId().replace("Z", "+00:00");
     }
   }
 
@@ -262,7 +255,6 @@ final class TemporalAccessors {
     IntervalAccessor(ValueVector vector) {
       super(vector);
     }
-
 
     @Override
     public Object getObject(int row) {
@@ -300,7 +292,6 @@ final class TemporalAccessors {
     DurationAccessor(DurationVector vector) {
       super(vector);
     }
-
 
     @Override
     public Duration getObject(int row) {

@@ -92,7 +92,11 @@ public class WarpStatement implements Statement {
       if (submission.arrow() != null) {
         ResultReader reader =
             ResultReader.streamed(
-                client, connection.allocator(), sessionId, submission.arrow(), () -> cancelRequested);
+                client,
+                connection.allocator(),
+                sessionId,
+                submission.arrow(),
+                () -> cancelRequested);
         if (!Boolean.TRUE.equals(client.config().retainResults())) {
           connection.streaming(reader);
         }
@@ -385,8 +389,7 @@ public class WarpStatement implements Statement {
       try {
         if (execute(statements.get(i))) {
           closeResultSet();
-          throw new SQLException(
-              "Batch statement " + (i + 1) + " returned a result set", "07000");
+          throw new SQLException("Batch statement " + (i + 1) + " returned a result set", "07000");
         }
       } catch (SQLException e) {
         throw new BatchUpdateException(

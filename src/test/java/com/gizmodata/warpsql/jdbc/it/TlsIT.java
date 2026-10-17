@@ -30,9 +30,12 @@ class TlsIT {
 
   @BeforeAll
   static void start() {
-    server = WarpServer.start(true, "--tls-cert", cert("server.pem"), "--tls-key", cert("server-key.pem"));
+    server =
+        WarpServer.start(
+            true, "--tls-cert", cert("server.pem"), "--tls-key", cert("server-key.pem"));
     wrongHost =
-        WarpServer.start(true, "--tls-cert", cert("wrong-host.pem"), "--tls-key", cert("wrong-host-key.pem"));
+        WarpServer.start(
+            true, "--tls-cert", cert("wrong-host.pem"), "--tls-key", cert("wrong-host-key.pem"));
   }
 
   @AfterAll
@@ -143,7 +146,9 @@ class TlsIT {
     Properties properties = server.properties();
     properties.setProperty("useEncryption", "false");
     SQLException error =
-        assertThrows(SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
-    assertTrue(error.getSQLState().startsWith("08"), error.getSQLState() + " " + error.getMessage());
+        assertThrows(
+            SQLException.class, () -> DriverManager.getConnection(server.url(""), properties));
+    assertTrue(
+        error.getSQLState().startsWith("08"), error.getSQLState() + " " + error.getMessage());
   }
 }

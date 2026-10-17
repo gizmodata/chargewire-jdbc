@@ -39,16 +39,23 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/** Strings, binaries and UUIDs (ported from the {@code VarChar}, {@code Binary} and {@code Uuid} accessor tests). */
+/**
+ * Strings, binaries and UUIDs (ported from the {@code VarChar}, {@code Binary} and {@code Uuid}
+ * accessor tests).
+ */
 class TextAccessorsTest extends AccessorFixture {
   private Accessor text(String... values) {
-    VarCharVector vector = vector(ArrowType.Utf8.INSTANCE, values.length, v -> {
-      for (int i = 0; i < values.length; i++) {
-        if (values[i] != null) {
-          v.setSafe(i, values[i].getBytes(StandardCharsets.UTF_8));
-        }
-      }
-    });
+    VarCharVector vector =
+        vector(
+            ArrowType.Utf8.INSTANCE,
+            values.length,
+            v -> {
+              for (int i = 0; i < values.length; i++) {
+                if (values[i] != null) {
+                  v.setSafe(i, values[i].getBytes(StandardCharsets.UTF_8));
+                }
+              }
+            });
     return accessor(vector);
   }
 
@@ -80,13 +87,25 @@ class TextAccessorsTest extends AccessorFixture {
     Accessor accessor;
     switch (layout) {
       case "LargeUtf8":
-        accessor = accessor(vector(ArrowType.LargeUtf8.INSTANCE, 1, v -> ((LargeVarCharVector) v).setSafe(0, bytes)));
+        accessor =
+            accessor(
+                vector(
+                    ArrowType.LargeUtf8.INSTANCE,
+                    1,
+                    v -> ((LargeVarCharVector) v).setSafe(0, bytes)));
         break;
       case "Utf8View":
-        accessor = accessor(vector(ArrowType.Utf8View.INSTANCE, 1, v -> ((ViewVarCharVector) v).setSafe(0, bytes)));
+        accessor =
+            accessor(
+                vector(
+                    ArrowType.Utf8View.INSTANCE,
+                    1,
+                    v -> ((ViewVarCharVector) v).setSafe(0, bytes)));
         break;
       default:
-        accessor = accessor(vector(ArrowType.Utf8.INSTANCE, 1, v -> ((VarCharVector) v).setSafe(0, bytes)));
+        accessor =
+            accessor(
+                vector(ArrowType.Utf8.INSTANCE, 1, v -> ((VarCharVector) v).setSafe(0, bytes)));
     }
     assertEquals("a longer value than twelve bytes", accessor.getString(0));
   }
@@ -114,17 +133,22 @@ class TextAccessorsTest extends AccessorFixture {
           a -> a.getByte(0), a -> a.getShort(0), a -> a.getInt(0), a -> a.getLong(0),
           a -> a.getFloat(0), a -> a.getDouble(0), a -> a.getBigDecimal(0), a -> a.getInt(1)
         }) {
-      assertEquals("22018", assertThrows(SQLDataException.class, () -> getter.get(accessor)).getSQLState());
+      assertEquals(
+          "22018", assertThrows(SQLDataException.class, () -> getter.get(accessor)).getSQLState());
     }
   }
 
   @Test
   void numbersOutOfRangeRaise22003() {
     Accessor accessor = text("128", "-129", "40000", "2147483648");
-    assertEquals("22003", assertThrows(SQLDataException.class, () -> accessor.getByte(0)).getSQLState());
-    assertEquals("22003", assertThrows(SQLDataException.class, () -> accessor.getByte(1)).getSQLState());
-    assertEquals("22003", assertThrows(SQLDataException.class, () -> accessor.getShort(2)).getSQLState());
-    assertEquals("22003", assertThrows(SQLDataException.class, () -> accessor.getInt(3)).getSQLState());
+    assertEquals(
+        "22003", assertThrows(SQLDataException.class, () -> accessor.getByte(0)).getSQLState());
+    assertEquals(
+        "22003", assertThrows(SQLDataException.class, () -> accessor.getByte(1)).getSQLState());
+    assertEquals(
+        "22003", assertThrows(SQLDataException.class, () -> accessor.getShort(2)).getSQLState());
+    assertEquals(
+        "22003", assertThrows(SQLDataException.class, () -> accessor.getInt(3)).getSQLState());
   }
 
   @Test
@@ -134,14 +158,21 @@ class TextAccessorsTest extends AccessorFixture {
     assertFalse(accessor.getBoolean(1));
     assertTrue(accessor.getBoolean(2));
     assertFalse(accessor.getBoolean(3));
-    assertEquals("22018", assertThrows(SQLDataException.class, () -> accessor.getBoolean(4)).getSQLState());
-    assertEquals("22018", assertThrows(SQLDataException.class, () -> accessor.getBoolean(5)).getSQLState());
+    assertEquals(
+        "22018", assertThrows(SQLDataException.class, () -> accessor.getBoolean(4)).getSQLState());
+    assertEquals(
+        "22018", assertThrows(SQLDataException.class, () -> accessor.getBoolean(5)).getSQLState());
   }
 
   @Test
   void datesAndTimesParseFromText() throws SQLException {
     Accessor accessor =
-        text("2026-10-17", "23:59:58.5", "2026-10-17 01:02:03.000004", "2026-10-17T01:02:03+02:00", "soon");
+        text(
+            "2026-10-17",
+            "23:59:58.5",
+            "2026-10-17 01:02:03.000004",
+            "2026-10-17T01:02:03+02:00",
+            "soon");
     assertEquals(LocalDate.of(2026, 10, 17), accessor.getLocalDate(0));
     assertEquals(Date.valueOf("2026-10-17"), accessor.getDate(0, null));
     assertEquals(LocalTime.of(23, 59, 58, 500_000_000), accessor.getLocalTime(1));
@@ -151,11 +182,18 @@ class TextAccessorsTest extends AccessorFixture {
     assertEquals(OffsetDateTime.parse("2026-10-17T01:02:03+02:00"), accessor.getOffsetDateTime(3));
     Calendar utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
     assertEquals(
-        java.time.Instant.parse("2026-10-17T01:02:03.000004Z"), accessor.getTimestamp(2, utc).toInstant(),
+        java.time.Instant.parse("2026-10-17T01:02:03.000004Z"),
+        accessor.getTimestamp(2, utc).toInstant(),
         "wall-clock text is read in the calendar's zone");
-    assertEquals("22018", assertThrows(SQLDataException.class, () -> accessor.getLocalDate(4)).getSQLState());
-    assertEquals("22018", assertThrows(SQLDataException.class, () -> accessor.getTimestamp(4, null)).getSQLState());
-    assertEquals("22018", assertThrows(SQLDataException.class, () -> accessor.getTime(4, null)).getSQLState());
+    assertEquals(
+        "22018",
+        assertThrows(SQLDataException.class, () -> accessor.getLocalDate(4)).getSQLState());
+    assertEquals(
+        "22018",
+        assertThrows(SQLDataException.class, () -> accessor.getTimestamp(4, null)).getSQLState());
+    assertEquals(
+        "22018",
+        assertThrows(SQLDataException.class, () -> accessor.getTime(4, null)).getSQLState());
   }
 
   @Test
@@ -163,7 +201,10 @@ class TextAccessorsTest extends AccessorFixture {
     UUID uuid = UUID.randomUUID();
     Accessor accessor = text(uuid.toString(), "not-a-uuid");
     assertEquals(uuid, accessor.getObject(0, UUID.class));
-    assertEquals("22018", assertThrows(SQLDataException.class, () -> accessor.getObject(1, UUID.class)).getSQLState());
+    assertEquals(
+        "22018",
+        assertThrows(SQLDataException.class, () -> accessor.getObject(1, UUID.class))
+            .getSQLState());
   }
 
   @Test
@@ -185,9 +226,11 @@ class TextAccessorsTest extends AccessorFixture {
   @Test
   void everyBinaryLayout() throws SQLException {
     byte[] bytes = {1, 2, 3, 4};
-    LargeVarBinaryVector large = vector(ArrowType.LargeBinary.INSTANCE, 1, v -> v.setSafe(0, bytes));
+    LargeVarBinaryVector large =
+        vector(ArrowType.LargeBinary.INSTANCE, 1, v -> v.setSafe(0, bytes));
     ViewVarBinaryVector view = vector(ArrowType.BinaryView.INSTANCE, 1, v -> v.setSafe(0, bytes));
-    FixedSizeBinaryVector fixed = vector(new ArrowType.FixedSizeBinary(4), 1, v -> v.setSafe(0, bytes));
+    FixedSizeBinaryVector fixed =
+        vector(new ArrowType.FixedSizeBinary(4), 1, v -> v.setSafe(0, bytes));
     assertArrayEquals(bytes, accessor(large).getBytes(0));
     assertArrayEquals(bytes, accessor(view).getBytes(0));
     assertArrayEquals(bytes, accessor(fixed).getBytes(0));
@@ -196,7 +239,11 @@ class TextAccessorsTest extends AccessorFixture {
   @Test
   void uuidExtension() throws SQLException {
     UUID uuid = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
-    UuidVector vector = vector(new Field("u", FieldType.nullable(UuidType.INSTANCE), null), 2, v -> v.setSafe(0, uuid));
+    UuidVector vector =
+        vector(
+            new Field("u", FieldType.nullable(UuidType.INSTANCE), null),
+            2,
+            v -> v.setSafe(0, uuid));
     Accessor accessor = accessor(vector);
     assertEquals(uuid, accessor.getObject(0));
     assertEquals("123e4567-e89b-12d3-a456-426614174000", accessor.getString(0));

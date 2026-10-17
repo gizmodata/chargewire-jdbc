@@ -138,7 +138,6 @@ final class NestedAccessors {
           : ((BaseListVector) vector).getElementEndIndex(row);
     }
 
-
     @Override
     public List<Object> getObject(int row) throws SQLException {
       List<Object> list = new ArrayList<>();
@@ -176,7 +175,6 @@ final class NestedAccessors {
       }
     }
 
-
     @Override
     public Map<String, Object> getObject(int row) throws SQLException {
       Map<String, Object> map = new LinkedHashMap<>();
@@ -194,7 +192,8 @@ final class NestedAccessors {
 
     @Override
     public Struct getStruct(int row) throws SQLException {
-      return new WarpStruct(SqlTypes.typeName(vector.getField()), getObject(row).values().toArray());
+      return new WarpStruct(
+          SqlTypes.typeName(vector.getField()), getObject(row).values().toArray());
     }
   }
 
@@ -210,7 +209,6 @@ final class NestedAccessors {
       this.keys = Accessors.create(fields.get(0), dictionaries);
       this.values = Accessors.create(fields.get(1), dictionaries);
     }
-
 
     @Override
     public Map<Object, Object> getObject(int row) throws SQLException {
@@ -265,7 +263,6 @@ final class NestedAccessors {
     public boolean isNull(int row) {
       return vector.isNull(row) || member(row).isNull(index(row));
     }
-
 
     @Override
     public Object getObject(int row) throws SQLException {
@@ -366,7 +363,6 @@ final class NestedAccessors {
       return vector.isNull(row) || values.isNull(index(row));
     }
 
-
     @Override
     public Object getObject(int row) throws SQLException {
       return values.getObject(index(row));
@@ -459,7 +455,6 @@ final class NestedAccessors {
       return true;
     }
 
-
     @Override
     public Object getObject(int row) {
       return null;
@@ -471,7 +466,6 @@ final class NestedAccessors {
     GenericAccessor(ValueVector vector) {
       super(vector);
     }
-
 
     @Override
     public Object getObject(int row) {

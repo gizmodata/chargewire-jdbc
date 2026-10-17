@@ -22,8 +22,8 @@ import java.util.regex.Pattern;
 
 /**
  * A scripted Warp SQL server for testing the driver's client logic: discovery, sign-in and session
- * creation answer by default; each test adds routes for the requests it is about, and can read
- * back every request the driver sent.
+ * creation answer by default; each test adds routes for the requests it is about, and can read back
+ * every request the driver sent.
  */
 final class FakeWarpServer implements AutoCloseable {
   /** A request the driver sent. */
@@ -80,33 +80,62 @@ final class FakeWarpServer implements AutoCloseable {
     server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
     server.setExecutor(Executors.newCachedThreadPool());
     server.createContext("/", this::handle);
-    route("GET", "", (exchange, request, path) -> json(exchange, 200,
-        "{\"protocol\":\"warp-sql\",\"protocol_versions\":" + protocolVersions
-            + ",\"server\":{\"name\":\"fake\",\"version\":\"9.8.7\"},\"capabilities\":" + capabilities
-            + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\"]}}"));
-    route("POST", "/v1/auth/token", (exchange, request, path) -> {
-      if (request.body().contains("\"wrong\"")) {
-        problem(exchange, 401, "invalid_credentials", "");
-        return;
-      }
-      json(exchange, 200, "{\"access_token\":\"t" + tokens.incrementAndGet()
-          + "\",\"token_type\":\"Bearer\",\"expires_in\":" + expiresIn + "}");
-    });
-    route("POST", "/v1/sessions", (exchange, request, path) -> {
-      ObjectNode options = (ObjectNode) MAPPER.readTree(request.body).path("options");
-      if (!options.has("catalog")) {
-        options.put("catalog", "cat");
-      }
-      if (!options.has("schema")) {
-        options.put("schema", "main");
-      }
-      ObjectNode session = MAPPER.createObjectNode().put("session_id", "s" + sessions.incrementAndGet());
-      session.set("options", options);
-      json(exchange, 201, session.put("idle_timeout_s", 900).toString());
-    });
+    route(
+        "GET",
+        "",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                "{\"protocol\":\"warp-sql\",\"protocol_versions\":"
+                    + protocolVersions
+                    + ",\"server\":{\"name\":\"fake\",\"version\":\"9.8.7\"},\"capabilities\":"
+                    + capabilities
+                    + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\"]}}"));
+    route(
+        "POST",
+        "/v1/auth/token",
+        (exchange, request, path) -> {
+          if (request.body().contains("\"wrong\"")) {
+            problem(exchange, 401, "invalid_credentials", "");
+            return;
+          }
+          json(
+              exchange,
+              200,
+              "{\"access_token\":\"t"
+                  + tokens.incrementAndGet()
+                  + "\",\"token_type\":\"Bearer\",\"expires_in\":"
+                  + expiresIn
+                  + "}");
+        });
+    route(
+        "POST",
+        "/v1/sessions",
+        (exchange, request, path) -> {
+          ObjectNode options = (ObjectNode) MAPPER.readTree(request.body).path("options");
+          if (!options.has("catalog")) {
+            options.put("catalog", "cat");
+          }
+          if (!options.has("schema")) {
+            options.put("schema", "main");
+          }
+          ObjectNode session =
+              MAPPER.createObjectNode().put("session_id", "s" + sessions.incrementAndGet());
+          session.set("options", options);
+          json(exchange, 201, session.put("idle_timeout_s", 900).toString());
+        });
     route("DELETE", "/v1/sessions/([^/]+)", (exchange, request, path) -> empty(exchange, 204));
-    route("GET", "/v1/sessions/([^/]+)", (exchange, request, path) -> json(exchange, 200,
-        "{\"session_id\":\"" + path.group(1) + "\",\"options\":{\"catalog\":\"cat\",\"schema\":\"main\"}}"));
+    route(
+        "GET",
+        "/v1/sessions/([^/]+)",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                "{\"session_id\":\""
+                    + path.group(1)
+                    + "\",\"options\":{\"catalog\":\"cat\",\"schema\":\"main\"}}"));
     server.start();
   }
 
@@ -120,8 +149,10 @@ final class FakeWarpServer implements AutoCloseable {
   }
 
   String url(String options) {
-    return "jdbc:warp://127.0.0.1:" + server.getAddress().getPort()
-        + "?useEncryption=false&user=joe&password=pw&basePath=" + basePath
+    return "jdbc:warp://127.0.0.1:"
+        + server.getAddress().getPort()
+        + "?useEncryption=false&user=joe&password=pw&basePath="
+        + basePath
         + (options.isEmpty() ? "" : "&" + options);
   }
 
@@ -133,7 +164,8 @@ final class FakeWarpServer implements AutoCloseable {
     List<Request> matching = new ArrayList<>();
     synchronized (requests) {
       for (Request request : requests) {
-        if (request.method.equals(method) && request.path.matches(Pattern.quote(basePath) + pathRegex)) {
+        if (request.method.equals(method)
+            && request.path.matches(Pattern.quote(basePath) + pathRegex)) {
           matching.add(request);
         }
       }
@@ -152,8 +184,9 @@ final class FakeWarpServer implements AutoCloseable {
     for (Map.Entry<Pattern, Route> entry : snapshot.entrySet()) {
       Matcher matcher = entry.getKey().matcher(key);
       if (matcher.matches()) {
-        Matcher path = Pattern.compile(entry.getKey().pattern().substring(request.method.length() + 1))
-            .matcher(request.path);
+        Matcher path =
+            Pattern.compile(entry.getKey().pattern().substring(request.method.length() + 1))
+                .matcher(request.path);
         path.matches();
         entry.getValue().answer(exchange, request, path);
         return;
@@ -166,10 +199,25 @@ final class FakeWarpServer implements AutoCloseable {
     send(exchange, status, "application/json", json.getBytes(StandardCharsets.UTF_8));
   }
 
-  static void problem(HttpExchange exchange, int status, String code, String extra) throws IOException {
-    send(exchange, status, "application/problem+json",
-        ("{\"type\":\"urn:warp-sql:error:" + code + "\",\"title\":\"" + code + "\",\"status\":" + status
-            + ",\"code\":\"" + code + "\",\"detail\":\"fake " + code + "\"" + extra + "}")
+  static void problem(HttpExchange exchange, int status, String code, String extra)
+      throws IOException {
+    send(
+        exchange,
+        status,
+        "application/problem+json",
+        ("{\"type\":\"urn:warp-sql:error:"
+                + code
+                + "\",\"title\":\""
+                + code
+                + "\",\"status\":"
+                + status
+                + ",\"code\":\""
+                + code
+                + "\",\"detail\":\"fake "
+                + code
+                + "\""
+                + extra
+                + "}")
             .getBytes(StandardCharsets.UTF_8));
   }
 
@@ -183,7 +231,8 @@ final class FakeWarpServer implements AutoCloseable {
     exchange.close();
   }
 
-  static void send(HttpExchange exchange, int status, String contentType, byte[] body) throws IOException {
+  static void send(HttpExchange exchange, int status, String contentType, byte[] body)
+      throws IOException {
     exchange.getResponseHeaders().set("Content-Type", contentType);
     exchange.sendResponseHeaders(status, 0);
     try (OutputStream out = exchange.getResponseBody()) {
@@ -193,8 +242,13 @@ final class FakeWarpServer implements AutoCloseable {
 
   /** A statement document. */
   static String document(String id, String state, String result) {
-    return "{\"statement_id\":\"" + id + "\",\"state\":\"" + state + "\""
-        + (result == null ? "" : ",\"result\":" + result) + "}";
+    return "{\"statement_id\":\""
+        + id
+        + "\",\"state\":\""
+        + state
+        + "\""
+        + (result == null ? "" : ",\"result\":" + result)
+        + "}";
   }
 
   @Override

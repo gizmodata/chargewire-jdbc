@@ -36,8 +36,12 @@ class WarpDriverTest {
 
   @ParameterizedTest
   @ValueSource(
-      strings = {"jdbc:postgresql://localhost:5432", "jdbc:arrow-flight-sql://localhost:31337",
-        "warp://localhost:1", "jdbc:warpsql://localhost:1"})
+      strings = {
+        "jdbc:postgresql://localhost:5432",
+        "jdbc:arrow-flight-sql://localhost:31337",
+        "warp://localhost:1",
+        "jdbc:warpsql://localhost:1"
+      })
   void declinesOtherUrls(String url) throws SQLException {
     WarpDriver driver = new WarpDriver();
     assertFalse(driver.acceptsURL(url));
@@ -51,7 +55,8 @@ class WarpDriverTest {
 
   @Test
   void parsesHostPortCatalogAndOptions() throws SQLException {
-    WarpUrl url = WarpUrl.parse("jdbc:warp://db.example.com:31337/lake?user=joe&useEncryption=false");
+    WarpUrl url =
+        WarpUrl.parse("jdbc:warp://db.example.com:31337/lake?user=joe&useEncryption=false");
     assertEquals("db.example.com", url.host);
     assertEquals(31337, url.port);
     assertEquals("lake", url.catalog);
@@ -68,7 +73,8 @@ class WarpDriverTest {
 
   @Test
   void parsesOneSemicolonOption() throws SQLException {
-    assertEquals(Map.of("user", "joe"), WarpUrl.parse("jdbc:warp://localhost:1234;user=joe").options);
+    assertEquals(
+        Map.of("user", "joe"), WarpUrl.parse("jdbc:warp://localhost:1234;user=joe").options);
   }
 
   @Test
@@ -102,12 +108,18 @@ class WarpDriverTest {
   @ParameterizedTest
   @ValueSource(
       strings = {
-        "jdbc:warp:", "jdbc:warp:localhost:1", "jdbc:warp://", "jdbc:warp://:1234",
-        "jdbc:warp://localhost:1/a/b", "jdbc:warp://localhost:1?novalue", "jdbc:warp://localhost:x",
+        "jdbc:warp:",
+        "jdbc:warp:localhost:1",
+        "jdbc:warp://",
+        "jdbc:warp://:1234",
+        "jdbc:warp://localhost:1/a/b",
+        "jdbc:warp://localhost:1?novalue",
+        "jdbc:warp://localhost:x",
         "jdbc:warp://localhost:1#fragment"
       })
   void rejectsMalformedUrls(String url) {
-    SQLException error = assertThrows(SQLNonTransientConnectionException.class, () -> WarpUrl.parse(url));
+    SQLException error =
+        assertThrows(SQLNonTransientConnectionException.class, () -> WarpUrl.parse(url));
     assertEquals("08001", error.getSQLState());
   }
 
@@ -150,12 +162,18 @@ class WarpDriverTest {
 
   @ParameterizedTest
   @ValueSource(
-      strings = {"useEncryption=maybe", "connectTimeout=soon", "connectTimeout=-1",
-        "ipcCompression=gzip", "retainResults=perhaps"})
+      strings = {
+        "useEncryption=maybe",
+        "connectTimeout=soon",
+        "connectTimeout=-1",
+        "ipcCompression=gzip",
+        "retainResults=perhaps"
+      })
   void rejectsInvalidPropertyValues(String option) {
     SQLException error =
         assertThrows(
-            SQLException.class, () -> new WarpDriver().connect("jdbc:warp://127.0.0.1:1?" + option, null));
+            SQLException.class,
+            () -> new WarpDriver().connect("jdbc:warp://127.0.0.1:1?" + option, null));
     assertEquals("08001", error.getSQLState());
     assertTrue(error.getMessage().startsWith("Invalid value"), error.getMessage());
   }
