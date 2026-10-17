@@ -21,11 +21,13 @@ All notable changes to this project are documented here. The format follows
   server lost is reopened with its options replayed and reported as a warning; with a
   transaction open, the statement fails with SQLSTATE `08007`.
 - Statements on the streamed path, or with `async=true` on the submit, long-poll and fetch path;
-  `setQueryTimeout` as `Warp-Statement-Timeout`, `cancel`, `setMaxRows`, update counts, and
-  batches. Every submission carries an `Idempotency-Key`, and a request whose response was lost
+  `setQueryTimeout` as `Warp-Statement-Timeout`, `cancel` (of the session's work while a
+  submission has not been answered yet), `setMaxRows`, update counts, and batches. Closing a
+  result early leaves a write that returns rows to finish. Every submission carries an `Idempotency-Key`, and a request whose response was lost
   is retried with it.
-- Results that stream batch by batch, with incomplete streams detected (the statement's own
-  error is raised), resumption of retained results from the next batch (`retainResults`),
+- Results that stream batch by batch, read up to their first rows before `execute` returns (so a
+  statement that fails as it starts fails there), with incomplete streams detected (the
+  statement's own error is raised), resumption of retained results from the next batch (`retainResults`),
   results in several partitions, ZSTD Arrow compression (`ipcCompression=zstd`), and buffering
   of an unread result before other work on its session (`resultBufferSize`).
 - Prepared statements prepared on the server, with parameters as Arrow streams in the server's
@@ -36,12 +38,14 @@ All notable changes to this project are documented here. The format follows
   `getObject(int, Class)`, calendars for wall-clock values, arrays, structs, maps, unions,
   dictionaries and UUIDs; `WarpInterval` for month-day-nanosecond intervals.
 - `DatabaseMetaData` from the metadata endpoints (catalogs, schemas, tables, table types,
-  columns from each table's Arrow schema, primary, imported and exported keys, cross references,
+  columns from each table's Arrow schema (nullability, auto-increment, and precision and scale of
+  decimals, strings and binaries), primary, imported and exported keys, cross references,
   type info) and `server-info`; empty results with JDBC's columns for metadata Warp SQL has no
   endpoint for.
 - Errors as `SQLException` subclasses chosen by SQLSTATE, with the server's problem document as
   the cause (`WarpProblem.codeOf`).
 - `WarpDataSource`.
 - Unit tests, including the client logic against a scripted server, and integration tests
-  against a live `warp-duckdb` that fail, never skip, without one; GizmoSQL 1.x's JDBC tests
+  against a live `warp-duckdb`, or another Warp SQL server named by environment variables, that
+  fail, never skip, without one; GizmoSQL 1.x's JDBC tests
   ported where they apply. CI runs the unit tests on JDK 17, 21 and 25.

@@ -575,10 +575,10 @@ class QueryIT {
     try (Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE TEMP TABLE it_transaction_ledger (id INTEGER)");
-      connection.setAutoCommit(false);
-      assertFalse(connection.getAutoCommit());
       try (PreparedStatement insert =
           connection.prepareStatement("INSERT INTO it_transaction_ledger VALUES (?)")) {
+        connection.setAutoCommit(false);
+        assertFalse(connection.getAutoCommit());
         insert.setInt(1, 1);
         assertEquals(1, insert.executeUpdate());
         connection.rollback();
@@ -602,6 +602,26 @@ class QueryIT {
         assertTrue(rows.next());
         assertEquals(2, rows.getInt(1));
         assertEquals(6, rows.getInt(2));
+      }
+    }
+  }
+
+  @Test
+  void writesPreparedInsideATransactionRun() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("CREATE TEMP TABLE it_prepared_in_transaction (id INTEGER)");
+      connection.setAutoCommit(false);
+      try (PreparedStatement insert =
+          connection.prepareStatement("INSERT INTO it_prepared_in_transaction VALUES (?)")) {
+        insert.setInt(1, 1);
+        assertEquals(1, insert.executeUpdate());
+      }
+      connection.commit();
+      try (ResultSet rows =
+          statement.executeQuery("SELECT count(*) FROM it_prepared_in_transaction")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getInt(1));
       }
     }
   }

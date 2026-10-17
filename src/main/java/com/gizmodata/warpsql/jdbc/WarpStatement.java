@@ -43,6 +43,7 @@ public class WarpStatement implements Statement {
   private volatile String runningSessionId;
   private volatile String runningStatementId;
   private volatile boolean cancelRequested;
+  private volatile boolean submitting;
 
   WarpStatement(WarpConnection connection) {
     this.connection = connection;
@@ -78,7 +79,12 @@ public class WarpStatement implements Statement {
         connection.withSession(
             id -> {
               runningSessionId = id;
-              return submitter.submit(id, submitOptions());
+              submitting = true;
+              try {
+                return submitter.submit(id, submitOptions());
+              } finally {
+                submitting = false;
+              }
             });
     connection.statementRan();
     String sessionId = runningSessionId;
@@ -136,7 +142,11 @@ public class WarpStatement implements Statement {
         document.state() == StatementDocument.State.CANCELLED ? "57014" : "HY000");
   }
 
-  private void open(ResultReader reader) {
+  /**
+   * Opens the result and reads up to its first rows, so that a statement that fails as it starts
+   * fails here, in {@code execute}, even when the server sent the result's schema first.
+   */
+  private void open(ResultReader reader) throws SQLException {
     String sessionId = runningSessionId;
     WarpResultSet[] holder = new WarpResultSet[1];
     holder[0] =
@@ -146,6 +156,12 @@ public class WarpStatement implements Statement {
             maxRows,
             () -> resultSetClosed(holder[0], reader, sessionId, reader.statementId()));
     resultSet = holder[0];
+    try {
+      holder[0].readAhead();
+    } catch (SQLException e) {
+      holder[0].close();
+      throw e;
+    }
   }
 
   /** Frees what the server still holds for a result that was not read to the end, or retained. */
@@ -235,13 +251,9 @@ public class WarpStatement implements Statement {
     return updateCount;
   }
 
-  /** Reads the unexpected result to the end, so the statement completes, then reports it. */
-  final SQLException returnedRows() throws SQLException {
-    WarpResultSet rows = resultSet;
-    while (rows.next()) {
-      // Drain: closing early would cancel a statement that already changed data.
-    }
-    rows.close();
+  /** Closes the unexpected result and reports it; a write it belongs to still runs to its end. */
+  final SQLException returnedRows() {
+    resultSet.close();
     return new SQLException(
         "The statement returned a result set; use executeQuery or execute", "07000");
   }
@@ -407,7 +419,13 @@ public class WarpStatement implements Statement {
 
   // ---- Cancel and close ----
 
-  /** {@inheritDoc} Asks the server to cancel the running statement (spec §6.8). */
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Asks the server to cancel the running statement (spec §6.8). While the submission's answer
+   * has not arrived, so that the statement has no id yet, it cancels what the session runs; on a
+   * connection shared between threads, that includes other statements running at that moment.
+   */
   @Override
   public void cancel() throws SQLException {
     checkOpen();
@@ -415,6 +433,12 @@ public class WarpStatement implements Statement {
     String statementId = runningStatementId;
     if (statementId != null) {
       cancelOnServer(runningSessionId, statementId);
+    } else if (submitting) {
+      try {
+        connection.client().cancelSession(runningSessionId);
+      } catch (SQLException e) {
+        // A server without session cancel: the statement is cancelled once its id arrives.
+      }
     }
   }
 

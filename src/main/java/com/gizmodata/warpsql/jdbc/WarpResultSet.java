@@ -113,6 +113,13 @@ public final class WarpResultSet implements ResultSet {
     return true;
   }
 
+  /** Loads the first batch with rows, if any, before the first {@link #next()}. */
+  void readAhead() throws SQLException {
+    synchronized (lock) {
+      loadNonEmptyBatch();
+    }
+  }
+
   private boolean loadNonEmptyBatch() throws SQLException {
     while (batches.next()) {
       VectorSchemaRoot root = batches.root();
@@ -146,7 +153,8 @@ public final class WarpResultSet implements ResultSet {
     afterLast = true;
     accessors = null;
     if (!batches.isFinished()) {
-      // maxRows stopped the reading: let the server stop too, rather than hold the session.
+      // maxRows stopped the reading: let the server stop a query (a write still runs to its end)
+      // rather than hold the session.
       batches.abort();
     }
     if (statement != null && statement.closesOnCompletion()) {

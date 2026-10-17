@@ -37,6 +37,20 @@ class ProtocolIT {
   /** Runs until stopped. */
   private static final String ENDLESS = "SELECT count(*) FROM range(100000000000) t(i)";
 
+  /**
+   * Runs a statement and reads its result: servers send the schema at once (spec §6.4), so a
+   * statement's failure can surface either from {@code execute} or from {@code next}.
+   */
+  private static void runToEnd(Statement statement, String sql) throws SQLException {
+    if (statement.execute(sql)) {
+      try (ResultSet rows = statement.getResultSet()) {
+        while (rows.next()) {
+          rows.getObject(1);
+        }
+      }
+    }
+  }
+
   /** About 2 million rows in several batches; the sum of i is 1999999000000. */
   private static final String BIG = "SELECT i, i * 2 AS j FROM range(2000000) t(i)";
 
@@ -64,7 +78,7 @@ class ProtocolIT {
       try {
         Future<SQLException> running =
             executor.submit(
-                () -> assertThrows(SQLException.class, () -> statement.executeQuery(ENDLESS)));
+                () -> assertThrows(SQLException.class, () -> runToEnd(statement, ENDLESS)));
         Thread.sleep(700);
         statement.cancel();
         SQLException error = running.get();
@@ -87,7 +101,7 @@ class ProtocolIT {
       try {
         Future<SQLException> running =
             executor.submit(
-                () -> assertThrows(SQLException.class, () -> statement.execute(ENDLESS)));
+                () -> assertThrows(SQLException.class, () -> runToEnd(statement, ENDLESS)));
         Thread.sleep(700);
         statement.cancel();
         assertEquals("statement_cancelled", WarpProblem.codeOf(running.get()));
@@ -107,8 +121,7 @@ class ProtocolIT {
         SQLTimeoutException error =
             assertTimeoutPreemptively(
                 Duration.ofSeconds(30),
-                () ->
-                    assertThrows(SQLTimeoutException.class, () -> statement.executeQuery(ENDLESS)));
+                () -> assertThrows(SQLTimeoutException.class, () -> runToEnd(statement, ENDLESS)));
         assertEquals("statement_timeout", WarpProblem.codeOf(error), mode);
         statement.setQueryTimeout(0);
         try (ResultSet rows = statement.executeQuery("SELECT 1")) {
@@ -217,6 +230,24 @@ class ProtocolIT {
         assertTrue(rows.next(), "the connection still works");
         assertEquals(42, rows.getInt(1));
       }
+    }
+  }
+
+  @Test
+  void closingAResultEarlyLetsAWriteFinish() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("CREATE OR REPLACE TABLE early_close (i BIGINT)");
+      try (ResultSet rows =
+          statement.executeQuery(
+              "INSERT INTO early_close SELECT i FROM range(2000000) t(i) RETURNING i")) {
+        assertTrue(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM early_close")) {
+        assertTrue(rows.next());
+        assertEquals(2_000_000, rows.getLong(1), "a write runs to its end (spec §6.8)");
+      }
+      statement.execute("DROP TABLE early_close");
     }
   }
 

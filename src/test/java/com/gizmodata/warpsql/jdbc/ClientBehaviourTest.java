@@ -29,6 +29,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.arrow.memory.BufferAllocator;
@@ -401,6 +403,32 @@ class ClientBehaviourTest {
       assertTrue(error.getMessage().contains("not retained"), error.getMessage());
     }
     assertEquals(0, server.requests("GET", "/v1/sessions/s1/statements/q1/result").size());
+  }
+
+  @Test
+  void aStatementThatFailsAfterItsSchemaFailsInExecute() throws Exception {
+    byte[] schemaOnly = TestStreams.withoutEndMarker(TestStreams.schemaStream(allocator, INTS));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> arrow(exchange, "q1", schemaOnly));
+    server.route(
+        "GET",
+        "/v1/sessions/s1/statements/q1",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                "{\"statement_id\":\"q1\",\"state\":\"failed\",\"error\":{\"code\":"
+                    + "\"execution_error\",\"detail\":\"boom\"}}"));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      SQLException error =
+          assertThrows(SQLException.class, () -> statement.executeQuery("SELECT error('boom')"));
+      assertEquals("execution_error", WarpProblem.codeOf(error));
+      assertTrue(error.getMessage().contains("boom"), error.getMessage());
+      assertNull(statement.getResultSet());
+    }
   }
 
   @Test
@@ -834,6 +862,52 @@ class ClientBehaviourTest {
       assertEquals("statement_cancelled", WarpProblem.codeOf(error));
       assertEquals("57014", error.getSQLState());
     }
+  }
+
+  @Test
+  void cancelBeforeTheSubmissionAnswersCancelsTheSession() throws Exception {
+    CountDownLatch sessionCancelled = new CountDownLatch(1);
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          try {
+            if (!sessionCancelled.await(10, TimeUnit.SECONDS)) {
+              json(exchange, 201, document("q1", "succeeded", null));
+              return;
+            }
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+          problem(exchange, 400, "statement_cancelled", "");
+        });
+    server.route(
+        "POST",
+        "/v1/sessions/s1/cancel",
+        (exchange, request, path) -> {
+          sessionCancelled.countDown();
+          FakeWarpServer.empty(exchange, 202);
+        });
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      Thread canceller =
+          new Thread(
+              () -> {
+                try {
+                  Thread.sleep(300);
+                  statement.cancel();
+                } catch (Exception e) {
+                  throw new IllegalStateException(e);
+                }
+              });
+      canceller.start();
+      SQLException error =
+          assertThrows(SQLException.class, () -> statement.execute("SELECT slow()"));
+      canceller.join();
+      assertEquals("statement_cancelled", WarpProblem.codeOf(error));
+      assertEquals("57014", error.getSQLState());
+    }
+    assertEquals(1, server.requests("POST", "/v1/sessions/s1/cancel").size());
   }
 
   @Test

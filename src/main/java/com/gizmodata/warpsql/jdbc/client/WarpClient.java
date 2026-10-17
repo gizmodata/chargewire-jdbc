@@ -641,9 +641,9 @@ public final class WarpClient implements AutoCloseable {
    * @throws SQLException on any error, or if the waiting thread is interrupted
    */
   public StatementDocument awaitTerminal(String sessionId, String statementId) throws SQLException {
-    // Most statements finish within milliseconds, so poll briefly before long-polling: a server
-    // may hold a long-poll for its whole wait when the statement finished just before it arrived
-    // (spec §6.3 lets it). Long-poll waits then grow from a second to pollWait.
+    // Most statements finish within milliseconds, so poll briefly before long-polling: some
+    // servers hold a long-poll on a statement that has already finished for its whole wait
+    // (spec §6.3 now forbids it). Long-poll waits then grow from a second to pollWait.
     long shortPollsEnd = System.nanoTime() + SHORT_POLLING_NANOS;
     long pauseMillis = 1;
     int wait = 1;
@@ -728,8 +728,25 @@ public final class WarpClient implements AutoCloseable {
   }
 
   /**
-   * Closes a statement and frees its result (spec §6.8); one the server no longer has is already
-   * closed.
+   * Cancels every statement the session is running or has queued (spec §6.8), for a statement whose
+   * id the client does not know yet.
+   *
+   * @param sessionId the session
+   * @throws SQLException on any error
+   */
+  public void cancelSession(String sessionId) throws SQLException {
+    URI target = sessionUri(sessionId, "/cancel");
+    send(
+        () -> request(target).POST(HttpRequest.BodyPublishers.noBody()),
+        handlerDiscard(),
+        true,
+        true);
+  }
+
+  /**
+   * Tells the server the client is done with a statement (spec §6.8): its result is freed, a query
+   * still running is cancelled, and a write runs to its end. One the server no longer has is
+   * already done.
    *
    * @param sessionId the session
    * @param statementId the statement
@@ -744,7 +761,9 @@ public final class WarpClient implements AutoCloseable {
           true);
     } catch (SQLException e) {
       String code = WarpProblem.codeOf(e);
-      if (!"statement_not_found".equals(code) && !"session_not_found".equals(code)) {
+      if (!"statement_not_found".equals(code)
+          && !"session_not_found".equals(code)
+          && !"not_found".equals(code)) {
         throw e;
       }
     }

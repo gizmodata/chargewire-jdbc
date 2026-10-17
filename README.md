@@ -85,7 +85,12 @@ For a local server without TLS, add `useEncryption=false`.
 
 - **Streamed (the default).** One `POST` runs the statement and streams its result; statements
   without rows answer with a document carrying the update count. `setQueryTimeout` becomes
-  `Warp-Statement-Timeout`, and `cancel()` posts the statement's cancel request.
+  `Warp-Statement-Timeout`, and `cancel()` posts the statement's cancel request. A `cancel()`
+  that arrives before the server has answered the submission (so the statement has no id yet)
+  cancels what the session is running instead; on a connection shared between threads, that
+  includes the other threads' statements.
+- **Closing a result early.** Closing a `ResultSet` before its end tells the server the client is
+  done with it: a query stops, but a write (`INSERT ... RETURNING`) still runs to its end.
 - **Asynchronous (`async=true`).** The driver submits, long-polls the status, and then fetches the
   result, which the server retains. Use it when a proxy between you and the server cuts long
   requests.
@@ -186,8 +191,30 @@ server for themselves on a free port, with a fresh password and an empty home di
 WARP_SQL_JDBC_TEST_SERVER_BINARY=/path/to/warp-sql/cpp/build/warp-duckdb mvn verify
 ```
 
-Without the variable they use a sibling checkout's `../warp-sql/cpp/build/warp-duckdb`. With no
-server they fail; they never skip. They run against `target/warp-sql-jdbc.jar` with no other
+Without the variable they use a sibling checkout's `../warp-sql/cpp/build-main/warp-duckdb`, or
+else `../warp-sql/cpp/build/warp-duckdb`. With no server they fail; they never skip.
+
+Other servers run the same suite when told how they differ from `warp-duckdb`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `WARP_SQL_JDBC_TEST_SERVER_BINARY` | sibling `warp-duckdb` | The server to start |
+| `WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV` | `WARP_DUCKDB_PASSWORD` | The environment variable it reads its password from |
+| `WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG` | `--tls-client-ca` | Its flag for the CA that client certificates must chain to |
+| `WARP_SQL_JDBC_TEST_SERVER_NAME` | `warp-duckdb` | The product name its `server-info` reports |
+
+For example, for Hardcharger:
+
+```bash
+WARP_SQL_JDBC_TEST_SERVER_BINARY=/path/to/hardcharger/server/build/hardcharger \
+WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_PASSWORD \
+WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG=--mtls-ca-cert \
+WARP_SQL_JDBC_TEST_SERVER_NAME=Hardcharger \
+mvn verify
+```
+
+The server is started with only `PATH`, `HOME` (an empty directory), `TMPDIR` and its password
+variable in its environment, so credentials in your shell never reach it. They run against `target/warp-sql-jdbc.jar` with no other
 dependency on the class path, so they also prove the jar is self-contained, and without
 `--add-opens`. CI runs the unit tests only, since the server build comes from a private repository.
 
