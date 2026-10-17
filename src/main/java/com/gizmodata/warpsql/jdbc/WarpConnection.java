@@ -67,6 +67,8 @@ public final class WarpConnection implements Connection {
   private volatile boolean transactionDirty;
   private volatile boolean closed;
   private volatile boolean closing;
+  private volatile boolean released;
+  private volatile boolean ended;
   private boolean readOnly;
   private int transactionIsolation = TRANSACTION_READ_COMMITTED;
   private int holdability = ResultSet.HOLD_CURSORS_OVER_COMMIT;
@@ -140,12 +142,16 @@ public final class WarpConnection implements Connection {
       throws SQLException {
     String actualCatalog = options.path("catalog").asText(null);
     String actualSchema = options.path("schema").asText(null);
-    if (wantedCatalog != null && actualCatalog != null && !wantedCatalog.equals(actualCatalog)) {
+    if (wantedCatalog != null
+        && actualCatalog != null
+        && !wantedCatalog.equalsIgnoreCase(actualCatalog)) {
       throw new SQLNonTransientConnectionException(
           "The server did not set catalog '" + wantedCatalog + "' (it is '" + actualCatalog + "')",
           "3D000");
     }
-    if (wantedSchema != null && actualSchema != null && !wantedSchema.equals(actualSchema)) {
+    if (wantedSchema != null
+        && actualSchema != null
+        && !wantedSchema.equalsIgnoreCase(actualSchema)) {
       throw new SQLNonTransientConnectionException(
           "The server did not set schema '" + wantedSchema + "' (it is '" + actualSchema + "')",
           "3F000");
@@ -216,6 +222,8 @@ public final class WarpConnection implements Connection {
       String lost = sessionId;
       if ("session_ended".equals(problem.code())) {
         if (!"token_expired".equals(problem.reason())) {
+          // Unusable from now on; close() still releases what the connection holds.
+          ended = true;
           closed = true;
           throw new SQLNonTransientConnectionException(
               "The server ended the session (" + problem.reason() + "); reconnect", "08003", cause);
@@ -656,9 +664,10 @@ public final class WarpConnection implements Connection {
   /** {@inheritDoc} Closes the statements and ends the server session. */
   @Override
   public void close() throws SQLException {
-    if (closed) {
+    if (released) {
       return;
     }
+    released = true;
     closing = true;
     closeStatements();
     for (WarpResultSet result : metadataResults) {
@@ -666,7 +675,7 @@ public final class WarpConnection implements Connection {
     }
     closed = true;
     try {
-      if (sessionId != null) {
+      if (sessionId != null && !ended) {
         client.deleteSession(sessionId);
       }
     } catch (SQLException e) {
@@ -701,7 +710,7 @@ public final class WarpConnection implements Connection {
     if (executor == null) {
       throw new SQLException("The executor must not be null", "HY009");
     }
-    if (closed) {
+    if (released) {
       return;
     }
     for (WarpStatement statement : statements) {

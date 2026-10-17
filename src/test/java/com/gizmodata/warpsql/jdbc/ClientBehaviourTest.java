@@ -314,6 +314,7 @@ class ClientBehaviourTest {
       assertTrue(connection.isClosed());
     }
     assertEquals(1, server.sessions.get(), "no new session after a kill");
+    assertEquals(0, server.requests("DELETE", "/v1/sessions/s1").size(), "nothing left to end");
   }
 
   @Test
