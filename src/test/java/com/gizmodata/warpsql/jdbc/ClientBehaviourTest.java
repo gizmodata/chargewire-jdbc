@@ -853,6 +853,101 @@ class ClientBehaviourTest {
     }
   }
 
+  @Test
+  void updateCountsBeyondAnIntSaturate() throws Exception {
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) ->
+            json(exchange, 200, updateDocument("q1", 0).replace("0}", "5000000000}")));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      assertEquals(-1, statement.getUpdateCount(), "nothing ran yet");
+      assertNull(statement.getResultSet());
+      assertEquals(Integer.MAX_VALUE, statement.executeUpdate("UPDATE huge SET a = 1"));
+      assertEquals(5_000_000_000L, statement.getLargeUpdateCount());
+      assertEquals(5_000_000_000L, statement.executeLargeUpdate("UPDATE huge SET a = 1"));
+    }
+  }
+
+  @Test
+  void statementArgumentsAreChecked() throws Exception {
+    try (Connection connection = connect("")) {
+      Statement statement = connection.createStatement();
+      assertEquals(
+          "HY009", assertThrows(SQLException.class, () -> statement.execute(null)).getSQLState());
+      assertEquals(
+          "HY009",
+          assertThrows(SQLException.class, () -> connection.prepareStatement(null)).getSQLState());
+      assertThrows(
+          java.sql.SQLFeatureNotSupportedException.class,
+          () -> statement.executeUpdate("INSERT INTO t VALUES (1)", new int[] {1}));
+      assertThrows(
+          java.sql.SQLFeatureNotSupportedException.class,
+          () -> statement.execute("INSERT INTO t VALUES (1)", Statement.RETURN_GENERATED_KEYS));
+      assertThrows(
+          java.sql.SQLFeatureNotSupportedException.class,
+          () -> connection.prepareStatement("INSERT INTO t VALUES (1)", new String[] {"id"}));
+      assertThrows(java.sql.SQLFeatureNotSupportedException.class, statement::getGeneratedKeys);
+      statement.close();
+      assertEquals(
+          "HY010",
+          assertThrows(SQLException.class, () -> statement.execute("SELECT 1")).getSQLState());
+      assertTrue(statement.isClosed());
+    }
+  }
+
+  @Test
+  void serverInfoKeysDriveDatabaseMetaData() throws Exception {
+    server.route(
+        "GET",
+        "/v1/sessions/s1/metadata/server-info",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                "{\"server_name\":\"Acme SQL\",\"server_version\":\"3.14.2-beta\",\"sql_identifier_quote_char\":\"`\","
+                    + "\"sql_keywords\":[\"QUALIFY\",\"PIVOT\"],\"sql_identifier_case\":3,"
+                    + "\"sql_null_ordering\":3,\"sql_default_transaction_isolation\":4,"
+                    + "\"sql_transactions_supported\":false,\"read_only\":true}"));
+    try (Connection connection = connect("")) {
+      java.sql.DatabaseMetaData metaData = connection.getMetaData();
+      assertEquals("Acme SQL", metaData.getDatabaseProductName());
+      assertEquals("3.14.2-beta", metaData.getDatabaseProductVersion());
+      assertEquals(3, metaData.getDatabaseMajorVersion());
+      assertEquals(14, metaData.getDatabaseMinorVersion());
+      assertEquals("`", metaData.getIdentifierQuoteString());
+      assertEquals("QUALIFY,PIVOT", metaData.getSQLKeywords());
+      assertTrue(metaData.storesLowerCaseIdentifiers());
+      assertFalse(metaData.storesMixedCaseIdentifiers());
+      assertTrue(metaData.nullsAreSortedAtEnd());
+      assertFalse(metaData.nullsAreSortedHigh());
+      assertEquals(Connection.TRANSACTION_SERIALIZABLE, metaData.getDefaultTransactionIsolation());
+      assertFalse(metaData.supportsTransactions());
+      assertTrue(metaData.isReadOnly());
+    }
+    assertEquals(
+        1, server.requests("GET", "/v1/sessions/s1/metadata/server-info").size(), "read once");
+  }
+
+  @Test
+  void withoutServerInfoKeysTheDefaultsHold() throws Exception {
+    server.route(
+        "GET",
+        "/v1/sessions/s1/metadata/server-info",
+        (exchange, request, path) -> json(exchange, 200, "{}"));
+    try (Connection connection = connect("")) {
+      java.sql.DatabaseMetaData metaData = connection.getMetaData();
+      assertEquals("fake", metaData.getDatabaseProductName(), "the discovery document's name");
+      assertEquals("9.8.7", metaData.getDatabaseProductVersion());
+      assertEquals("\"", metaData.getIdentifierQuoteString());
+      assertTrue(metaData.supportsTransactions(), "from the transactions capability");
+      assertEquals(
+          Connection.TRANSACTION_READ_COMMITTED, metaData.getDefaultTransactionIsolation());
+      assertTrue(metaData.nullsAreSortedHigh());
+    }
+  }
+
   // ---- Discovery and connecting (spec §3) ----
 
   @Test

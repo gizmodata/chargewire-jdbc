@@ -126,6 +126,15 @@ public final class WarpDriver implements Driver {
       for (String key : info.stringPropertyNames()) {
         properties.put(key.toLowerCase(Locale.ROOT), info.getProperty(key));
       }
+      // Values put() as Boolean or Integer are not "string properties", but are meant all the same.
+      for (Map.Entry<Object, Object> entry : info.entrySet()) {
+        if (entry.getKey() != null
+            && entry.getValue() != null
+            && !(entry.getValue() instanceof String)) {
+          properties.put(
+              entry.getKey().toString().toLowerCase(Locale.ROOT), entry.getValue().toString());
+        }
+      }
     }
     if (url != null) {
       properties.putAll(url.options);

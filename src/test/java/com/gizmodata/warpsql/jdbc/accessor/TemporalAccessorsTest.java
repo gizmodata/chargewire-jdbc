@@ -161,7 +161,7 @@ class TemporalAccessorsTest extends AccessorFixture {
         new ArrowType.Timestamp(unit, zone),
         values.length,
         v -> {
-          TimeStampVector timestamps = (TimeStampVector) v;
+          TimeStampVector timestamps = v;
           for (int i = 0; i < values.length; i++) {
             timestamps.setSafe(i, values[i]);
           }

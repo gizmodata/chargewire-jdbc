@@ -55,6 +55,24 @@ class ConnectionIT {
   }
 
   @Test
+  void propertiesPutAsBooleansAndNumbers() throws SQLException {
+    WarpServer server = SharedServer.get();
+    Properties properties = new Properties();
+    properties.put("user", "warp");
+    properties.put("password", server.password);
+    properties.put("useEncryption", false);
+    properties.put("networkTimeout", 15000);
+    try (Connection connection = DriverManager.getConnection(server.url(""), properties)) {
+      assertTrue(connection.isValid(2));
+      assertEquals(15000, connection.getNetworkTimeout());
+    }
+    try (Connection connection =
+        DriverManager.getConnection(server.url("useEncryption=0"), server.properties())) {
+      assertTrue(connection.isValid(2), "0 and 1 are booleans too");
+    }
+  }
+
+  @Test
   void urlOptionsWinOverProperties() throws SQLException {
     WarpServer server = SharedServer.get();
     Properties properties = server.properties();

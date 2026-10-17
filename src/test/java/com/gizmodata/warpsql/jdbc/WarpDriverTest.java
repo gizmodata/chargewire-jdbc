@@ -151,6 +151,25 @@ class WarpDriverTest {
   }
 
   @Test
+  void propertiesPutAsOtherTypesCount() throws SQLException {
+    Properties info = new Properties();
+    info.put("useEncryption", false);
+    info.put("connectTimeout", 5000);
+    Properties defaults = new Properties();
+    defaults.setProperty("user", "from-defaults");
+    Properties withDefaults = new Properties(defaults);
+    withDefaults.putAll(info);
+    Map<String, String> values = new java.util.HashMap<>();
+    for (DriverPropertyInfo property :
+        new WarpDriver().getPropertyInfo("jdbc:warp://h:1", withDefaults)) {
+      values.put(property.name, property.value);
+    }
+    assertEquals("false", values.get("useEncryption"));
+    assertEquals("5000", values.get("connectTimeout"));
+    assertEquals("from-defaults", values.get("user"), "defaults count too");
+  }
+
+  @Test
   void connectingWithNullPropertiesReachesTheServer() {
     // Nothing listens on port 1: the driver gets as far as connecting, then reports why it can't.
     SQLException error =

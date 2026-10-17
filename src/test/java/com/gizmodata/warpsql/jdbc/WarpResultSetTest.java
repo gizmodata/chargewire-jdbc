@@ -195,6 +195,7 @@ class WarpResultSetTest {
   }
 
   @Test
+  @SuppressWarnings("deprecation")
   void streamsAndLegacyGetters() throws Exception {
     try (WarpResultSet rows = sample()) {
       assertTrue(rows.next());

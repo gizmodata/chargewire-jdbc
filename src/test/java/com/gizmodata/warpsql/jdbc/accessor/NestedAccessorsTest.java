@@ -52,7 +52,7 @@ class NestedAccessorsTest extends AccessorFixture {
         field("l", ArrowType.List.INSTANCE, field("item", INT)),
         3,
         v -> {
-          ListVector lists = (ListVector) v;
+          ListVector lists = v;
           UnionListWriter writer = lists.getWriter();
           writer.setPosition(0);
           writer.startList();
@@ -100,7 +100,7 @@ class NestedAccessorsTest extends AccessorFixture {
             field("l", ArrowType.LargeList.INSTANCE, field("item", INT)),
             1,
             v -> {
-              LargeListVector lists = (LargeListVector) v;
+              LargeListVector lists = v;
               var writer = lists.getWriter();
               writer.setPosition(0);
               writer.startList();
@@ -114,7 +114,7 @@ class NestedAccessorsTest extends AccessorFixture {
             field("f", new ArrowType.FixedSizeList(2), field("item", INT)),
             2,
             v -> {
-              FixedSizeListVector lists = (FixedSizeListVector) v;
+              FixedSizeListVector lists = v;
               IntVector items = (IntVector) lists.getDataVector();
               for (int i = 0; i < 4; i++) {
                 items.setSafe(i, i * 10);
@@ -138,7 +138,7 @@ class NestedAccessorsTest extends AccessorFixture {
                 field("t", ArrowType.Utf8.INSTANCE)),
             2,
             v -> {
-              StructVector struct = (StructVector) v;
+              StructVector struct = v;
               ((IntVector) struct.getChild("n")).setSafe(0, 5);
               ((VarCharVector) struct.getChild("t"))
                   .setSafe(0, "a\"b\n".getBytes(StandardCharsets.UTF_8));
@@ -177,7 +177,7 @@ class NestedAccessorsTest extends AccessorFixture {
                             Field.nullable("value", INT))))),
             1,
             v -> {
-              UnionMapWriter writer = ((MapVector) v).getWriter();
+              UnionMapWriter writer = v.getWriter();
               writer.setPosition(0);
               writer.startMap();
               for (String key : new String[] {"z", "a"}) {
@@ -214,7 +214,7 @@ class NestedAccessorsTest extends AccessorFixture {
                     Field.nullable("varchar", ArrowType.Utf8.INSTANCE))),
             3,
             v -> {
-              UnionVector u = (UnionVector) v;
+              UnionVector u = v;
               NullableIntHolder holder = new NullableIntHolder();
               holder.isSet = 1;
               holder.value = 42;
@@ -241,7 +241,7 @@ class NestedAccessorsTest extends AccessorFixture {
                 List.of(Field.nullable("a", INT), Field.nullable("b", ArrowType.Utf8.INSTANCE))),
             2,
             v -> {
-              DenseUnionVector d = (DenseUnionVector) v;
+              DenseUnionVector d = v;
               IntVector a = (IntVector) d.getVectorByType((byte) 0);
               VarCharVector b = (VarCharVector) d.getVectorByType((byte) 1);
               d.setTypeId(0, (byte) 1);
