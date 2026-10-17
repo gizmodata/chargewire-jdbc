@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Unit tests (JDK ${{ matrix.jdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: [17, 21, 25]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+          cache: maven
+      # Unit tests and the standalone jar. The integration tests need a Warp SQL server
+      # build (warp-duckdb, from the private warp-sql repository), so they run locally
+      # with `mvn verify`; see README "Testing".
+      - name: Build and run the unit tests
+        run: mvn -B -ntp package
+      - name: Check formatting and Javadoc
+        if: matrix.jdk == 17
+        run: mvn -B -ntp spotless:check javadoc:javadoc -Ddoclint=all
+      - name: Check the jar is self-contained
+        if: matrix.jdk == 17
+        run: |
+          set -euo pipefail
+          jar tf target/warp-sql-jdbc.jar > entries.txt
+          grep -q '^META-INF/services/java.sql.Driver$' entries.txt
+          # Every dependency is relocated except zstd-jni, whose JNI symbols name its package.
+          if grep -E '^(org|com/fasterxml|com/google)/' entries.txt; then
+            echo "::error::unrelocated classes in the standalone jar"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        if: matrix.jdk == 17
+        with:
+          name: warp-sql-jdbc
+          path: target/warp-sql-jdbc.jar
