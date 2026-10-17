@@ -103,6 +103,7 @@ public final class ArrowIpc {
    * incomplete (spec §6.6).
    */
   public static final class HeapReadChannel extends ReadChannel {
+    private final byte[] chunk = new byte[COPY_CHUNK];
     private boolean reachedEnd;
 
     /**
@@ -143,7 +144,6 @@ public final class ArrowIpc {
 
     @Override
     public long readFully(ArrowBuf buffer, long length) throws IOException {
-      byte[] chunk = new byte[(int) Math.min(COPY_CHUNK, Math.max(length, 1))];
       long total = 0;
       while (total < length) {
         int wanted = (int) Math.min(chunk.length, length - total);
@@ -161,6 +161,8 @@ public final class ArrowIpc {
 
   /** Writes Arrow buffers through a heap array. */
   static final class HeapWriteChannel extends WriteChannel {
+    private final byte[] chunk = new byte[COPY_CHUNK];
+
     HeapWriteChannel(WritableByteChannel out) {
       super(out);
     }
@@ -168,7 +170,6 @@ public final class ArrowIpc {
     @Override
     public void write(ArrowBuf buffer) throws IOException {
       long length = buffer.readableBytes();
-      byte[] chunk = new byte[(int) Math.min(COPY_CHUNK, Math.max(length, 1))];
       long written = 0;
       while (written < length) {
         int count = (int) Math.min(chunk.length, length - written);
