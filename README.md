@@ -228,8 +228,8 @@ WARP_SQL_JDBC_TEST_SERVER_BINARY=/path/to/warp-sql/cpp/build/warp-duckdb mvn ver
 ```
 
 Mutual TLS that carries identity (`ClientCertificateIT`) starts its servers with
-`--mtls-admin-identities client@example.com` (the test client certificate's e-mail SAN), a
-flag warp-duckdb and Hardcharger share. The test certificates in `src/test/resources/certs`
+`--mtls-certificate-sign-in --mtls-admin-identities client@example.com` (the test client
+certificate's e-mail SAN), flags warp-duckdb and Hardcharger share. The test certificates in `src/test/resources/certs`
 come from `dev/generate-test-certs.sh`.
 
 Without the variable they use a sibling checkout's `../warp-sql/cpp/build-main/warp-duckdb`, or

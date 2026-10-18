@@ -54,6 +54,7 @@ class ClientCertificateIT {
             cert("server-key.pem"),
             WarpServer.MTLS_FLAG,
             cert("ca.pem"),
+            "--mtls-certificate-sign-in",
             "--mtls-admin-identities",
             IDENTITY);
   }
