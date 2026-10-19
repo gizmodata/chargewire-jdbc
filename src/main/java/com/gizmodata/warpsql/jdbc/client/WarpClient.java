@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gizmodata.warpsql.jdbc.WarpProblem;
+import com.gizmodata.warpsql.jdbc.WarpProblemException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.ConnectException;
@@ -324,8 +325,8 @@ public final class WarpClient implements AutoCloseable {
     String pollSecret = flow.path("poll_secret").asText("");
     String authorizeUrl = flow.path("authorize_url").asText("");
     if (flowId.isEmpty() || pollSecret.isEmpty() || authorizeUrl.isEmpty()) {
-      throw new SQLNonTransientConnectionException(
-          "The browser sign-in response lacks flow_id, poll_secret or authorize_url", "08P01");
+      throw SqlErrors.protocolError(
+          "The browser sign-in response lacks flow_id, poll_secret or authorize_url");
     }
     long interval = Math.max(1, flow.path("poll_interval_s").asLong(2));
     String what =
@@ -356,8 +357,13 @@ public final class WarpClient implements AutoCloseable {
       if (response.statusCode() >= 400) {
         WarpProblem problem = readProblem(response);
         if ("flow_not_found".equals(problem.code())) {
-          throw new SQLInvalidAuthorizationSpecException(
-              "The browser sign-in expired or was already used; connect again to sign in", "28000");
+          SQLException expired =
+              new SQLInvalidAuthorizationSpecException(
+                  "The browser sign-in expired or was already used; connect again to sign in",
+                  "28000",
+                  problem.status());
+          expired.initCause(new WarpProblemException(problem));
+          throw expired;
         }
         throw SqlErrors.toSqlException(problem);
       }
@@ -366,8 +372,7 @@ public final class WarpClient implements AutoCloseable {
       if ("complete".equals(state)) {
         String token = doc.path("access_token").asText("");
         if (token.isEmpty()) {
-          throw new SQLNonTransientConnectionException(
-              "The browser sign-in completed without an access_token", "08P01");
+          throw SqlErrors.protocolError("The browser sign-in completed without an access_token");
         }
         long expiresIn = doc.path("expires_in").asLong(0);
         synchronized (tokenLock) {
@@ -378,19 +383,9 @@ public final class WarpClient implements AutoCloseable {
         return;
       }
       if ("failed".equals(state)) {
-        String code = doc.path("error").path("code").asText("invalid_credentials");
-        String detail = doc.path("error").path("detail").asText("");
-        String message =
-            "The browser sign-in failed (" + code + ")" + (detail.isEmpty() ? "" : ": " + detail);
-        if ("access_denied".equals(code) || "invalid_credentials".equals(code)) {
-          throw new SQLInvalidAuthorizationSpecException(message, "28000");
-        }
-        throw new SQLNonTransientConnectionException(message, "08004");
+        throw failedFlow(doc.path("error"));
       }
-      if (!"pending".equals(state)) {
-        throw new SQLNonTransientConnectionException(
-            "Unexpected browser sign-in state '" + state + "'", "08P01");
-      }
+      // pending, or a state of a later version: not terminal, so keep polling (spec §12).
       if (System.nanoTime() - deadline > 0) {
         throw new SQLTimeoutException(
             "The browser sign-in was not completed within "
@@ -405,6 +400,27 @@ public final class WarpClient implements AutoCloseable {
         throw new SQLException("Interrupted during the browser sign-in", "HY008", e);
       }
     }
+  }
+
+  /**
+   * The error of a failed browser sign-in (spec §4.3.2). Its code arrives inside a {@code 200} poll
+   * answer, so the problem has no HTTP status. {@code identity_provider_error} is the server
+   * failing to reach the provider; {@code access_denied}, {@code invalid_credentials} and a code
+   * this driver does not know (a generic refusal, spec §12) are authorization errors.
+   */
+  static SQLException failedFlow(JsonNode error) {
+    String code = error.path("code").asText("");
+    String detail = error.path("detail").asText("");
+    String text =
+        "The browser sign-in failed"
+            + (code.isEmpty() ? "" : " (" + code + ")")
+            + (detail.isEmpty() ? "" : ": " + detail);
+    if (code.isEmpty()) {
+      return new SQLInvalidAuthorizationSpecException(text, "28000");
+    }
+    boolean providerFailed = "identity_provider_error".equals(code);
+    return SqlErrors.toSqlException(
+        new WarpProblem(0, code, null, text, providerFailed ? "08004" : "28000", null, null));
   }
 
   private static long remainingMillis(long deadlineNanos) {
@@ -806,9 +822,7 @@ public final class WarpClient implements AutoCloseable {
                     Integer.toString(Math.min(options.resultPartitions, MAX_RESULT_PARTITIONS)));
                 builder.header("Warp-Result-Order", options.anyOrder ? "any" : "preserve");
               }
-              if (options.async && followsLocations()) {
-                // Only the statement document says where partitions are; a streamed answer's
-                // headers do not, so a streamed submission keeps every partition here.
+              if (followsLocations()) {
                 builder.header("Warp-Result-Locations", "remote");
               }
               acceptCompression(builder);
@@ -831,9 +845,9 @@ public final class WarpClient implements AutoCloseable {
 
   /**
    * Returns whether the driver reads partitions held by other servers: only from a server with the
-   * {@code result_locations} capability (spec §6.2), and only for status-document submissions.
+   * {@code result_locations} capability (spec §6.2).
    *
-   * @return {@code true} if submissions with {@code async} ask for remote locations
+   * @return {@code true} if submissions ask for remote locations
    */
   public boolean followsLocations() {
     return hasCapability("result_locations");

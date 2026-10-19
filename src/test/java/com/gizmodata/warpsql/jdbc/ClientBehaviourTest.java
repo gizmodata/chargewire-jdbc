@@ -686,7 +686,7 @@ class ClientBehaviourTest {
 
   @Test
   void streamedPartitionsAreReadAllAtOnce() throws Exception {
-    server.capabilities = "[\"long_poll\",\"result_partitions\",\"result_locations\"]";
+    server.capabilities = "[\"long_poll\",\"result_partitions\"]";
     byte[] first = stream(0, 2, 5);
     server.route(
         "POST",
@@ -718,9 +718,64 @@ class ClientBehaviourTest {
     FakeWarpServer.Request submit = server.requests("POST", "/v1/sessions/s1/statements").get(0);
     assertEquals("3", submit.header("Warp-Result-Partitions"));
     assertEquals("preserve", submit.header("Warp-Result-Order"));
-    assertNull(
-        submit.header("Warp-Result-Locations"),
-        "a streamed answer cannot say where partitions are, so it never asks for remote ones");
+    assertNull(submit.header("Warp-Result-Locations"), "only with result_locations");
+    assertEquals(
+        0,
+        server.requests("GET", "/v1/sessions/s1/statements/q1").size(),
+        "every partition is here: no document needed");
+  }
+
+  @Test
+  void streamedPartitionsElsewhereAreFoundInTheDocument() throws Exception {
+    server.capabilities = "[\"long_poll\",\"result_partitions\",\"result_locations\"]";
+    try (FakeWarpServer worker = new FakeWarpServer()) {
+      byte[] first = stream(0, 2, 5);
+      server.route(
+          "POST",
+          "/v1/sessions/s1/statements",
+          (exchange, request, path) -> {
+            exchange.getResponseHeaders().set("Warp-Result-Partitions", "2");
+            exchange.getResponseHeaders().set("Warp-Result-Order", "interleaved");
+            arrow(exchange, "q1", first);
+          });
+      server.route(
+          "GET",
+          "/v1/sessions/s1/statements/q1",
+          (exchange, request, path) ->
+              json(
+                  exchange,
+                  200,
+                  document(
+                      "q1",
+                      "running",
+                      "{\"kind\":\"rows\",\"partitions\":[{\"index\":0,\"location\":null},"
+                          + "{\"index\":1,\"location\":\""
+                          + worker.base()
+                          + "\"}],\"partition_order\":\"interleaved\",\"retained\":false}")));
+      byte[] second = stream(100, 1, 5);
+      worker.route(
+          "GET",
+          "/v1/sessions/s1/statements/q1/result",
+          (exchange, request, path) -> arrow(exchange, "q1", second));
+      try (Connection connection = connect("resultPartitions=2");
+          Statement statement = connection.createStatement();
+          ResultSet rows = statement.executeQuery("SELECT i FROM t ORDER BY i")) {
+        List<Long> expected = new ArrayList<>(range(0, 5));
+        expected.addAll(range(100, 105));
+        expected.addAll(range(5, 10));
+        assertEquals(expected, readAll(rows));
+      }
+      assertEquals(
+          "remote",
+          server
+              .requests("POST", "/v1/sessions/s1/statements")
+              .get(0)
+              .header("Warp-Result-Locations"));
+      assertEquals(
+          "partition=1",
+          worker.requests("GET", "/v1/sessions/s1/statements/q1/result").get(0).query);
+      assertEquals(0, server.requests("GET", "/v1/sessions/s1/statements/q1/result").size());
+    }
   }
 
   @Test

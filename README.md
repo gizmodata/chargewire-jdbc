@@ -136,10 +136,11 @@ For a local server without TLS, add `useEncryption=false`.
   partition. Per statement: `statement.unwrap(WarpStatement.class).setResultPartitions(4)` and
   `setResultOrder("any")`. A split result that does not say how it is split (no
   `Warp-Result-Order` header, no `partition_order`) is refused as a protocol error. On a server
-  with the `result_locations` capability, `async=true` submissions also accept partitions held by
-  other servers (`Warp-Result-Locations: remote`): the driver reads each where its `location`
-  says, with the same token and TLS settings, concurrently with the others. Without the
-  capability, or on the streamed path, every partition is read from the connection's server.
+  with the `result_locations` capability, submissions also accept partitions held by other
+  servers (`Warp-Result-Locations: remote`): the driver reads each where its `location` says (on
+  the streamed path, from the statement document), with the same token and TLS settings,
+  concurrently with the others. Without the capability every partition is read from the
+  connection's server.
 - **Several open results on one connection.** A server may hold other work on a session until a
   streaming result has been read (warp-duckdb does). So before the driver sends another statement,
   a metadata call or an option change on a session with an unread streaming result, it reads the

@@ -55,6 +55,8 @@ public final class SqlErrors {
     switch (problem.code()) {
       case "invalid_credentials":
       case "invalid_token":
+      case "access_denied":
+      case "flow_not_found":
       case "unsupported_grant_type":
       case "certificate_required":
       case "unknown_certificate_identity":
@@ -68,6 +70,7 @@ public final class SqlErrors {
       case "session_elsewhere":
         return "08001";
       case "server_draining":
+      case "identity_provider_error":
         return "08004";
       case WarpProblem.CLIENT_PROTOCOL_ERROR:
         return "08P01";

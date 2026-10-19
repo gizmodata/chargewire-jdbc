@@ -194,6 +194,54 @@ class BrowserSignInTest {
   }
 
   @Test
+  void aFailedFlowsCodeIsNotAnHttpStatus() {
+    outcome =
+        "{\"state\":\"failed\",\"error\":{\"code\":\"invalid_credentials\",\"detail\":\"x\"}}";
+    SQLException e =
+        assertThrows(
+            SQLInvalidAuthorizationSpecException.class,
+            () -> DriverManager.getConnection(url("authType=oauth_browser&oauthBrowser=none")));
+    assertEquals("invalid_credentials", WarpProblem.codeOf(e));
+    assertEquals(0, WarpProblem.of(e).status(), "it came in a 200 poll answer");
+    assertEquals(0, e.getErrorCode());
+  }
+
+  @Test
+  void anUnknownFailedFlowCodeIsAGenericRefusal() {
+    outcome =
+        "{\"state\":\"failed\",\"error\":{\"code\":\"mfa_enrollment_required\","
+            + "\"detail\":\"later\"}}";
+    SQLException e =
+        assertThrows(
+            SQLInvalidAuthorizationSpecException.class,
+            () -> DriverManager.getConnection(url("authType=oauth_browser&oauthBrowser=none")));
+    assertEquals("28000", e.getSQLState());
+    assertEquals("mfa_enrollment_required", WarpProblem.codeOf(e), "the code passes through");
+  }
+
+  @Test
+  void anUnknownFlowStateKeepsPolling() throws Exception {
+    pendingPolls = 2;
+    server.route(
+        "POST",
+        "/v1/auth/oauth/flows/f_1",
+        (exchange, request, path) -> {
+          int poll = polls.incrementAndGet();
+          json(
+              exchange,
+              200,
+              poll == 1
+                  ? "{\"state\":\"awaiting_second_factor\"}"
+                  : poll == 2 ? "{\"state\":\"pending\"}" : outcome);
+        });
+    try (Connection connection =
+        DriverManager.getConnection(url("authType=oauth_browser&oauthBrowser=none"))) {
+      assertFalse(connection.isClosed());
+    }
+    assertEquals(3, polls.get(), "a state of a later version is not terminal (spec §12)");
+  }
+
+  @Test
   void anIdentityProviderFailureIsAConnectionError() {
     outcome =
         "{\"state\":\"failed\",\"error\":{\"code\":\"identity_provider_error\","
@@ -217,6 +265,7 @@ class BrowserSignInTest {
             SQLInvalidAuthorizationSpecException.class,
             () -> DriverManager.getConnection(url("authType=oauth_browser&oauthBrowser=none")));
     assertTrue(e.getMessage().contains("expired or was already used"), e.getMessage());
+    assertEquals("flow_not_found", WarpProblem.codeOf(e));
   }
 
   @Test

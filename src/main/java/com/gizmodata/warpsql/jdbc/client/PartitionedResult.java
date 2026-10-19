@@ -222,13 +222,26 @@ public final class PartitionedResult implements ResultStream {
           "The server split the result into partitions without naming its statement"
               + " (Warp-Statement-Id)");
     }
+    List<StatementDocument.Partition> partitions;
+    try {
+      partitions = locations(client, sessionId, statementId, count);
+    } catch (SQLException | RuntimeException e) {
+      closeQuietly(response.body());
+      throw e;
+    }
     List<Opener> openers = new ArrayList<>();
     for (int i = 1; i < count; i++) {
       int position = i;
       openers.add(
           () ->
               ResultReader.partition(
-                  client, allocator, sessionId, statementId, null, position, cancelRequested));
+                  client,
+                  allocator,
+                  sessionId,
+                  statementId,
+                  partitions,
+                  position,
+                  cancelRequested));
     }
     // The other partitions start before partition 0's schema is read: all at once (spec §6.10).
     List<Opener> others = openEarly(statementId, openers);
@@ -302,6 +315,40 @@ public final class PartitionedResult implements ResultStream {
       throw e;
     }
     return new PartitionedResult(statementId, allocator, first, others, order, cancelRequested);
+  }
+
+  /**
+   * Returns where a streamed split result's partitions are. Without remote locations every
+   * partition is on this server; with them, the statement document says (spec §6.2).
+   *
+   * @return the partitions, or {@code null} when all are on this server
+   */
+  private static List<StatementDocument.Partition> locations(
+      WarpClient client, String sessionId, String statementId, int count) throws SQLException {
+    if (!client.followsLocations()) {
+      return null;
+    }
+    StatementDocument document = client.status(sessionId, statementId, 0);
+    if (document.state() == StatementDocument.State.FAILED
+        || document.state() == StatementDocument.State.CANCELLED) {
+      throw document.error() != null
+          ? SqlErrors.toSqlException(document.error())
+          : new SQLException("The statement " + document.state() + " mid-result", "HY000");
+    }
+    List<StatementDocument.Partition> partitions = document.partitions();
+    if (partitions.size() != count) {
+      throw SqlErrors.protocolError(
+          "The response says the result has "
+              + count
+              + " partitions, its statement document lists "
+              + partitions.size());
+    }
+    for (int i = 0; i < count; i++) {
+      if (partitions.get(i).index() != i) {
+        throw SqlErrors.protocolError("The statement document lists its partitions out of order");
+      }
+    }
+    return partitions;
   }
 
   /** Starts opening each partition on a thread of its own; each opener then waits for its open. */

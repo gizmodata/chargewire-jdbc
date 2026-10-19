@@ -17,10 +17,11 @@ All notable changes to this project are documented here. The format follows
   - A split result is always read over every partition at once, partition 0 included (each is
     requested before any answers), also when its partitions are held by other servers; those
     were read one after another before. Remote partitions need the `result_locations`
-    capability: only then, and only for `async=true` submissions, does the driver send
-    `Warp-Result-Locations: remote`; a `location` it did not ask for, or one that is not an
-    absolute URL keeping the connection's TLS, is refused before the token goes there. A split
-    result without `Warp-Result-Order` or `partition_order` is a protocol error.
+    capability: only then does the driver send `Warp-Result-Locations: remote`, and on the
+    streamed path it reads the statement document for the locations of partitions 1 to k-1
+    (spec §6.2); a `location` it did not ask for, or one that is not an absolute URL keeping the
+    connection's TLS, is refused before the token goes there. A split result without
+    `Warp-Result-Order` or `partition_order` is a protocol error.
   - Codes the driver makes up begin with `client_`: `http_error` is now `client_http_error`, and
     responses that break the protocol (SQLSTATE `08P01`) carry `client_protocol_error`
     (`WarpProblem.CLIENT_HTTP_ERROR`, `WarpProblem.CLIENT_PROTOCOL_ERROR`).
@@ -45,6 +46,11 @@ All notable changes to this project are documented here. The format follows
   - Open enumerations (spec §12): an unknown statement state is not terminal (the driver keeps
     polling, `StatementDocument.State.OTHER`), and unknown reasons and cancel reasons pass
     through.
+  - Browser sign-in follows the same rules: an unknown flow `state` keeps polling; a failed
+    flow's `error.code` (`access_denied`, `invalid_credentials`, `identity_provider_error`, or
+    an unknown one, a generic refusal with SQLSTATE `28000`) is the problem's code, with no HTTP
+    status (it arrives in a `200` poll answer); `flow_not_found` keeps its code; malformed
+    answers are `client_protocol_error`.
 
 - `resultPartitions` defaults to 8 (was 1): large results are split and read over several
   connections at once. The server decides: a result of fewer than two batches still comes as
