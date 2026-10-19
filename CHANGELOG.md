@@ -25,6 +25,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Browser sign-in (Warp SQL spec §4.3): `authType=oauth_browser` (alias `external`) creates a
+  sign-in flow, opens its URL with `oauthBrowser` (a command, `none` to print the URL, default the
+  desktop's browser), and polls with the flow's secret in the request body at the server's
+  `poll_interval_s` until the person has signed in, for up to `oauthTimeout` seconds (default 300).
+  Refusals are SQLSTATE 28000 with the server's code and detail (`access_denied`,
+  `invalid_credentials`), a provider failure 08004, an expired or collected flow says so, and a
+  server without the `oauth_browser` capability is refused before a browser opens. Never logs
+  the poll secret or the token. Tests: 15 unit tests against the fake server, and
+  `BrowserSignInIT` (4) against warp-duckdb with a mock OpenID Connect provider.
 - Sign-in with the mutual-TLS client certificate (Warp SQL spec §4.4): `authType=client_certificate`
   (alias `mtls`) sends `{"grant_type":"client_certificate"}` over the TLS connection that presents
   `clientCertificate`/`clientKey`, with no user name or password, and renews the token the same

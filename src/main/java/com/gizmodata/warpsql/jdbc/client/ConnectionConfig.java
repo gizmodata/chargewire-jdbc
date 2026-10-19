@@ -21,6 +21,8 @@ public final class ConnectionConfig {
     SUBJECT_TOKEN,
     /** {@code client_certificate} grant: the mutual-TLS client certificate (spec §4.4). */
     CLIENT_CERTIFICATE,
+    /** Browser sign-in with the server's identity provider (spec §4.3). */
+    BROWSER,
     /** No credential: only unauthenticated endpoints work. */
     NONE
   }
@@ -31,6 +33,9 @@ public final class ConnectionConfig {
   final String token;
   final String subjectToken;
   final boolean clientCertificateGrant;
+  final boolean browserSignIn;
+  final String browserCommand;
+  final Duration browserTimeout;
   final boolean useEncryption;
   final boolean disableCertificateVerification;
   final boolean useSystemTrustStore;
@@ -61,6 +66,9 @@ public final class ConnectionConfig {
     this.token = builder.token;
     this.subjectToken = builder.subjectToken;
     this.clientCertificateGrant = builder.clientCertificateGrant;
+    this.browserSignIn = builder.browserSignIn;
+    this.browserCommand = builder.browserCommand;
+    this.browserTimeout = builder.browserTimeout;
     this.useEncryption = builder.useEncryption;
     this.disableCertificateVerification = builder.disableCertificateVerification;
     this.useSystemTrustStore = builder.useSystemTrustStore;
@@ -88,13 +96,16 @@ public final class ConnectionConfig {
   }
 
   /**
-   * Returns which credential the connection uses: the client certificate when the configuration
-   * asks for that grant; otherwise a token wins over a subject token, which wins over a user name
-   * and password.
+   * Returns which credential the connection uses: the browser or the client certificate when the
+   * configuration asks for that sign-in; otherwise a token wins over a subject token, which wins
+   * over a user name and password.
    *
    * @return the credential kind
    */
   public Credential credential() {
+    if (browserSignIn) {
+      return Credential.BROWSER;
+    }
     if (clientCertificateGrant) {
       return Credential.CLIENT_CERTIFICATE;
     }
@@ -156,6 +167,9 @@ public final class ConnectionConfig {
     private String token;
     private String subjectToken;
     private boolean clientCertificateGrant;
+    private boolean browserSignIn;
+    private String browserCommand;
+    private Duration browserTimeout = Duration.ofSeconds(300);
     private boolean useEncryption = true;
     private boolean disableCertificateVerification;
     private boolean useSystemTrustStore = true;
@@ -221,6 +235,22 @@ public final class ConnectionConfig {
      */
     public Builder clientCertificateGrant(boolean clientCertificateGrant) {
       this.clientCertificateGrant = clientCertificateGrant;
+      return this;
+    }
+
+    /**
+     * Signs in through the browser with the server's identity provider (spec §4.3) instead of the
+     * credentials.
+     *
+     * @param command the command that opens the sign-in page (the URL is its last argument), {@code
+     *     none} to print the URL, or {@code null} for the system's browser
+     * @param timeout how long to wait for the person to sign in
+     * @return this builder
+     */
+    public Builder browserSignIn(String command, Duration timeout) {
+      this.browserSignIn = true;
+      this.browserCommand = command;
+      this.browserTimeout = timeout;
       return this;
     }
 

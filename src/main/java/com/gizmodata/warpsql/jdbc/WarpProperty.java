@@ -13,15 +13,30 @@ import java.util.Map;
 public enum WarpProperty {
   /**
    * How the connection signs in: {@code password} (the default: {@link #USER} and {@link
-   * #PASSWORD}, or {@link #TOKEN} or {@link #SUBJECT_TOKEN}), or {@code client_certificate} (alias
+   * #PASSWORD}, or {@link #TOKEN} or {@link #SUBJECT_TOKEN}), {@code client_certificate} (alias
    * {@code mtls}): the mutual-TLS client certificate ({@link #CLIENT_CERTIFICATE}, {@link
-   * #CLIENT_KEY}) is the credential, with no password (spec §4.4).
+   * #CLIENT_KEY}) is the credential, with no password (spec §4.4), or {@code oauth_browser} (alias
+   * {@code external}): the person signs in with the server's identity provider in a browser (spec
+   * §4.3; see {@link #OAUTH_BROWSER} and {@link #OAUTH_TIMEOUT}).
    */
   AUTH_TYPE(
       "authType",
       "password",
-      "password, or client_certificate (alias mtls): sign in with the mutual-TLS client"
-          + " certificate"),
+      "password, client_certificate (alias mtls): sign in with the mutual-TLS client"
+          + " certificate, or oauth_browser (alias external): sign in in a browser with the"
+          + " server's identity provider"),
+  /**
+   * For {@code authType=oauth_browser}: the command that opens the sign-in page, given its URL as
+   * the last argument (split on spaces, no shell); {@code none} only prints the URL to standard
+   * error. Default: the desktop's browser ({@link java.awt.Desktop}), else the system's opener
+   * ({@code open}, {@code xdg-open}, {@code rundll32}), else the URL is printed.
+   */
+  OAUTH_BROWSER(
+      "oauthBrowser",
+      null,
+      "Command that opens the browser sign-in page (URL appended); none prints the URL"),
+  /** For {@code authType=oauth_browser}: seconds to wait for the person to sign in. */
+  OAUTH_TIMEOUT("oauthTimeout", "300", "Seconds to wait for a browser sign-in"),
   /** User name for the {@code password} grant. */
   USER("user", null, "User name"),
   /** Password for the {@code password} grant. Any character is allowed, {@code :} included. */
@@ -146,7 +161,8 @@ public enum WarpProperty {
     } else if (this == RESULT_ORDER) {
       info.choices = new String[] {"preserve", "any"};
     } else if (this == AUTH_TYPE) {
-      info.choices = new String[] {"password", "client_certificate", "mtls"};
+      info.choices =
+          new String[] {"password", "client_certificate", "mtls", "oauth_browser", "external"};
     }
     return info;
   }

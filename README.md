@@ -84,7 +84,9 @@ For a local server without TLS, add `useEncryption=false`.
 | `user`, `password` | | Sign in with the `password` grant. Any character is allowed in the password. |
 | `token` | | A Warp SQL access token to send as is (no sign-in; not renewable) |
 | `subjectToken` | | An identity-provider token for the `token_exchange` grant |
-| `authType` | `password` | `client_certificate` (alias `mtls`): sign in with the mutual-TLS client certificate (`clientCertificate`, `clientKey`) and no password, on servers with the `mtls_identity` capability (spec §4.4). The server binds the token to the certificate; the driver renews it with the certificate. Refused with SQLSTATE 28000 without a certificate, without TLS, or beside `user`, `password`, `token` or `subjectToken` |
+| `authType` | `password` | `client_certificate` (alias `mtls`): sign in with the mutual-TLS client certificate (`clientCertificate`, `clientKey`) and no password, on servers with the `mtls_identity` capability (spec §4.4). The server binds the token to the certificate; the driver renews it with the certificate. Refused with SQLSTATE 28000 without a certificate, without TLS, or beside `user`, `password`, `token` or `subjectToken`. `oauth_browser` (alias `external`): browser sign-in (spec §4.3), see [Browser sign-in](#-browser-sign-in) |
+| `oauthBrowser` | the desktop's | With `authType=oauth_browser`: the command that opens the sign-in page, given its URL as the last argument (split on spaces, no shell); `none` prints the URL to standard error. Default: `java.awt.Desktop`, else `open`/`xdg-open`/`rundll32`, else the URL is printed |
+| `oauthTimeout` | `300` | With `authType=oauth_browser`: seconds to wait for the person to sign in |
 | `catalog`, `schema` | server's | The session's initial catalog (also the URL path) and schema |
 | `useEncryption` | `true` | `false` for plain HTTP (loopback and test servers) |
 | `tlsRootCerts` | | PEM file of extra CA certificates to trust |
@@ -218,6 +220,32 @@ The driver targets Java 17 and runs on newer JDKs; CI runs its unit tests on 17,
 JDK 24 and later the JVM prints a one-time warning about `sun.misc.Unsafe`, which Arrow uses to
 allocate memory; start the JVM with `--sun-misc-unsafe-memory-access=allow` to silence it.
 
+## 🌐 Browser sign-in
+
+On a server with the `oauth_browser` capability (its identity provider configured server-side),
+`authType=oauth_browser` signs the person in with that provider in a web browser, with no
+password in the application:
+
+```java
+Properties properties = new Properties();
+properties.setProperty("authType", "oauth_browser");
+try (Connection connection =
+    DriverManager.getConnection("jdbc:warp://db.example.com:31337", properties)) {
+  // signed in as whoever signed in to the identity provider
+}
+```
+
+`getConnection` creates a sign-in flow (spec §4.3), opens its URL in the browser (`oauthBrowser`
+picks the command; `none` prints the URL for you to open), and waits, polling the server at the
+interval it asks for, until the sign-in is done or `oauthTimeout` passes. The flow's poll secret
+travels only in the poll's request body, and neither it nor the access token is ever printed or
+logged. A refusal (`access_denied`, or a user the server doesn't admit: `invalid_credentials`) is
+an `SQLInvalidAuthorizationSpecException` with SQLSTATE 28000 and the server's reason; a provider
+the server couldn't reach is SQLSTATE 08004; a flow that expired or was already collected says so.
+A server without the capability is refused before any browser opens. The access token is not
+renewed by itself: when it expires, connect again. `user`, `password`, `token` and `subjectToken`
+can't be given beside it.
+
 ## ✅ Testing
 
 Unit tests (`mvn package`) need nothing else. Integration tests (`mvn verify`) start a Warp SQL
@@ -229,7 +257,11 @@ WARP_SQL_JDBC_TEST_SERVER_BINARY=/path/to/warp-sql/cpp/build/warp-duckdb mvn ver
 
 Mutual TLS that carries identity (`ClientCertificateIT`) starts its servers with
 `--mtls-certificate-sign-in --mtls-admin-identities client@example.com` (the test client
-certificate's e-mail SAN), flags warp-duckdb and Hardcharger share. The test certificates in `src/test/resources/certs`
+certificate's e-mail SAN), flags warp-duckdb and Hardcharger share. Browser sign-in
+(`BrowserSignInIT`) starts its server with a mock OpenID Connect provider and uses `curl` as the
+browser; the server's provider flags are a template, `WARP_SQL_JDBC_TEST_SERVER_OAUTH_ARGS`
+(default warp-duckdb's `--oauth-*`), and the client secret goes in the variable
+`WARP_SQL_JDBC_TEST_SERVER_OAUTH_SECRET_ENV` names. The test certificates in `src/test/resources/certs`
 come from `dev/generate-test-certs.sh`.
 
 Without the variable they use a sibling checkout's `../warp-sql/cpp/build-main/warp-duckdb`, or

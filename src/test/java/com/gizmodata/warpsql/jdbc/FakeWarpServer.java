@@ -94,6 +94,9 @@ final class FakeWarpServer implements AutoCloseable {
   volatile String protocolVersions = "[\"1\"]";
   volatile int expiresIn = 3600;
 
+  /** More members of discovery's {@code auth} object, each with a leading comma. */
+  volatile String authExtra = "";
+
   FakeWarpServer() throws IOException {
     this("/warp");
   }
@@ -143,7 +146,9 @@ final class FakeWarpServer implements AutoCloseable {
                     + ",\"server\":{\"name\":\"fake\",\"version\":\"9.8.7\"},\"capabilities\":"
                     + capabilities
                     + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\","
-                    + "\"client_certificate\"]}}"));
+                    + "\"client_certificate\"]"
+                    + authExtra
+                    + "}}"));
     route(
         "POST",
         "/v1/auth/token",

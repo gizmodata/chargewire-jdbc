@@ -66,6 +66,7 @@ public final class WarpClient implements AutoCloseable {
   private Set<String> capabilities = Set.of();
   private String serverName;
   private String serverVersion;
+  private String browserProvider;
 
   private final Object tokenLock = new Object();
   private String accessToken;
@@ -211,6 +212,7 @@ public final class WarpClient implements AutoCloseable {
     capabilities = Set.copyOf(listed);
     serverName = doc.path("server").path("name").asText(null);
     serverVersion = doc.path("server").path("version").asText(null);
+    browserProvider = doc.path("auth").path("oauth_browser").path("provider").asText(null);
   }
 
   private void signIn() throws SQLException {
@@ -241,6 +243,15 @@ public final class WarpClient implements AutoCloseable {
               "28000");
         }
         requestToken(credential);
+        return;
+      case BROWSER:
+        if (!hasCapability("oauth_browser")) {
+          throw new SQLInvalidAuthorizationSpecException(
+              "The server does not offer browser sign-in (no capability oauth_browser); use"
+                  + " authType=password",
+              "28000");
+        }
+        browserSignIn();
         return;
       default:
         throw new SQLInvalidAuthorizationSpecException(
@@ -285,6 +296,109 @@ public final class WarpClient implements AutoCloseable {
     }
   }
 
+  /**
+   * Browser sign-in (spec §4.3): creates a flow, shows its authorize URL, and polls with the flow's
+   * secret (in the body, never logged) until the person has signed in.
+   */
+  private void browserSignIn() throws SQLException {
+    HttpResponse<byte[]> created =
+        send(
+            () -> postJson(uri("/v1/auth/oauth/flows"), "{}".getBytes(StandardCharsets.UTF_8)),
+            handlerBytes(),
+            true,
+            false);
+    JsonNode flow = json(created, "browser sign-in");
+    String flowId = flow.path("flow_id").asText("");
+    String pollSecret = flow.path("poll_secret").asText("");
+    String authorizeUrl = flow.path("authorize_url").asText("");
+    if (flowId.isEmpty() || pollSecret.isEmpty() || authorizeUrl.isEmpty()) {
+      throw new SQLNonTransientConnectionException(
+          "The browser sign-in response lacks flow_id, poll_secret or authorize_url", "08P01");
+    }
+    long interval = Math.max(1, flow.path("poll_interval_s").asLong(2));
+    String what =
+        (serverName == null ? "the server" : serverName)
+            + (browserProvider == null || browserProvider.isEmpty()
+                ? ""
+                : " with " + browserProvider);
+    BrowserOpener.open(config.browserCommand, authorizeUrl, what, System.err);
+
+    byte[] poll = bytes(newObject().put("poll_secret", pollSecret));
+    URI target = uri("/v1/auth/oauth/flows/" + encode(flowId));
+    long deadline = System.nanoTime() + config.browserTimeout.toNanos();
+    while (true) {
+      long now = System.nanoTime();
+      HttpResponse<byte[]> response;
+      try {
+        // Not retried: a poll that completed but whose answer was lost can't be repeated
+        // (the token is handed out once).
+        response = http.send(postJson(target, poll).build(), handlerBytes());
+      } catch (HttpTimeoutException e) {
+        throw new SQLTimeoutException("Timed out waiting for the server's response", "HYT01", e);
+      } catch (IOException e) {
+        throw connectionError(e);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new SQLException("Interrupted during the browser sign-in", "HY008", e);
+      }
+      if (response.statusCode() >= 400) {
+        WarpProblem problem = readProblem(response);
+        if ("flow_not_found".equals(problem.code())) {
+          throw new SQLInvalidAuthorizationSpecException(
+              "The browser sign-in expired or was already used; connect again to sign in", "28000");
+        }
+        throw SqlErrors.toSqlException(problem);
+      }
+      JsonNode doc = json(response, "browser sign-in");
+      String state = doc.path("state").asText("");
+      if ("complete".equals(state)) {
+        String token = doc.path("access_token").asText("");
+        if (token.isEmpty()) {
+          throw new SQLNonTransientConnectionException(
+              "The browser sign-in completed without an access_token", "08P01");
+        }
+        long expiresIn = doc.path("expires_in").asLong(0);
+        synchronized (tokenLock) {
+          accessToken = token;
+          tokenExpires = expiresIn > 0;
+          tokenRenewAtNanos = now + Duration.ofSeconds(expiresIn).toNanos() - TOKEN_MARGIN_NANOS;
+        }
+        return;
+      }
+      if ("failed".equals(state)) {
+        String code = doc.path("error").path("code").asText("invalid_credentials");
+        String detail = doc.path("error").path("detail").asText("");
+        String message =
+            "The browser sign-in failed (" + code + ")" + (detail.isEmpty() ? "" : ": " + detail);
+        if ("access_denied".equals(code) || "invalid_credentials".equals(code)) {
+          throw new SQLInvalidAuthorizationSpecException(message, "28000");
+        }
+        throw new SQLNonTransientConnectionException(message, "08004");
+      }
+      if (!"pending".equals(state)) {
+        throw new SQLNonTransientConnectionException(
+            "Unexpected browser sign-in state '" + state + "'", "08P01");
+      }
+      if (System.nanoTime() - deadline > 0) {
+        throw new SQLTimeoutException(
+            "The browser sign-in was not completed within "
+                + config.browserTimeout.toSeconds()
+                + " s",
+            "HYT00");
+      }
+      try {
+        Thread.sleep(Math.min(Duration.ofSeconds(interval).toMillis(), remainingMillis(deadline)));
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new SQLException("Interrupted during the browser sign-in", "HY008", e);
+      }
+    }
+  }
+
+  private static long remainingMillis(long deadlineNanos) {
+    return Math.max(1, Duration.ofNanos(deadlineNanos - System.nanoTime()).toMillis() + 1);
+  }
+
   private boolean canRenewToken() {
     ConnectionConfig.Credential credential = config.credential();
     return credential == ConnectionConfig.Credential.PASSWORD
@@ -298,6 +412,12 @@ public final class WarpClient implements AutoCloseable {
    * @throws SQLException if the credential cannot be renewed or is refused
    */
   public void renewToken() throws SQLException {
+    if (config.credential() == ConnectionConfig.Credential.BROWSER) {
+      throw new SQLInvalidAuthorizationSpecException(
+          "The access token from the browser sign-in can no longer be used; reconnect to sign in"
+              + " again",
+          "28000");
+    }
     if (!canRenewToken()) {
       throw new SQLInvalidAuthorizationSpecException(
           "The access token can no longer be used and the connection has no credential to get a"

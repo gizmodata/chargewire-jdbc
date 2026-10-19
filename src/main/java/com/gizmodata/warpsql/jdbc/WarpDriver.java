@@ -163,7 +163,18 @@ public final class WarpDriver implements Driver {
     }
     boolean anyOrder = resultOrderIsAny(WarpProperty.RESULT_ORDER.get(properties));
     boolean certificateGrant = clientCertificateGrant(properties);
-    return new ConnectionConfig.Builder()
+    ConnectionConfig.Builder builder = new ConnectionConfig.Builder();
+    if (browserSignIn(properties)) {
+      long timeout = number(properties, WarpProperty.OAUTH_TIMEOUT);
+      if (timeout == 0) {
+        throw invalid(WarpProperty.OAUTH_TIMEOUT, "0", "a number of seconds above zero");
+      }
+      String command = WarpProperty.OAUTH_BROWSER.get(properties);
+      builder.browserSignIn(
+          command == null || command.isBlank() ? null : command.trim(),
+          Duration.ofSeconds(timeout));
+    }
+    return builder
         .clientCertificateGrant(certificateGrant)
         .address(url.host, url.port)
         .basePath(WarpProperty.BASE_PATH.get(properties))
@@ -192,6 +203,61 @@ public final class WarpDriver implements Driver {
   }
 
   /**
+   * Reads {@code authType}: {@code password}, {@code client_certificate} (alias {@code mtls}) or
+   * {@code oauth_browser} (alias {@code external}), in any case.
+   *
+   * @param properties the connection's properties, keyed in lower case
+   * @return {@code password}, {@code client_certificate} or {@code oauth_browser}
+   * @throws SQLException for any other value
+   */
+  static String authType(Map<String, String> properties) throws SQLException {
+    String value = WarpProperty.AUTH_TYPE.get(properties);
+    String type = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    switch (type) {
+      case "password":
+        return "password";
+      case "client_certificate":
+      case "mtls":
+        return "client_certificate";
+      case "oauth_browser":
+      case "external":
+        return "oauth_browser";
+      default:
+        throw invalid(
+            WarpProperty.AUTH_TYPE,
+            value,
+            "password, client_certificate (or mtls) or oauth_browser (or external)");
+    }
+  }
+
+  /**
+   * Checks that a browser sign-in ({@code authType=oauth_browser}, spec §4.3) has no other
+   * credential.
+   *
+   * @param properties the connection's properties, keyed in lower case
+   * @return {@code true} for a browser sign-in
+   * @throws SQLException for an unknown {@code authType} or a credential beside it
+   */
+  static boolean browserSignIn(Map<String, String> properties) throws SQLException {
+    if (!"oauth_browser".equals(authType(properties))) {
+      return false;
+    }
+    for (WarpProperty credential :
+        new WarpProperty[] {
+          WarpProperty.USER, WarpProperty.PASSWORD, WarpProperty.TOKEN, WarpProperty.SUBJECT_TOKEN
+        }) {
+      if (!blank(credential.get(properties))) {
+        throw new SQLInvalidAuthorizationSpecException(
+            "authType=oauth_browser signs in through the browser with the server's identity"
+                + " provider; remove "
+                + credential.key(),
+            "28000");
+      }
+    }
+    return true;
+  }
+
+  /**
    * Reads {@code authType}, and checks that a {@code client_certificate} sign-in has a client
    * certificate over TLS and no other credential.
    *
@@ -202,11 +268,8 @@ public final class WarpDriver implements Driver {
   static boolean clientCertificateGrant(Map<String, String> properties) throws SQLException {
     String value = WarpProperty.AUTH_TYPE.get(properties);
     String type = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
-    if ("password".equals(type)) {
+    if (!"client_certificate".equals(authType(properties))) {
       return false;
-    }
-    if (!"client_certificate".equals(type) && !"mtls".equals(type)) {
-      throw invalid(WarpProperty.AUTH_TYPE, value, "password, client_certificate or mtls");
     }
     if (!bool(properties, WarpProperty.USE_ENCRYPTION)) {
       throw new SQLInvalidAuthorizationSpecException(

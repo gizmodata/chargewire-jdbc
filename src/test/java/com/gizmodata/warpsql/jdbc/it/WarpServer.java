@@ -113,6 +113,14 @@ final class WarpServer implements AutoCloseable {
 
   /** Starts a server; with {@code tls}, the arguments must include the TLS flags. */
   static WarpServer start(boolean tls, String... extraArgs) {
+    return start(Map.of(), tls, extraArgs);
+  }
+
+  /**
+   * Starts a server with more environment variables; {@code {port}} in an argument becomes the
+   * server's port.
+   */
+  static WarpServer start(Map<String, String> extraEnvironment, boolean tls, String... extraArgs) {
     Path binary = binary();
     int port = freePort();
     byte[] random = new byte[12];
@@ -131,7 +139,9 @@ final class WarpServer implements AutoCloseable {
                   Integer.toString(port),
                   USERNAME_FLAG,
                   USER));
-      command.addAll(List.of(extraArgs));
+      for (String arg : extraArgs) {
+        command.add(arg.replace("{port}", Integer.toString(port)));
+      }
       ProcessBuilder builder =
           new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile());
       // Only what the server needs: servers also read settings and credentials from variables
@@ -143,6 +153,7 @@ final class WarpServer implements AutoCloseable {
       environment.put("PATH", path == null ? "/usr/bin:/bin" : path);
       environment.put("HOME", home.toString());
       environment.put("TMPDIR", home.toString());
+      environment.putAll(extraEnvironment);
       environment.put(PASSWORD_VARIABLE, password);
       Process process = builder.start();
       WarpServer server = new WarpServer(port, password, tls, process, home, log);
