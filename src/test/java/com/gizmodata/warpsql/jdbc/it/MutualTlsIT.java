@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.gizmodata.warpsql.jdbc.WarpProblem;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -67,8 +68,9 @@ class MutualTlsIT {
     SQLException error =
         assertThrows(
             SQLException.class, () -> DriverManager.getConnection(server.url(""), trusting()));
-    assertTrue(
-        error.getSQLState().startsWith("08"), error.getSQLState() + " " + error.getMessage());
+    // The TLS alert is the refusal it stands for, not a server the driver could not reach (§4.4).
+    assertEquals("certificate_required", WarpProblem.codeOf(error), error.toString());
+    assertEquals("28000", error.getSQLState(), error.getMessage());
   }
 
   @Test

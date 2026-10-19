@@ -89,13 +89,15 @@ final class FakeWarpServer implements AutoCloseable {
   final AtomicInteger tokens = new AtomicInteger();
   final AtomicInteger sessions = new AtomicInteger();
   volatile String capabilities =
-      "[\"prepared_statements\",\"transactions\",\"result_retention\",\"long_poll\","
-          + "\"ipc_compression_zstd\"]";
+      "[\"prepared_statements\",\"transactions\",\"long_poll\",\"ipc_compression_zstd\"]";
   volatile String protocolVersions = "[\"1\"]";
   volatile int expiresIn = 3600;
 
   /** More members of discovery's {@code auth} object, each with a leading comma. */
   volatile String authExtra = "";
+
+  /** The {@code transaction} the session document reports (spec §5.1), or {@code null} for none. */
+  volatile String transaction = "none";
 
   FakeWarpServer() throws IOException {
     this("/warp");
@@ -180,6 +182,7 @@ final class FakeWarpServer implements AutoCloseable {
           ObjectNode session =
               MAPPER.createObjectNode().put("session_id", "s" + sessions.incrementAndGet());
           session.set("options", options);
+          session.put("transaction", options.path("autocommit").asBoolean(true) ? "none" : "open");
           json(exchange, 201, session.put("idle_timeout_s", 900).toString());
         });
     route("DELETE", "/v1/sessions/([^/]+)", (exchange, request, path) -> empty(exchange, 204));
@@ -192,7 +195,9 @@ final class FakeWarpServer implements AutoCloseable {
                 200,
                 "{\"session_id\":\""
                     + path.group(1)
-                    + "\",\"options\":{\"catalog\":\"cat\",\"schema\":\"main\"}}"));
+                    + "\",\"options\":{\"catalog\":\"cat\",\"schema\":\"main\"}"
+                    + (transaction == null ? "" : ",\"transaction\":\"" + transaction + "\"")
+                    + "}"));
     server.start();
   }
 
@@ -270,7 +275,7 @@ final class FakeWarpServer implements AutoCloseable {
         ("{\"type\":\"urn:warp-sql:error:"
                 + code
                 + "\",\"title\":\""
-                + code
+                + title(code)
                 + "\",\"status\":"
                 + status
                 + ",\"code\":\""
@@ -281,6 +286,12 @@ final class FakeWarpServer implements AutoCloseable {
                 + extra
                 + "}")
             .getBytes(StandardCharsets.UTF_8));
+  }
+
+  /** A human-readable title, as servers send (spec §11): {@code sql_error} is "Sql error". */
+  private static String title(String code) {
+    String words = code.replace('_', ' ');
+    return Character.toUpperCase(words.charAt(0)) + words.substring(1);
   }
 
   static void arrow(HttpExchange exchange, String statementId, byte[] stream) throws IOException {

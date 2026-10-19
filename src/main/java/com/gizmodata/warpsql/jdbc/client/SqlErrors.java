@@ -21,7 +21,8 @@ import java.util.regex.Pattern;
  *
  * <p>The SQLSTATE is the server's when it sent one; otherwise it follows from the problem's {@code
  * code}, and for a code this driver does not know, from the HTTP status (spec §12). The subclass
- * follows from the SQLSTATE's class, as {@link SQLException}'s subclasses are defined.
+ * follows from the SQLSTATE's class, as {@link SQLException}'s subclasses are defined, except that
+ * a timeout is a {@link SQLTimeoutException} and a 429 or 503 a transient error.
  */
 public final class SqlErrors {
   private static final Pattern SQLSTATE = Pattern.compile("[0-9A-Z]{5}");
@@ -54,7 +55,8 @@ public final class SqlErrors {
     switch (problem.code()) {
       case "invalid_credentials":
       case "invalid_token":
-      case "client_certificate_required":
+      case "unsupported_grant_type":
+      case "certificate_required":
       case "unknown_certificate_identity":
       case "certificate_revoked":
       case "certificate_mismatch":
@@ -67,6 +69,8 @@ public final class SqlErrors {
         return "08001";
       case "server_draining":
         return "08004";
+      case WarpProblem.CLIENT_PROTOCOL_ERROR:
+        return "08P01";
       case "permission_denied":
         return "42501";
       case "read_only":
@@ -84,6 +88,10 @@ public final class SqlErrors {
       case "statement_not_found":
       case "prepared_not_found":
         return "26000";
+      case "partition_not_found":
+      case "result_not_resumable":
+      case "result_expired":
+        return "24000";
       case "too_many_sessions":
       case "result_quota_exceeded":
       case "rate_limited":
@@ -97,6 +105,7 @@ public final class SqlErrors {
       case "method_not_allowed":
         return "0A000";
       default:
+        // bad_request, execution_error, internal_error, ... and codes of later versions (spec §12).
         return defaultSqlStateForStatus(problem.status());
     }
   }
@@ -120,16 +129,58 @@ public final class SqlErrors {
     return "HY000";
   }
 
+  /**
+   * Builds the error for a response that breaks the protocol (code {@code client_protocol_error},
+   * SQLSTATE {@code 08P01}).
+   *
+   * @param message what was wrong
+   * @return the exception
+   */
+  public static SQLException protocolError(String message) {
+    return protocolError(message, null);
+  }
+
+  /**
+   * Builds the error for a response that breaks the protocol (code {@code client_protocol_error},
+   * SQLSTATE {@code 08P01}).
+   *
+   * @param message what was wrong
+   * @param cause what found it, or {@code null}
+   * @return the exception
+   */
+  public static SQLException protocolError(String message, Throwable cause) {
+    WarpProblem problem =
+        new WarpProblem(
+            0, WarpProblem.CLIENT_PROTOCOL_ERROR, "Protocol error", message, "08P01", null, null);
+    SQLException error = new SQLNonTransientConnectionException(problem.message(), "08P01");
+    WarpProblemException carrier = new WarpProblemException(problem);
+    if (cause != null) {
+      carrier.initCause(cause);
+    }
+    error.initCause(carrier);
+    return error;
+  }
+
+  /**
+   * Picks the subclass. The code decides where it says what happened; otherwise the SQLSTATE's
+   * class does. A statement's own failure is never a server fault, whatever status carried it (spec
+   * §11): only a 5xx status makes an error a plain {@link SQLException}.
+   */
   private static SQLException create(WarpProblem problem, String message, String sqlState) {
     int vendorCode = problem.status();
     if ("statement_timeout".equals(problem.code())) {
       return new SQLTimeoutException(message, sqlState, vendorCode);
+    }
+    if ("statement_cancelled".equals(problem.code())) {
+      // Running it again may well succeed: neither transient nor non-transient.
+      return new SQLException(message, sqlState, vendorCode);
     }
     if (problem.status() == 429 || problem.status() == 503) {
       return sqlState.startsWith("08")
           ? new SQLTransientConnectionException(message, sqlState, vendorCode)
           : new SQLTransientException(message, sqlState, vendorCode);
     }
+    boolean serverFault = problem.status() >= 500;
     switch (sqlState.substring(0, 2)) {
       case "08":
         return "session_elsewhere".equals(problem.code())
@@ -147,14 +198,10 @@ public final class SqlErrors {
         return new SQLTransactionRollbackException(message, sqlState, vendorCode);
       case "42":
         return new SQLSyntaxErrorException(message, sqlState, vendorCode);
-      case "HY":
-        return problem.status() >= 500
+      default:
+        return serverFault
             ? new SQLException(message, sqlState, vendorCode)
             : new SQLNonTransientException(message, sqlState, vendorCode);
-      default:
-        return problem.status() >= 400 && problem.status() < 500
-            ? new SQLNonTransientException(message, sqlState, vendorCode)
-            : new SQLException(message, sqlState, vendorCode);
     }
   }
 }

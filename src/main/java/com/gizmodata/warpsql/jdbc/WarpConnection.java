@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gizmodata.warpsql.jdbc.client.ConnectionConfig;
 import com.gizmodata.warpsql.jdbc.client.ResultStream;
+import com.gizmodata.warpsql.jdbc.client.SqlErrors;
 import com.gizmodata.warpsql.jdbc.client.WarpClient;
 import java.sql.Array;
 import java.sql.Blob;
@@ -43,9 +44,47 @@ import org.apache.arrow.memory.RootAllocator;
  * connection opens a new one, replays its catalog, schema and autocommit setting, and reports the
  * loss of temporary state as a {@link SQLWarning} on {@link #getWarnings()}. A statement that found
  * the session gone is run again in the new session, unless a transaction was open: its work is
- * gone, so that statement fails with SQLSTATE {@code 08007} instead.
+ * gone, so that statement fails with SQLSTATE {@code 08007} instead. With autocommit off, a
+ * transaction is open once a statement ran since the last commit or rollback; with autocommit on,
+ * one is open when the session document last read said so ({@link #getTransactionState()}: a SQL
+ * {@code BEGIN}, spec §5.1).
+ *
+ * <p>A session the server ended ({@code session_ended}, spec §5.6) is reopened only when its token
+ * expired, after signing in again; after any other reason ({@code killed}, {@code token_revoked},
+ * {@code credentials_changed}, {@code principal_dropped}, or one this driver does not know) the
+ * connection is closed and the error names the reason.
  */
 public final class WarpConnection implements Connection {
+  /**
+   * Where the session's transaction stands (spec §5.1, the session document's {@code transaction}).
+   */
+  public enum TransactionState {
+    /** No transaction is open: each statement commits as it runs. */
+    NONE,
+    /** A transaction is open. */
+    OPEN,
+    /**
+     * A statement failed inside the transaction, and the server refuses every statement until a
+     * rollback.
+     */
+    ABORTED,
+    /** The server did not say, or said something this driver does not know (spec §12). */
+    UNKNOWN;
+
+    static TransactionState of(JsonNode session) {
+      switch (session.path("transaction").asText("")) {
+        case "none":
+          return NONE;
+        case "open":
+          return OPEN;
+        case "aborted":
+          return ABORTED;
+        default:
+          return UNKNOWN;
+      }
+    }
+  }
+
   private static final BufferAllocator ROOT = new RootAllocator();
 
   private final WarpClient client;
@@ -65,6 +104,7 @@ public final class WarpConnection implements Connection {
   private volatile boolean optionsStale;
   private volatile boolean autoCommit = true;
   private volatile boolean transactionDirty;
+  private volatile TransactionState transaction = TransactionState.UNKNOWN;
   private volatile boolean closed;
   private volatile boolean closing;
   private volatile boolean released;
@@ -122,11 +162,11 @@ public final class WarpConnection implements Connection {
     JsonNode session = client.createSession(options);
     String id = session.path("session_id").asText(null);
     if (id == null || id.isEmpty()) {
-      throw new SQLNonTransientConnectionException(
-          "The server's session response has no session_id", "08P01");
+      throw SqlErrors.protocolError("The server's session response has no session_id");
     }
     sessionId = id;
     sessionGeneration++;
+    transaction = TransactionState.of(session);
     try {
       applyOptions(session.path("options"), catalog, schema);
     } catch (SQLException e) {
@@ -221,16 +261,20 @@ public final class WarpConnection implements Connection {
       WarpProblem problem = WarpProblem.of(cause);
       String lost = sessionId;
       if ("session_ended".equals(problem.code())) {
-        if (!"token_expired".equals(problem.reason())) {
+        String reason = problem.reason();
+        if (!"token_expired".equals(reason)) {
           // Unusable from now on; close() still releases what the connection holds.
           ended = true;
           closed = true;
-          throw new SQLNonTransientConnectionException(
-              "The server ended the session (" + problem.reason() + "); reconnect", "08003", cause);
+          throw new SQLNonTransientConnectionException(endedMessage(reason), "08003", cause);
         }
+        // The session's token expired: a new session needs a new token (spec §5.6).
         client.renewToken();
       }
-      boolean lostTransaction = !autoCommit && transactionDirty;
+      boolean lostTransaction =
+          autoCommit
+              ? transaction == TransactionState.OPEN || transaction == TransactionState.ABORTED
+              : transactionDirty;
       transactionDirty = false;
       openSession();
       addWarning(
@@ -252,6 +296,19 @@ public final class WarpConnection implements Connection {
             cause);
       }
     }
+  }
+
+  private static String endedMessage(String reason) {
+    if (reason == null) {
+      return "The server ended the session; reconnect";
+    }
+    if (!WarpClient.mayRenewAfter(reason)) {
+      // token_revoked, credentials_changed, principal_dropped: signing in again would not help.
+      return "The server ended the session ("
+          + reason
+          + "): the access it was opened with was withdrawn; reconnect with valid credentials";
+    }
+    return "The server ended the session (" + reason + "); reconnect";
   }
 
   /**
@@ -467,6 +524,8 @@ public final class WarpConnection implements Connection {
     setOption("autocommit", autoCommit);
     this.autoCommit = autoCommit;
     transactionDirty = false;
+    // Off opens a transaction; on comes after the commit above (spec §5.1).
+    transaction = autoCommit ? TransactionState.NONE : TransactionState.OPEN;
   }
 
   @Override
@@ -578,13 +637,33 @@ public final class WarpConnection implements Connection {
 
   private void refreshOptions() throws SQLException {
     if (optionsStale) {
-      JsonNode session = withSession(client::getSession, false);
-      synchronized (sessionLock) {
-        catalog = session.path("options").path("catalog").asText(null);
-        schema = session.path("options").path("schema").asText(null);
-        optionsStale = false;
-      }
+      readSession();
     }
+  }
+
+  /** Reads the session document: its options and its transaction. */
+  private void readSession() throws SQLException {
+    JsonNode session = withSession(client::getSession, false);
+    synchronized (sessionLock) {
+      catalog = session.path("options").path("catalog").asText(null);
+      schema = session.path("options").path("schema").asText(null);
+      optionsStale = false;
+      transaction = TransactionState.of(session);
+    }
+  }
+
+  /**
+   * Returns where the session's transaction stands, as the server reports it (spec §5.2): a SQL
+   * {@code BEGIN} shows here once its statement has ended, and so does a transaction the server
+   * aborted after a failed statement. With autocommit off a transaction is always open.
+   *
+   * @return the session's transaction
+   * @throws SQLException if the session cannot be read
+   */
+  public TransactionState getTransactionState() throws SQLException {
+    checkOpen();
+    readSession();
+    return transaction;
   }
 
   @Override
@@ -654,7 +733,8 @@ public final class WarpConnection implements Connection {
     }
     Duration wait = timeout > 0 ? Duration.ofSeconds(timeout) : null;
     try {
-      withSession(id -> client.getSession(id, wait), false);
+      JsonNode session = withSession(id -> client.getSession(id, wait), false);
+      transaction = TransactionState.of(session);
       return true;
     } catch (SQLException e) {
       return false;

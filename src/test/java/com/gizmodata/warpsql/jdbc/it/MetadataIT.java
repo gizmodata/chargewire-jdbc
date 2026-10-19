@@ -78,6 +78,7 @@ class MetadataIT {
       assertEquals("warp", metaData.getUserName());
       assertFalse(metaData.getURL().contains(SharedServer.get().password));
       assertTrue(metaData.supportsTransactions());
+      assertFalse(metaData.isReadOnly(), "server_read_only");
       assertTrue(metaData.supportsBatchUpdates());
       assertTrue(metaData.supportsResultSetType(ResultSet.TYPE_FORWARD_ONLY));
       assertFalse(metaData.supportsResultSetType(ResultSet.TYPE_SCROLL_INSENSITIVE));

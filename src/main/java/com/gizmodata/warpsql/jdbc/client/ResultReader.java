@@ -31,9 +31,9 @@ import org.apache.arrow.vector.util.TransferPair;
  * <p>A stream that breaks off, whether the connection dropped or the statement failed mid-stream
  * (spec §6.6), is explained by the statement document: a failed or cancelled statement raises its
  * own error, and a succeeded statement whose result the server retained is fetched again from the
- * next unread batch (spec §6.5). A result with several partitions is read partition by partition,
- * unless the reader is for one partition only: {@link PartitionedResult} reads the partitions of a
- * split result (spec §6.10) concurrently, with one reader each.
+ * next unread batch (spec §6.5). A reader reads one partition: {@link PartitionedResult} reads the
+ * partitions of a split result (spec §6.10) concurrently, with one reader each, as the protocol
+ * requires.
  *
  * <p>{@link #buffer(long)} reads the rest of the stream into memory at once. The connection does
  * that before it sends anything else that needs the session, because a server may hold a session's
@@ -50,7 +50,6 @@ public final class ResultReader implements ResultStream {
   private final String sessionId;
   private final String statementId;
   private final BooleanSupplier cancelRequested;
-  private final boolean onePartition;
   private List<StatementDocument.Partition> partitions;
   private int partition;
   private long batchesRead;
@@ -75,18 +74,17 @@ public final class ResultReader implements ResultStream {
       BufferAllocator allocator,
       String sessionId,
       String statementId,
-      BooleanSupplier cancelRequested,
-      boolean onePartition) {
+      BooleanSupplier cancelRequested) {
     this.client = client;
     this.allocator = allocator;
     this.sessionId = sessionId;
     this.statementId = statementId;
     this.cancelRequested = cancelRequested;
-    this.onePartition = onePartition;
   }
 
   /**
-   * Reads a result streaming in a submission's response (the one-round-trip path).
+   * Reads a result streaming in a submission's response (the one-round-trip path): all of it, or
+   * partition 0 of a split result.
    *
    * @param client the client
    * @param allocator where batches are allocated
@@ -104,33 +102,8 @@ public final class ResultReader implements ResultStream {
       WarpClient.ArrowResponse response,
       BooleanSupplier cancelRequested)
       throws SQLException {
-    return streamed(client, allocator, sessionId, response, cancelRequested, false);
-  }
-
-  /**
-   * Reads a result streaming in a submission's response, either all of it or, for a result split
-   * into partitions (spec §6.10), partition 0 only.
-   *
-   * @param client the client
-   * @param allocator where batches are allocated
-   * @param sessionId the session
-   * @param response the streaming response
-   * @param cancelRequested whether the application cancelled the statement
-   * @param onePartition read partition 0 only, never the partitions after it
-   * @return a reader positioned before the first batch
-   * @throws SQLException if the stream fails before its schema, with the statement's error
-   */
-  static ResultReader streamed(
-      WarpClient client,
-      BufferAllocator allocator,
-      String sessionId,
-      WarpClient.ArrowResponse response,
-      BooleanSupplier cancelRequested,
-      boolean onePartition)
-      throws SQLException {
     ResultReader result =
-        new ResultReader(
-            client, allocator, sessionId, response.statementId(), cancelRequested, onePartition);
+        new ResultReader(client, allocator, sessionId, response.statementId(), cancelRequested);
     result.start(response.body());
     return result;
   }
@@ -160,7 +133,7 @@ public final class ResultReader implements ResultStream {
       BooleanSupplier cancelRequested)
       throws SQLException {
     ResultReader result =
-        new ResultReader(client, allocator, sessionId, statementId, cancelRequested, true);
+        new ResultReader(client, allocator, sessionId, statementId, cancelRequested);
     result.partitions = partitions;
     result.partition = position;
     result.start(result.open(0));
@@ -168,7 +141,7 @@ public final class ResultReader implements ResultStream {
   }
 
   /**
-   * Fetches the result of a succeeded statement (the status-document path).
+   * Fetches the result of a succeeded statement in one partition (the status-document path).
    *
    * @param client the client
    * @param allocator where batches are allocated
@@ -186,8 +159,7 @@ public final class ResultReader implements ResultStream {
       BooleanSupplier cancelRequested)
       throws SQLException {
     ResultReader result =
-        new ResultReader(
-            client, allocator, sessionId, document.statementId(), cancelRequested, false);
+        new ResultReader(client, allocator, sessionId, document.statementId(), cancelRequested);
     result.partitions = document.partitions().isEmpty() ? null : document.partitions();
     result.start(result.open(0));
     return result;
@@ -225,8 +197,7 @@ public final class ResultReader implements ResultStream {
     try {
       return reader.getVectorSchemaRoot();
     } catch (IOException e) {
-      throw new SQLNonTransientConnectionException(
-          "Cannot read the result: " + e.getMessage(), "08P01", e);
+      throw SqlErrors.protocolError("Cannot read the result: " + e.getMessage(), e);
     }
   }
 
@@ -325,9 +296,7 @@ public final class ResultReader implements ResultStream {
     } catch (SQLException e) {
       pendingError = e;
     } catch (IOException e) {
-      pendingError =
-          new SQLNonTransientConnectionException(
-              "Cannot read the result: " + e.getMessage(), "08P01", e);
+      pendingError = SqlErrors.protocolError("Cannot read the result: " + e.getMessage(), e);
     }
     bufferedDictionaries = new Dictionaries(reader, allocator);
     finished = false;
@@ -403,12 +372,6 @@ public final class ResultReader implements ResultStream {
         continue;
       }
       drainBody();
-      if (!onePartition && partitions != null && partition + 1 < partitions.size()) {
-        partition++;
-        batchesRead = 0;
-        start(open(0));
-        continue;
-      }
       finished = true;
     }
     return false;
@@ -420,8 +383,8 @@ public final class ResultReader implements ResultStream {
         attach(newBody);
         Schema read = reader.getVectorSchemaRoot().getSchema();
         if (schema != null && !schema.equals(read)) {
-          throw new SQLNonTransientConnectionException(
-              "A resumed or partitioned result's schema differs from the result's", "08P01");
+          throw SqlErrors.protocolError(
+              "A resumed or partitioned result's schema differs from the result's");
         }
         schema = read;
         return;

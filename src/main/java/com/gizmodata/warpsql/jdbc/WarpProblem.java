@@ -8,9 +8,24 @@ import java.util.Objects;
  *
  * <p>Every {@link SQLException} the driver raises for a server error carries one: its cause is a
  * {@link WarpProblemException}, and {@link #of(Throwable)} finds it. {@link #code()} is the stable,
- * machine-readable part; {@link #detail()} is for people.
+ * machine-readable part; {@link #detail()} is for people. Decide on the code, never on the title or
+ * detail. New codes and reasons can appear in later versions of the protocol (spec §12): handle an
+ * unknown code by its {@link #status()}.
+ *
+ * <p>A few failures the driver finds itself, with no problem document from the server, carry a
+ * problem too; their codes begin with {@code client_} (spec §11), which servers never send: {@link
+ * #CLIENT_HTTP_ERROR} and {@link #CLIENT_PROTOCOL_ERROR}.
  */
 public final class WarpProblem {
+  /**
+   * The code of an error response that was not a problem document (a proxy's error page, say), or a
+   * problem document without a code.
+   */
+  public static final String CLIENT_HTTP_ERROR = "client_http_error";
+
+  /** The code of a response that breaks the protocol, such as a split result without its order. */
+  public static final String CLIENT_PROTOCOL_ERROR = "client_protocol_error";
+
   private final int status;
   private final String code;
   private final String title;
@@ -18,6 +33,30 @@ public final class WarpProblem {
   private final String sqlState;
   private final String requestId;
   private final String reason;
+  private final String cancelReason;
+
+  /**
+   * Creates a problem without a {@code cancel_reason}.
+   *
+   * @param status HTTP status, or 0 for an error inside a statement document
+   * @param code the stable error code, for example {@code sql_error}
+   * @param title short summary, or {@code null}
+   * @param detail explanation for people, or {@code null}
+   * @param sqlState five-character SQLSTATE the server gave, or {@code null}
+   * @param requestId the server's request id, or {@code null}
+   * @param reason the {@code reason} of an {@code invalid_token} or {@code session_ended} error, or
+   *     {@code null}
+   */
+  public WarpProblem(
+      int status,
+      String code,
+      String title,
+      String detail,
+      String sqlState,
+      String requestId,
+      String reason) {
+    this(status, code, title, detail, sqlState, requestId, reason, null);
+  }
 
   /**
    * Creates a problem.
@@ -28,7 +67,10 @@ public final class WarpProblem {
    * @param detail explanation for people, or {@code null}
    * @param sqlState five-character SQLSTATE the server gave, or {@code null}
    * @param requestId the server's request id, or {@code null}
-   * @param reason the {@code reason} of a {@code session_ended} error, or {@code null}
+   * @param reason the {@code reason} of an {@code invalid_token} or {@code session_ended} error, or
+   *     {@code null}
+   * @param cancelReason the {@code cancel_reason} of a {@code statement_cancelled} or {@code
+   *     statement_timeout} error, or {@code null}
    */
   public WarpProblem(
       int status,
@@ -37,7 +79,8 @@ public final class WarpProblem {
       String detail,
       String sqlState,
       String requestId,
-      String reason) {
+      String reason,
+      String cancelReason) {
     this.status = status;
     this.code = Objects.requireNonNull(code, "code");
     this.title = title;
@@ -45,13 +88,15 @@ public final class WarpProblem {
     this.sqlState = sqlState;
     this.requestId = requestId;
     this.reason = reason;
+    this.cancelReason = cancelReason;
   }
 
   /**
    * Finds the problem behind an exception.
    *
    * @param error an exception the driver raised
-   * @return the problem, or {@code null} when the error did not come from the server
+   * @return the problem, or {@code null} when the error did not come from the server (a broken
+   *     connection, for example) and has no {@code client_} code
    */
   public static WarpProblem of(Throwable error) {
     for (Throwable t = error; t != null; t = t.getCause()) {
@@ -88,7 +133,8 @@ public final class WarpProblem {
   /**
    * Returns the stable error code.
    *
-   * @return for example {@code sql_error} or {@code statement_timeout}
+   * @return for example {@code sql_error} or {@code statement_timeout}, or a {@code client_} code
+   *     for a failure the driver found itself
    */
   public String code() {
     return code;
@@ -131,12 +177,24 @@ public final class WarpProblem {
   }
 
   /**
-   * Returns why the server ended a session ({@code session_ended} only).
+   * Returns why the server refused a token ({@code invalid_token}, spec §4.2) or ended a session
+   * ({@code session_ended}, spec §5.6). Later versions may add reasons: treat one you don't know as
+   * a generic one.
    *
-   * @return for example {@code killed}, or {@code null}
+   * @return for example {@code token_revoked} or {@code killed}, or {@code null}
    */
   public String reason() {
     return reason;
+  }
+
+  /**
+   * Returns why a statement was cancelled ({@code statement_cancelled} and {@code
+   * statement_timeout}, spec §6.2).
+   *
+   * @return for example {@code client}, {@code timeout} or {@code killed}, or {@code null}
+   */
+  public String cancelReason() {
+    return cancelReason;
   }
 
   /**
@@ -149,6 +207,9 @@ public final class WarpProblem {
     StringBuilder message = new StringBuilder(text).append(" [").append(code);
     if (reason != null) {
       message.append(": ").append(reason);
+    }
+    if (cancelReason != null) {
+      message.append(", cancelled: ").append(cancelReason);
     }
     if (requestId != null) {
       message.append(", request ").append(requestId);

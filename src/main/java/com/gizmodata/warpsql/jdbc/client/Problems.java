@@ -23,7 +23,7 @@ final class Problems {
       code =
           type != null && type.startsWith(TYPE_PREFIX)
               ? type.substring(TYPE_PREFIX.length())
-              : "http_error";
+              : WarpProblem.CLIENT_HTTP_ERROR;
     }
     int status = json.path("status").asInt(httpStatus);
     return new WarpProblem(
@@ -33,7 +33,8 @@ final class Problems {
         text(json, "detail"),
         text(json, "sqlstate"),
         text(json, "request_id"),
-        text(json, "reason"));
+        text(json, "reason"),
+        text(json, "cancel_reason"));
   }
 
   /** A problem for a response that was not a problem document, such as a proxy's error page. */
@@ -44,7 +45,7 @@ final class Problems {
     }
     return new WarpProblem(
         status,
-        "http_error",
+        WarpProblem.CLIENT_HTTP_ERROR,
         "HTTP " + status,
         "unexpected HTTP " + status + (snippet.isEmpty() ? "" : ": " + snippet),
         null,

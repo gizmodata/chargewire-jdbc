@@ -3,7 +3,6 @@ package com.gizmodata.warpsql.jdbc.client;
 import java.io.IOException;
 import java.io.InputStream;
 import java.sql.SQLException;
-import java.sql.SQLNonTransientConnectionException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -12,6 +11,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -217,27 +218,33 @@ public final class PartitionedResult implements ResultStream {
     String statementId = response.statementId();
     if (statementId == null) {
       closeQuietly(response.body());
-      throw new SQLNonTransientConnectionException(
+      throw SqlErrors.protocolError(
           "The server split the result into partitions without naming its statement"
-              + " (Warp-Statement-Id)",
-          "08P01");
+              + " (Warp-Statement-Id)");
     }
-    ResultReader first =
-        ResultReader.streamed(client, allocator, sessionId, response, cancelRequested, true);
-    List<Opener> others = new ArrayList<>();
+    List<Opener> openers = new ArrayList<>();
     for (int i = 1; i < count; i++) {
       int position = i;
-      others.add(
+      openers.add(
           () ->
               ResultReader.partition(
                   client, allocator, sessionId, statementId, null, position, cancelRequested));
+    }
+    // The other partitions start before partition 0's schema is read: all at once (spec §6.10).
+    List<Opener> others = openEarly(statementId, openers);
+    ResultReader first;
+    try {
+      first = ResultReader.streamed(client, allocator, sessionId, response, cancelRequested);
+    } catch (SQLException | RuntimeException e) {
+      closeLater(others);
+      throw e;
     }
     return new PartitionedResult(statementId, allocator, first, others, order, cancelRequested);
   }
 
   /**
    * Fetches the result of a succeeded statement, every partition at once when it is split (spec
-   * §6.10).
+   * §6.10), wherever each partition is held (§6.2).
    *
    * @param client the client
    * @param allocator where batches are allocated
@@ -257,20 +264,21 @@ public final class PartitionedResult implements ResultStream {
       BooleanSupplier cancelRequested)
       throws SQLException {
     List<StatementDocument.Partition> partitions = document.partitions();
-    if (partitions.size() <= 1 || document.partitionOrder() == null) {
-      // One partition, or partitions on other servers (capability partitioned_results), read one
-      // after another.
+    if (partitions.size() <= 1) {
       return ResultReader.fetched(client, allocator, sessionId, document, cancelRequested);
+    }
+    if (document.partitionOrder() == null) {
+      throw SqlErrors.protocolError(
+          "The server split the result into "
+              + partitions.size()
+              + " partitions without saying how (no partition_order)");
     }
     Order order = order(document.partitionOrder(), anyOrderRequested);
     String statementId = document.statementId();
-    ResultReader first =
-        ResultReader.partition(
-            client, allocator, sessionId, statementId, partitions, 0, cancelRequested);
-    List<Opener> others = new ArrayList<>();
+    List<Opener> openers = new ArrayList<>();
     for (int i = 1; i < partitions.size(); i++) {
       int position = i;
-      others.add(
+      openers.add(
           () ->
               ResultReader.partition(
                   client,
@@ -281,7 +289,81 @@ public final class PartitionedResult implements ResultStream {
                   position,
                   cancelRequested));
     }
+    // Every partition is requested at once, partition 0 included (spec §6.10): a server may answer
+    // none of them until it can serve them all.
+    List<Opener> others = openEarly(statementId, openers);
+    ResultReader first;
+    try {
+      first =
+          ResultReader.partition(
+              client, allocator, sessionId, statementId, partitions, 0, cancelRequested);
+    } catch (SQLException | RuntimeException e) {
+      closeLater(others);
+      throw e;
+    }
     return new PartitionedResult(statementId, allocator, first, others, order, cancelRequested);
+  }
+
+  /** Starts opening each partition on a thread of its own; each opener then waits for its open. */
+  private static List<Opener> openEarly(String statementId, List<Opener> openers) {
+    List<Opener> started = new ArrayList<>();
+    for (int i = 0; i < openers.size(); i++) {
+      FutureTask<ResultStream> task = new FutureTask<>(openers.get(i)::open);
+      Thread thread =
+          new Thread(task, "warp-sql-jdbc " + statementId + " opening partition " + (i + 1));
+      thread.setDaemon(true);
+      thread.start();
+      started.add(
+          () -> {
+            try {
+              return task.get();
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+              closeWhenOpen(task);
+              throw new SQLException("Interrupted while opening a partition", "HY008", e);
+            } catch (ExecutionException e) {
+              Throwable cause = e.getCause();
+              if (cause instanceof SQLException) {
+                throw (SQLException) cause;
+              }
+              if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+              }
+              throw new SQLException("Cannot open a partition: " + cause, "HY000", cause);
+            }
+          });
+    }
+    return started;
+  }
+
+  /** Closes, once they are open, partitions whose result failed before it could read them. */
+  private static void closeLater(List<Opener> openers) {
+    Thread closer =
+        new Thread(
+            () -> {
+              for (Opener opener : openers) {
+                try {
+                  opener.open().close();
+                } catch (SQLException | RuntimeException e) {
+                  // It failed to open; nothing to close.
+                }
+              }
+            },
+            "warp-sql-jdbc closing partitions");
+    closer.setDaemon(true);
+    closer.start();
+  }
+
+  private static void closeWhenOpen(FutureTask<ResultStream> task) {
+    closeLater(
+        List.of(
+            () -> {
+              try {
+                return task.get();
+              } catch (InterruptedException | ExecutionException e) {
+                throw new SQLException("not opened", "HY000", e);
+              }
+            }));
   }
 
   private static int partitionCount(String header) throws SQLException {
@@ -296,28 +378,34 @@ public final class PartitionedResult implements ResultStream {
     } catch (NumberFormatException e) {
       // Reported below.
     }
-    throw new SQLNonTransientConnectionException(
-        "The server's Warp-Result-Partitions header is not a partition count: " + header, "08P01");
+    throw SqlErrors.protocolError(
+        "The server's Warp-Result-Partitions header is not a partition count: " + header);
   }
 
   private static Order order(String value, boolean anyOrderRequested) throws SQLException {
-    String text = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    if (value == null) {
+      // The order is never guessed (spec §6.10): a split result must say how it is split.
+      throw SqlErrors.protocolError(
+          "The server split the result into partitions without a Warp-Result-Order header");
+    }
+    String text = value.trim().toLowerCase(Locale.ROOT);
     if ("interleaved".equals(text)) {
       // A client that does not need the order may still take batches as they come.
       return anyOrderRequested ? Order.ANY : Order.INTERLEAVED;
     }
     if ("any".equals(text)) {
       if (!anyOrderRequested) {
-        throw new SQLNonTransientConnectionException(
+        throw SqlErrors.protocolError(
             "The server split the result without keeping its order (partition order 'any'),"
-                + " though the driver asked for it to be preserved",
-            "08P01");
+                + " though the driver asked for it to be preserved");
       }
       return Order.ANY;
     }
-    throw new SQLNonTransientConnectionException(
-        "The server split the result without saying how (partition order '" + value + "')",
-        "08P01");
+    // A new partition order reaches only a client that asked for it (spec §12).
+    throw SqlErrors.protocolError(
+        "The server split the result in a way the driver did not ask for (partition order '"
+            + value
+            + "')");
   }
 
   // ---- The partitions' threads ----
@@ -331,8 +419,8 @@ public final class PartitionedResult implements ResultStream {
         return;
       }
       if (!schema.equals(stream.schema())) {
-        throw new SQLNonTransientConnectionException(
-            "Partition " + lane.index + "'s schema differs from the result's", "08P01");
+        throw SqlErrors.protocolError(
+            "Partition " + lane.index + "'s schema differs from the result's");
       }
       while (stream.next()) {
         Batch batch = copyBatch(stream);
@@ -515,13 +603,12 @@ public final class PartitionedResult implements ResultStream {
       for (Lane other : lanes) {
         if (!other.batches.isEmpty()) {
           SQLException error =
-              new SQLNonTransientConnectionException(
+              SqlErrors.protocolError(
                   "Partition "
                       + other.index
                       + " has more batches than an interleaved result allows (partition "
                       + lane.index
-                      + " ended first)",
-                  "08P01");
+                      + " ended first)");
           failLocked(error);
           throw error;
         }

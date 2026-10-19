@@ -270,6 +270,33 @@ class ConnectionIT {
   }
 
   @Test
+  void theTransactionStateIsTheSessionDocuments() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      WarpConnection warp = connection.unwrap(WarpConnection.class);
+      assertEquals(WarpConnection.TransactionState.NONE, warp.getTransactionState());
+      statement.execute("BEGIN TRANSACTION");
+      assertEquals(WarpConnection.TransactionState.OPEN, warp.getTransactionState());
+      assertThrows(SQLException.class, () -> statement.execute("SELECT error('boom')"));
+      assertEquals(
+          WarpConnection.TransactionState.ABORTED,
+          warp.getTransactionState(),
+          "the engine refuses every statement until a rollback");
+      statement.execute("ROLLBACK");
+      assertEquals(WarpConnection.TransactionState.NONE, warp.getTransactionState());
+      connection.setAutoCommit(false);
+      assertEquals(WarpConnection.TransactionState.OPEN, warp.getTransactionState());
+      connection.commit();
+      assertEquals(
+          WarpConnection.TransactionState.OPEN,
+          warp.getTransactionState(),
+          "with autocommit off a commit starts the next transaction");
+      connection.setAutoCommit(true);
+      assertEquals(WarpConnection.TransactionState.NONE, warp.getTransactionState());
+    }
+  }
+
+  @Test
   void transactionIsolationIsTheServers() throws SQLException {
     try (Connection connection = SharedServer.connect()) {
       int level = connection.getTransactionIsolation();

@@ -47,7 +47,7 @@ class ClientCertificateGrantTest {
 
   ClientCertificateGrantTest() throws Exception {
     server = new FakeWarpServer(serverContext());
-    server.capabilities = "[\"long_poll\",\"result_retention\",\"mtls_identity\"]";
+    server.capabilities = "[\"long_poll\",\"mtls_identity\"]";
   }
 
   @AfterEach
@@ -173,6 +173,7 @@ class ClientCertificateGrantTest {
 
   @Test
   void partitionReadersPresentTheCertificateToo() throws Exception {
+    server.capabilities = "[\"long_poll\",\"mtls_identity\",\"result_locations\"]";
     Schema ints = new Schema(List.of(Field.nullable("i", new ArrowType.Int(64, true))));
     byte[] schema = TestStreams.schemaStream(allocator, ints);
     String partitions =
@@ -191,7 +192,7 @@ class ClientCertificateGrantTest {
                         + Base64.getEncoder().encodeToString(schema)
                         + "\",\"partitions\":"
                         + partitions
-                        + ",\"retained\":true}")));
+                        + ",\"partition_order\":\"interleaved\",\"retained\":true}")));
     byte[] first =
         TestStreams.stream(allocator, ints, List.of(List.<Object[]>of(new Object[] {1L})));
     byte[] second =

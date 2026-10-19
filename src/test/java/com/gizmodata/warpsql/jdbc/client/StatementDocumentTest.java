@@ -58,7 +58,7 @@ class StatementDocumentTest {
     StatementDocument failed =
         parse(
             "{\"statement_id\":\"q_4\",\"state\":\"failed\",\"result\":null,"
-                + "\"error\":{\"code\":\"execution_error\",\"detail\":\"boom\",\"status\":500}}");
+                + "\"error\":{\"code\":\"execution_error\",\"detail\":\"boom\",\"status\":422}}");
     assertEquals("execution_error", failed.error().code());
     assertEquals("boom", failed.error().detail());
     StatementDocument cancelled =
@@ -67,6 +67,7 @@ class StatementDocumentTest {
                 + "\"error\":{\"code\":\"statement_timeout\"}}");
     assertEquals("timeout", cancelled.cancelReason());
     assertEquals("statement_timeout", cancelled.error().code());
+    assertEquals("timeout", cancelled.error().cancelReason(), "the error carries the reason too");
   }
 
   @Test
@@ -76,10 +77,23 @@ class StatementDocumentTest {
   }
 
   @Test
+  void anUnknownStateIsNotTerminal() throws Exception {
+    // Later versions add only states that are not terminal (spec §12): keep polling.
+    StatementDocument later = parse("{\"statement_id\":\"q\",\"state\":\"paused\"}");
+    assertEquals(StatementDocument.State.OTHER, later.state());
+    assertFalse(later.state().isTerminal());
+    assertEquals(
+        "preempted",
+        parse(
+                "{\"statement_id\":\"q\",\"state\":\"cancelled\",\"cancel_reason\":\"preempted\","
+                    + "\"error\":{\"code\":\"statement_cancelled\"}}")
+            .cancelReason(),
+        "an unknown cancel_reason passes through");
+  }
+
+  @Test
   void rejectsWhatIsNotAStatementDocument() {
     assertThrows(IllegalArgumentException.class, () -> parse("{\"state\":\"running\"}"));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> parse("{\"statement_id\":\"q\",\"state\":\"exploded\"}"));
+    assertThrows(IllegalArgumentException.class, () -> parse("{\"statement_id\":\"q\"}"));
   }
 }

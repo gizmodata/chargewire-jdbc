@@ -41,6 +41,8 @@ import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The driver's client logic against a scripted server: what it does when tokens expire, sessions
@@ -128,6 +130,52 @@ class ClientBehaviourTest {
     List<FakeWarpServer.Request> submits = server.requests("POST", "/v1/sessions/s1/statements");
     assertEquals("Bearer t1", submits.get(0).header("Authorization"));
     assertEquals("Bearer t2", submits.get(1).header("Authorization"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"token_expired", "token_retired_by_a_later_version"})
+  void anExpiredOrUnexplainedTokenIsRenewedOnce(String reason) throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          if (calls.incrementAndGet() <= 2) {
+            problem(exchange, 401, "invalid_token", ",\"reason\":\"" + reason + "\"");
+          } else {
+            json(exchange, 200, updateDocument("q1", 1));
+          }
+        });
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      SQLException error =
+          assertThrows(
+              SQLInvalidAuthorizationSpecException.class, () -> statement.execute("SELECT 1"));
+      assertEquals(reason, WarpProblem.of(error).reason(), "renewed once, then the error");
+      assertEquals(1, statement.executeUpdate("UPDATE t SET a = 1"));
+    }
+    assertEquals(2, server.tokens.get());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"token_revoked", "credentials_changed", "principal_dropped"})
+  void aWithdrawnTokenIsNotRenewed(String reason) throws Exception {
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) ->
+            problem(exchange, 401, "invalid_token", ",\"reason\":\"" + reason + "\""));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      SQLException error =
+          assertThrows(
+              SQLInvalidAuthorizationSpecException.class, () -> statement.execute("SELECT 1"));
+      assertEquals("invalid_token", WarpProblem.codeOf(error));
+      assertEquals(reason, WarpProblem.of(error).reason());
+      assertTrue(error.getMessage().contains(reason), "the reason is shown: " + error.getMessage());
+    }
+    assertEquals(1, server.tokens.get(), "no sign-in after " + reason);
+    assertEquals(1, server.requests("POST", "/v1/sessions/s1/statements").size());
   }
 
   @Test
@@ -300,6 +348,54 @@ class ClientBehaviourTest {
   }
 
   @Test
+  void theTransactionStateComesFromTheSessionDocument() throws Exception {
+    try (Connection connection = connect("")) {
+      WarpConnection warp = connection.unwrap(WarpConnection.class);
+      assertEquals(WarpConnection.TransactionState.NONE, warp.getTransactionState());
+      server.transaction = "open";
+      assertEquals(WarpConnection.TransactionState.OPEN, warp.getTransactionState());
+      server.transaction = "aborted";
+      assertEquals(WarpConnection.TransactionState.ABORTED, warp.getTransactionState());
+      server.transaction = "suspended";
+      assertEquals(
+          WarpConnection.TransactionState.UNKNOWN,
+          warp.getTransactionState(),
+          "a value from a later version is unknown, not an error (spec §12)");
+      server.transaction = null;
+      assertEquals(WarpConnection.TransactionState.UNKNOWN, warp.getTransactionState());
+    }
+  }
+
+  @Test
+  void aLostSessionAfterASqlBeginIsReportedInAutocommitMode() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          if (calls.incrementAndGet() == 1) {
+            json(exchange, 200, updateDocument("q1", 0));
+          } else {
+            problem(exchange, 404, "session_not_found", "");
+          }
+        });
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("BEGIN");
+      server.transaction = "open";
+      assertEquals(
+          WarpConnection.TransactionState.OPEN,
+          connection.unwrap(WarpConnection.class).getTransactionState());
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (2)"));
+      assertEquals("08007", error.getSQLState());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @Test
   void aKilledSessionClosesTheConnection() throws Exception {
     server.route(
         "POST",
@@ -317,6 +413,28 @@ class ClientBehaviourTest {
     }
     assertEquals(1, server.sessions.get(), "no new session after a kill");
     assertEquals(0, server.requests("DELETE", "/v1/sessions/s1").size(), "nothing left to end");
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"token_revoked", "credentials_changed", "principal_dropped", "evicted_by_magic"})
+  void aSessionEndedForAnyOtherReasonClosesTheConnection(String reason) throws Exception {
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) ->
+            problem(exchange, 401, "session_ended", ",\"reason\":\"" + reason + "\""));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      SQLNonTransientConnectionException error =
+          assertThrows(
+              SQLNonTransientConnectionException.class, () -> statement.execute("SELECT 1"));
+      assertEquals("08003", error.getSQLState());
+      assertTrue(error.getMessage().contains(reason), error.getMessage());
+      assertTrue(connection.isClosed());
+    }
+    assertEquals(1, server.tokens.get(), "no sign-in with credentials that no longer work");
+    assertEquals(1, server.sessions.get(), "no new session");
   }
 
   @Test
@@ -431,11 +549,9 @@ class ClientBehaviourTest {
     }
   }
 
-  @Test
-  void aResultInPartitionsIsReadPartitionByPartition() throws Exception {
-    byte[] schema = TestStreams.schemaStream(allocator, INTS);
-    String partitions =
-        "[{\"index\":0,\"location\":null},{\"index\":1,\"location\":\"" + server.base() + "\"}]";
+  /** A status document whose result is split over {@code partitions}. */
+  private void splitDocument(String partitions, String order) throws Exception {
+    String schema = Base64.getEncoder().encodeToString(TestStreams.schemaStream(allocator, INTS));
     server.route(
         "POST",
         "/v1/sessions/s1/statements",
@@ -447,28 +563,164 @@ class ClientBehaviourTest {
                     "q1",
                     "succeeded",
                     "{\"kind\":\"rows\",\"schema\":\""
-                        + Base64.getEncoder().encodeToString(schema)
+                        + schema
                         + "\",\"partitions\":"
                         + partitions
+                        + (order == null ? "" : ",\"partition_order\":\"" + order + "\"")
                         + ",\"retained\":true}")));
+  }
+
+  /**
+   * Answers a partition only once {@code together} partitions' requests are in flight at once, so a
+   * driver that reads partitions one after another fails instead of passing.
+   */
+  private static FakeWarpServer.Route concurrently(CountDownLatch together, byte[] stream) {
+    return (exchange, request, path) -> {
+      together.countDown();
+      try {
+        if (!together.await(5, TimeUnit.SECONDS)) {
+          problem(exchange, 500, "internal_error", "");
+          return;
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      arrow(exchange, "q1", stream);
+    };
+  }
+
+  @Test
+  void partitionsOnOtherServersAreReadThereAllAtOnce() throws Exception {
+    server.capabilities = "[\"long_poll\",\"result_partitions\",\"result_locations\"]";
+    try (FakeWarpServer worker = new FakeWarpServer()) {
+      splitDocument(
+          "[{\"index\":0,\"location\":null},{\"index\":1,\"location\":\"" + worker.base() + "\"}]",
+          "interleaved");
+      CountDownLatch together = new CountDownLatch(2);
+      byte[] first =
+          TestStreams.stream(
+              allocator, INTS, List.of(batches(0, 1, 5).get(0), batches(10, 1, 5).get(0)));
+      server.route("GET", "/v1/sessions/s1/statements/q1/result", concurrently(together, first));
+      worker.route(
+          "GET", "/v1/sessions/s1/statements/q1/result", concurrently(together, stream(5, 1, 5)));
+      try (Connection connection = connect("async=true");
+          Statement statement = connection.createStatement();
+          ResultSet rows = statement.executeQuery("SELECT i FROM distributed")) {
+        assertEquals(range(0, 15), readAll(rows), "interleaved back into the result's order");
+      }
+      assertEquals(
+          "remote",
+          server
+              .requests("POST", "/v1/sessions/s1/statements")
+              .get(0)
+              .header("Warp-Result-Locations"));
+      assertEquals(
+          "partition=0",
+          server.requests("GET", "/v1/sessions/s1/statements/q1/result").get(0).query);
+      FakeWarpServer.Request remote =
+          worker.requests("GET", "/v1/sessions/s1/statements/q1/result").get(0);
+      assertEquals("partition=1", remote.query);
+      assertEquals("Bearer t1", remote.header("Authorization"), "the same access token");
+    }
+  }
+
+  @Test
+  void aLocationTheDriverDidNotAskForIsRefused() throws Exception {
+    try (FakeWarpServer worker = new FakeWarpServer()) {
+      splitDocument(
+          "[{\"index\":0,\"location\":null},{\"index\":1,\"location\":\"" + worker.base() + "\"}]",
+          "interleaved");
+      byte[] local = stream(0, 1, 5);
+      server.route(
+          "GET",
+          "/v1/sessions/s1/statements/q1/result",
+          (exchange, request, path) -> arrow(exchange, "q1", local));
+      try (Connection connection = connect("async=true");
+          Statement statement = connection.createStatement()) {
+        SQLException error =
+            assertThrows(SQLException.class, () -> readAll(statement.executeQuery("SELECT 1")));
+        assertEquals("client_protocol_error", WarpProblem.codeOf(error), error.toString());
+      }
+      assertNull(
+          server
+              .requests("POST", "/v1/sessions/s1/statements")
+              .get(0)
+              .header("Warp-Result-Locations"),
+          "only with the result_locations capability");
+      assertEquals(0, worker.requests.size(), "the token never went there");
+    }
+  }
+
+  @Test
+  void aSplitDocumentWithoutItsOrderIsAProtocolError() throws Exception {
+    splitDocument("[{\"index\":0,\"location\":null},{\"index\":1,\"location\":null}]", null);
+    try (Connection connection = connect("async=true");
+        Statement statement = connection.createStatement()) {
+      SQLException error =
+          assertThrows(SQLException.class, () -> statement.executeQuery("SELECT 1"));
+      assertEquals("client_protocol_error", WarpProblem.codeOf(error));
+      assertEquals("08P01", error.getSQLState());
+    }
+    assertEquals(0, server.requests("GET", "/v1/sessions/s1/statements/q1/result").size());
+  }
+
+  @Test
+  void aStreamedSplitWithoutItsOrderIsAProtocolError() throws Exception {
+    server.capabilities = "[\"long_poll\",\"result_partitions\"]";
     byte[] first = stream(0, 2, 5);
-    byte[] second = stream(10, 1, 5);
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          exchange.getResponseHeaders().set("Warp-Result-Partitions", "2");
+          arrow(exchange, "q1", first);
+        });
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      SQLException error =
+          assertThrows(SQLException.class, () -> statement.executeQuery("SELECT 1"));
+      assertEquals("client_protocol_error", WarpProblem.codeOf(error));
+      assertTrue(error.getMessage().contains("Warp-Result-Order"), error.getMessage());
+    }
+  }
+
+  @Test
+  void streamedPartitionsAreReadAllAtOnce() throws Exception {
+    server.capabilities = "[\"long_poll\",\"result_partitions\",\"result_locations\"]";
+    byte[] first = stream(0, 2, 5);
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          exchange.getResponseHeaders().set("Warp-Result-Partitions", "3");
+          exchange.getResponseHeaders().set("Warp-Result-Order", "interleaved");
+          arrow(exchange, "q1", first);
+        });
+    CountDownLatch together = new CountDownLatch(2);
+    byte[] second = stream(100, 2, 5);
+    byte[] third = stream(200, 1, 5);
     server.route(
         "GET",
         "/v1/sessions/s1/statements/q1/result",
         (exchange, request, path) ->
-            arrow(exchange, "q1", request.query.startsWith("partition=0") ? first : second));
-    try (Connection connection = connect("async=true");
+            concurrently(together, request.query.equals("partition=1") ? second : third)
+                .answer(exchange, request, path));
+    try (Connection connection = connect("resultPartitions=3");
         Statement statement = connection.createStatement();
-        ResultSet rows = statement.executeQuery("SELECT i FROM distributed")) {
-      List<Long> expected = range(0, 10);
-      expected.addAll(range(10, 15));
+        ResultSet rows = statement.executeQuery("SELECT i FROM t ORDER BY i")) {
+      List<Long> expected = new ArrayList<>(range(0, 5));
+      expected.addAll(range(100, 105));
+      expected.addAll(range(200, 205));
+      expected.addAll(range(5, 10));
+      expected.addAll(range(105, 110));
       assertEquals(expected, readAll(rows));
     }
-    List<FakeWarpServer.Request> fetches =
-        server.requests("GET", "/v1/sessions/s1/statements/q1/result");
-    assertEquals(
-        List.of("partition=0", "partition=1"), List.of(fetches.get(0).query, fetches.get(1).query));
+    FakeWarpServer.Request submit = server.requests("POST", "/v1/sessions/s1/statements").get(0);
+    assertEquals("3", submit.header("Warp-Result-Partitions"));
+    assertEquals("preserve", submit.header("Warp-Result-Order"));
+    assertNull(
+        submit.header("Warp-Result-Locations"),
+        "a streamed answer cannot say where partitions are, so it never asks for remote ones");
   }
 
   @Test
@@ -879,7 +1131,8 @@ class ClientBehaviourTest {
           } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
           }
-          problem(exchange, 400, "statement_cancelled", "");
+          exchange.getResponseHeaders().set("Warp-Statement-Id", "q1");
+          problem(exchange, 409, "statement_cancelled", ",\"cancel_reason\":\"client\"");
         });
     server.route(
         "POST",
@@ -906,8 +1159,79 @@ class ClientBehaviourTest {
       canceller.join();
       assertEquals("statement_cancelled", WarpProblem.codeOf(error));
       assertEquals("57014", error.getSQLState());
+      assertEquals("client", WarpProblem.of(error).cancelReason());
     }
     assertEquals(1, server.requests("POST", "/v1/sessions/s1/cancel").size());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "async=true"})
+  void aStatementCancelledByTheTimeItsSubmitIsAnsweredIsAnError(String options) throws Exception {
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          exchange.getResponseHeaders().set("Warp-Statement-Id", "q1");
+          problem(exchange, 409, "statement_cancelled", ",\"cancel_reason\":\"killed\"");
+        });
+    try (Connection connection = connect(options);
+        Statement statement = connection.createStatement()) {
+      SQLException error =
+          assertThrows(SQLException.class, () -> statement.execute("SELECT slow()"));
+      assertEquals("statement_cancelled", WarpProblem.codeOf(error));
+      assertEquals("killed", WarpProblem.of(error).cancelReason());
+      assertEquals("57014", error.getSQLState());
+      assertEquals(409, error.getErrorCode());
+      assertTrue(error.getMessage().contains("killed"), error.getMessage());
+      assertTrue(connection.isValid(1), "the session goes on");
+    }
+    assertEquals(0, server.requests("GET", "/v1/sessions/s1/statements/q1").size());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "async=true"})
+  void aFailedDocumentIsAnErrorWhateverTheStatus(String options) throws Exception {
+    // An idempotent replay answers 200 with the statement's document in any state (spec §6.7).
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                "{\"statement_id\":\"q1\",\"state\":\"failed\",\"error\":{\"code\":"
+                    + "\"execution_error\",\"status\":422,\"detail\":\"division by zero\"}}"));
+    try (Connection connection = connect(options);
+        Statement statement = connection.createStatement()) {
+      SQLException error =
+          assertThrows(SQLException.class, () -> statement.execute("SELECT 1 / 0"));
+      assertEquals("execution_error", WarpProblem.codeOf(error));
+      assertTrue(error.getMessage().contains("division by zero"), error.getMessage());
+    }
+  }
+
+  @Test
+  void anUnknownStateKeepsPolling() throws Exception {
+    AtomicInteger polls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> json(exchange, 201, document("q1", "paused", null)));
+    server.route(
+        "GET",
+        "/v1/sessions/s1/statements/q1",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                polls.incrementAndGet() < 3
+                    ? document("q1", "warming_up", null)
+                    : updateDocument("q1", 5)));
+    try (Connection connection = connect("async=true");
+        Statement statement = connection.createStatement()) {
+      assertEquals(5, statement.executeUpdate("UPDATE t SET a = 1"));
+    }
+    assertEquals(3, polls.get(), "a state from a later version is not terminal (spec §12)");
   }
 
   @Test
@@ -984,7 +1308,7 @@ class ClientBehaviourTest {
                 "{\"server_name\":\"Acme SQL\",\"server_version\":\"3.14.2-beta\",\"sql_identifier_quote_char\":\"`\","
                     + "\"sql_keywords\":[\"QUALIFY\",\"PIVOT\"],\"sql_identifier_case\":3,"
                     + "\"sql_null_ordering\":3,\"sql_default_transaction_isolation\":4,"
-                    + "\"sql_transactions_supported\":false,\"read_only\":true}"));
+                    + "\"sql_transactions_supported\":false,\"server_read_only\":true}"));
     try (Connection connection = connect("")) {
       java.sql.DatabaseMetaData metaData = connection.getMetaData();
       assertEquals("Acme SQL", metaData.getDatabaseProductName());
@@ -1003,6 +1327,25 @@ class ClientBehaviourTest {
     }
     assertEquals(
         1, server.requests("GET", "/v1/sessions/s1/metadata/server-info").size(), "read once");
+  }
+
+  @Test
+  void retiredServerInfoKeysAreIgnored() throws Exception {
+    server.route(
+        "GET",
+        "/v1/sessions/s1/metadata/server-info",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                "{\"read_only\":true,\"transactions_supported\":false,"
+                    + "\"sql_max_schema_name_length\":9,\"duckdb_version\":\"v2.0.0\"}"));
+    try (Connection connection = connect("")) {
+      java.sql.DatabaseMetaData metaData = connection.getMetaData();
+      assertFalse(metaData.isReadOnly(), "only server_read_only says so");
+      assertTrue(metaData.supportsTransactions(), "only sql_transactions_supported says no");
+      assertEquals(0, metaData.getMaxSchemaNameLength(), "only sql_db_schema_name_length");
+    }
   }
 
   @Test
@@ -1045,7 +1388,7 @@ class ClientBehaviourTest {
                 "text/html",
                 "<h1>Bad Gateway</h1>".getBytes(StandardCharsets.UTF_8)));
     SQLException error = assertThrows(SQLException.class, () -> connect(""));
-    assertEquals("http_error", WarpProblem.codeOf(error));
+    assertEquals("client_http_error", WarpProblem.codeOf(error));
     assertEquals(502, error.getErrorCode());
     assertTrue(error.getMessage().contains("Bad Gateway"), error.getMessage());
   }

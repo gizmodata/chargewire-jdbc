@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gizmodata.warpsql.jdbc.arrow.ArrowIpc;
 import com.gizmodata.warpsql.jdbc.arrow.ParameterEncoder;
+import com.gizmodata.warpsql.jdbc.client.SqlErrors;
 import com.gizmodata.warpsql.jdbc.client.WarpClient;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -82,7 +83,7 @@ public final class WarpPreparedStatement extends WarpStatement implements Prepar
     JsonNode prepared = client.prepare(sessionId, sql);
     preparedId = prepared.path("prepared_id").asText(null);
     if (preparedId == null) {
-      throw new SQLException("The server's prepare response has no prepared_id", "08P01");
+      throw SqlErrors.protocolError("The server's prepare response has no prepared_id");
     }
     preparedSessionId = sessionId;
     preparedGeneration = connection.sessionGeneration();
@@ -105,7 +106,7 @@ public final class WarpPreparedStatement extends WarpStatement implements Prepar
     try {
       return ArrowIpc.readSchema(Base64.getDecoder().decode(encoded.asText()));
     } catch (IOException | IllegalArgumentException e) {
-      throw new SQLException("The server sent an unreadable schema: " + e.getMessage(), "08P01", e);
+      throw SqlErrors.protocolError("The server sent an unreadable schema: " + e.getMessage(), e);
     }
   }
 

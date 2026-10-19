@@ -36,8 +36,11 @@ import javax.net.ssl.SSLException;
  *
  * <p>Every error response becomes an {@link SQLException} (see {@link SqlErrors}). Requests that
  * are safe to repeat (reads, deletes, and submissions carrying an {@code Idempotency-Key}) are
- * retried when the connection fails before a response arrives. An expired access token is renewed
- * with the connection's credential and the request repeated once.
+ * retried when the connection fails before a response arrives. A token the server refuses with
+ * {@code invalid_token} is renewed with the connection's credential and the request repeated once,
+ * unless the server said the token was revoked or its principal's credentials changed or were
+ * dropped (spec §4.2): signing in again would not help, so that error reaches the application with
+ * its reason.
  *
  * <p>Internal API.
  */
@@ -57,6 +60,15 @@ public final class WarpClient implements AutoCloseable {
 
   /** Renew a token this long before the server says it expires. */
   private static final long TOKEN_MARGIN_NANOS = Duration.ofSeconds(30).toNanos();
+
+  /**
+   * The {@code reason}s of an {@code invalid_token} (spec §4.2) or {@code session_ended} (§5.6)
+   * after which the client must not sign in again on its own: someone withdrew the access, or the
+   * credential no longer works. Any other reason, none, or one this driver does not know, allows
+   * one new sign-in.
+   */
+  private static final Set<String> WITHDRAWN =
+      Set.of("token_revoked", "credentials_changed", "principal_dropped");
 
   private final ConnectionConfig config;
   private final HttpClient http;
@@ -404,6 +416,18 @@ public final class WarpClient implements AutoCloseable {
     return credential == ConnectionConfig.Credential.PASSWORD
         || credential == ConnectionConfig.Credential.SUBJECT_TOKEN
         || credential == ConnectionConfig.Credential.CLIENT_CERTIFICATE;
+  }
+
+  /**
+   * Returns whether a token refused for this {@code reason} may be replaced by signing in again
+   * with the same credential (spec §4.2, §5.6).
+   *
+   * @param reason the problem's {@code reason}, or {@code null}
+   * @return {@code false} after {@code token_revoked}, {@code credentials_changed} and {@code
+   *     principal_dropped}
+   */
+  public static boolean mayRenewAfter(String reason) {
+    return reason == null || !WITHDRAWN.contains(reason);
   }
 
   /**
@@ -782,6 +806,11 @@ public final class WarpClient implements AutoCloseable {
                     Integer.toString(Math.min(options.resultPartitions, MAX_RESULT_PARTITIONS)));
                 builder.header("Warp-Result-Order", options.anyOrder ? "any" : "preserve");
               }
+              if (options.async && followsLocations()) {
+                // Only the statement document says where partitions are; a streamed answer's
+                // headers do not, so a streamed submission keeps every partition here.
+                builder.header("Warp-Result-Locations", "remote");
+              }
               acceptCompression(builder);
               return builder;
             },
@@ -798,6 +827,16 @@ public final class WarpClient implements AutoCloseable {
               response.headers().firstValue("Warp-Result-Order").orElse(null)));
     }
     return new Submission(statementDocument(readJson(response)), null);
+  }
+
+  /**
+   * Returns whether the driver reads partitions held by other servers: only from a server with the
+   * {@code result_locations} capability (spec §6.2), and only for status-document submissions.
+   *
+   * @return {@code true} if submissions with {@code async} ask for remote locations
+   */
+  public boolean followsLocations() {
+    return hasCapability("result_locations");
   }
 
   /**
@@ -892,7 +931,8 @@ public final class WarpClient implements AutoCloseable {
     URI target =
         location == null
             ? sessionUri(sessionId, path)
-            : URI.create(trimSlash(location.toString()) + "/v1/sessions/" + sessionId + path);
+            : URI.create(
+                trimSlash(checkLocation(location).toString()) + "/v1/sessions/" + sessionId + path);
     HttpResponse<InputStream> response =
         send(
             () -> {
@@ -905,10 +945,33 @@ public final class WarpClient implements AutoCloseable {
             true);
     if (!isArrow(response)) {
       discard(response.body());
-      throw new SQLNonTransientConnectionException(
-          "The result response is not an Arrow stream", "08P01");
+      throw SqlErrors.protocolError("The result response is not an Arrow stream");
     }
     return new ArrowResponse(response.body(), statementId);
+  }
+
+  /**
+   * Checks a partition's location before the access token goes there: the driver asked for remote
+   * locations, and the location is an absolute HTTP URL that keeps TLS when the connection uses it.
+   */
+  private URI checkLocation(URI location) throws SQLException {
+    if (!followsLocations()) {
+      throw SqlErrors.protocolError(
+          "The server gave a partition the location "
+              + location
+              + " though the driver did not send Warp-Result-Locations");
+    }
+    String scheme =
+        location.getScheme() == null ? "" : location.getScheme().toLowerCase(Locale.ROOT);
+    boolean allowed = "https".equals(scheme) || ("http".equals(scheme) && !config.useEncryption);
+    if (!location.isAbsolute() || location.getHost() == null || !allowed) {
+      throw SqlErrors.protocolError(
+          "A partition's location is not an absolute "
+              + (config.useEncryption ? "https" : "http")
+              + " URL: "
+              + location);
+    }
+    return location;
   }
 
   /**
@@ -961,9 +1024,7 @@ public final class WarpClient implements AutoCloseable {
           true);
     } catch (SQLException e) {
       String code = WarpProblem.codeOf(e);
-      if (!"statement_not_found".equals(code)
-          && !"session_not_found".equals(code)
-          && !"not_found".equals(code)) {
+      if (!"statement_not_found".equals(code) && !"session_not_found".equals(code)) {
         throw e;
       }
     }
@@ -1002,8 +1063,7 @@ public final class WarpClient implements AutoCloseable {
             true);
     if (!isArrow(response)) {
       discard(response.body());
-      throw new SQLNonTransientConnectionException(
-          "The metadata response is not an Arrow stream", "08P01");
+      throw SqlErrors.protocolError("The metadata response is not an Arrow stream");
     }
     return new ArrowResponse(response.body(), null);
   }
@@ -1059,7 +1119,10 @@ public final class WarpClient implements AutoCloseable {
       } catch (HttpTimeoutException e) {
         throw new SQLTimeoutException("Timed out waiting for the server's response", "HYT01", e);
       } catch (IOException e) {
-        if (retryable && attempt < MAX_ATTEMPTS && !(e instanceof SSLException)) {
+        if (retryable
+            && attempt < MAX_ATTEMPTS
+            && !(e instanceof SSLException)
+            && tlsAlert(e) == null) {
           pause(attempt);
           continue;
         }
@@ -1077,6 +1140,7 @@ public final class WarpClient implements AutoCloseable {
           && authenticated
           && !renewed
           && "invalid_token".equals(problem.code())
+          && mayRenewAfter(problem.reason())
           && canRenewToken()) {
         renewToken();
         renewed = true;
@@ -1089,6 +1153,25 @@ public final class WarpClient implements AutoCloseable {
 
   private SQLException connectionError(IOException e) {
     String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+    String alert = tlsAlert(e);
+    if (alert != null) {
+      // The server refused the client certificate at the handshake (spec §4.4): the refusal it
+      // stands for, not a server the driver could not reach.
+      SQLException refusal =
+          SqlErrors.toSqlException(
+              new WarpProblem(
+                  0,
+                  alert,
+                  "certificate_revoked".equals(alert)
+                      ? "Certificate revoked"
+                      : "Certificate required",
+                  "The server refused the TLS handshake with " + config.baseUri + ": " + message,
+                  null,
+                  null,
+                  null));
+      refusal.addSuppressed(e);
+      return refusal;
+    }
     if (e instanceof ConnectException) {
       return new SQLNonTransientConnectionException(
           "Cannot connect to " + config.baseUri + ": " + message, "08001", e);
@@ -1099,6 +1182,25 @@ public final class WarpClient implements AutoCloseable {
     }
     return new SQLTransientConnectionException(
         "Connection to " + config.baseUri + " failed: " + message, "08006", e);
+  }
+
+  /**
+   * Returns the problem code a TLS alert from the server stands for: {@code certificate_required}
+   * or {@code certificate_revoked}, or {@code null} for any other failure.
+   */
+  static String tlsAlert(Throwable error) {
+    for (Throwable t = error; t != null; t = t.getCause() == t ? null : t.getCause()) {
+      String text = t instanceof SSLException ? t.getMessage() : null;
+      if (text != null && text.contains("alert")) {
+        if (text.contains("certificate_revoked")) {
+          return "certificate_revoked";
+        }
+        if (text.contains("certificate_required")) {
+          return "certificate_required";
+        }
+      }
+    }
+    return null;
   }
 
   private static void pause(int attempt) throws SQLException {
@@ -1209,8 +1311,8 @@ public final class WarpClient implements AutoCloseable {
       }
       return node;
     } catch (IOException e) {
-      throw new SQLNonTransientConnectionException(
-          "The server's " + what + " response is not valid JSON: " + e.getMessage(), "08P01", e);
+      throw SqlErrors.protocolError(
+          "The server's " + what + " response is not valid JSON: " + e.getMessage(), e);
     }
   }
 
@@ -1222,8 +1324,8 @@ public final class WarpClient implements AutoCloseable {
       }
       return node;
     } catch (IOException e) {
-      throw new SQLNonTransientConnectionException(
-          "The server's statement response is not valid JSON: " + e.getMessage(), "08P01", e);
+      throw SqlErrors.protocolError(
+          "The server's statement response is not valid JSON: " + e.getMessage(), e);
     }
   }
 
@@ -1231,7 +1333,7 @@ public final class WarpClient implements AutoCloseable {
     try {
       return StatementDocument.parse(json);
     } catch (IllegalArgumentException e) {
-      throw new SQLNonTransientConnectionException(e.getMessage(), "08P01", e);
+      throw SqlErrors.protocolError(e.getMessage(), e);
     }
   }
 

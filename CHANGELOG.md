@@ -8,6 +8,44 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Follows Warp SQL 1.0.0, the protocol's first stable version (no fallbacks for the shapes
+  before it):
+  - `DatabaseMetaData.isReadOnly` reads the `server-info` key `server_read_only` (was
+    `read_only`), and `supportsTransactions` reads only `sql_transactions_supported` (with the
+    `transactions` capability); `getMaxSchemaNameLength` reads only `sql_db_schema_name_length`.
+    A missing key means unknown, and the JDBC default holds.
+  - A split result is always read over every partition at once, partition 0 included (each is
+    requested before any answers), also when its partitions are held by other servers; those
+    were read one after another before. Remote partitions need the `result_locations`
+    capability: only then, and only for `async=true` submissions, does the driver send
+    `Warp-Result-Locations: remote`; a `location` it did not ask for, or one that is not an
+    absolute URL keeping the connection's TLS, is refused before the token goes there. A split
+    result without `Warp-Result-Order` or `partition_order` is a protocol error.
+  - Codes the driver makes up begin with `client_`: `http_error` is now `client_http_error`, and
+    responses that break the protocol (SQLSTATE `08P01`) carry `client_protocol_error`
+    (`WarpProblem.CLIENT_HTTP_ERROR`, `WarpProblem.CLIENT_PROTOCOL_ERROR`).
+  - Error mapping follows the 1.0 statuses: `execution_error` (422) and every other 4xx is a
+    `SQLNonTransientException` unless its SQLSTATE says more, `internal_error` (500) a plain
+    `SQLException`, `statement_cancelled` (409) a `SQLException` with SQLSTATE `57014` and
+    `statement_timeout` a `SQLTimeoutException`, whatever status carried them. New codes map:
+    `certificate_required` (was `client_certificate_required`) and `unsupported_grant_type` to
+    `28000`, `partition_not_found`, `result_not_resumable` and `result_expired` to `24000`. A
+    TLS handshake refused with the alert `certificate_required` or `certificate_revoked` is
+    reported as that code (`28000`), not as an unreachable server.
+  - A statement cancelled by the time its submission is answered is an error response (409
+    `statement_cancelled`); `WarpProblem.cancelReason()` gives its `cancel_reason`, also for a
+    cancelled statement document's error. A `failed` or `cancelled` document is the statement's
+    error whatever the status.
+  - `invalid_token` is renewed once only without a `reason`, after `token_expired`, or after a
+    reason the driver does not know; after `token_revoked`, `credentials_changed` or
+    `principal_dropped` the error reaches the application with its reason, and the driver does
+    not sign in again.
+  - A forgotten statement is `statement_not_found`; `not_found` (no such endpoint) is no longer
+    taken for one when the driver deletes a statement.
+  - Open enumerations (spec §12): an unknown statement state is not terminal (the driver keeps
+    polling, `StatementDocument.State.OTHER`), and unknown reasons and cancel reasons pass
+    through.
+
 - `resultPartitions` defaults to 8 (was 1): large results are split and read over several
   connections at once. The server decides: a result of fewer than two batches still comes as
   one stream, and a server without `result_partitions` never sees the request. Set
@@ -34,6 +72,12 @@ All notable changes to this project are documented here. The format follows
   server without the `oauth_browser` capability is refused before a browser opens. Never logs
   the poll secret or the token. Tests: 15 unit tests against the fake server, and
   `BrowserSignInIT` (4) against warp-duckdb with a mock OpenID Connect provider.
+
+- `WarpConnection.getTransactionState()` reads the session document's `transaction` (`NONE`,
+  `OPEN`, `ABORTED`, or `UNKNOWN` for a value the driver does not know). With autocommit on, a
+  session lost while the last session document read said a transaction was open (a SQL
+  `BEGIN`) fails the statement with `08007` instead of running it in the new session.
+
 - Sign-in with the mutual-TLS client certificate (Warp SQL spec §4.4): `authType=client_certificate`
   (alias `mtls`) sends `{"grant_type":"client_certificate"}` over the TLS connection that presents
   `clientCertificate`/`clientKey`, with no user name or password, and renews the token the same
@@ -41,7 +85,7 @@ All notable changes to this project are documented here. The format follows
   driver opens (partition readers included) presents it. The driver refuses the setting up front
   (SQLSTATE 28000) without a client certificate, without TLS, or beside `user`, `password`,
   `token` or `subjectToken`, and before signing in when the server lacks the `mtls_identity`
-  capability. The new problem codes `client_certificate_required`,
+  capability. The new problem codes `certificate_required`,
   `unknown_certificate_identity`, `certificate_revoked`, `certificate_mismatch` and
   `certificate_identity_mismatch` map to SQLSTATE 28000 (`SQLInvalidAuthorizationSpecException`),
   with the code in `WarpProblem.codeOf`. Tests: `ClientCertificateGrantTest` (an HTTPS fake that
@@ -66,7 +110,7 @@ All notable changes to this project are documented here. The format follows
   0d5a36c). The tests for typed-NULL, list and interval parameters and for column
   comments and defaults run again: the server bugs they were disabled for are fixed.
 
-- A JDBC 4.2 driver for the Warp SQL protocol (draft 0.1.0): `jdbc:warp://host[:port][/catalog]`,
+- A JDBC 4.2 driver for the Warp SQL protocol, version 1: `jdbc:warp://host[:port][/catalog]`,
   registered with `DriverManager` and `ServiceLoader`, as one standalone jar
   (`target/warp-sql-jdbc.jar`) with every dependency relocated. Java 17 or later; no
   `--add-opens` needed, because Arrow buffers are read and written through heap copies.

@@ -6,6 +6,7 @@ import com.gizmodata.warpsql.jdbc.accessor.Accessors;
 import com.gizmodata.warpsql.jdbc.arrow.ArrowIpc;
 import com.gizmodata.warpsql.jdbc.arrow.Rows;
 import com.gizmodata.warpsql.jdbc.arrow.SqlTypes;
+import com.gizmodata.warpsql.jdbc.client.SqlErrors;
 import com.gizmodata.warpsql.jdbc.client.WarpClient;
 import java.io.IOException;
 import java.io.InputStream;
@@ -173,19 +174,18 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
 
   // ---- Server info ----
 
-  private JsonNode info(String... keys) throws SQLException {
-    JsonNode info = connection.serverInfo();
-    for (String key : keys) {
-      JsonNode value = info.get(key);
-      if (value != null && !value.isNull()) {
-        return value;
-      }
-    }
-    return null;
+  /**
+   * Returns a {@code server-info} value (spec §10): Flight SQL's {@code SqlInfo} name without a
+   * leading {@code FLIGHT_SQL_}, in lower case. A missing key means the server did not say, so the
+   * callers fall back to JDBC's usual answer, never to {@code false} for being missing.
+   */
+  private JsonNode info(String key) throws SQLException {
+    JsonNode value = connection.serverInfo().get(key);
+    return value == null || value.isNull() ? null : value;
   }
 
-  private String infoText(String fallback, String... keys) throws SQLException {
-    JsonNode value = info(keys);
+  private String infoText(String fallback, String key) throws SQLException {
+    JsonNode value = info(key);
     if (value == null) {
       return fallback;
     }
@@ -197,13 +197,13 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
     return value.asText();
   }
 
-  private boolean infoFlag(boolean fallback, String... keys) throws SQLException {
-    JsonNode value = info(keys);
+  private boolean infoFlag(boolean fallback, String key) throws SQLException {
+    JsonNode value = info(key);
     return value == null ? fallback : value.asBoolean(fallback);
   }
 
-  private int infoNumber(int fallback, String... keys) throws SQLException {
-    JsonNode value = info(keys);
+  private int infoNumber(int fallback, String key) throws SQLException {
+    JsonNode value = info(key);
     return value == null || !value.canConvertToInt() ? fallback : value.asInt();
   }
 
@@ -313,9 +313,8 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
       try {
         schema = ArrowIpc.readSchema(serialized);
       } catch (IOException e) {
-        throw new SQLException(
+        throw SqlErrors.protocolError(
             "Cannot read the schema of table " + table.text("table_name") + ": " + e.getMessage(),
-            "08P01",
             e);
       }
       int position = 0;
@@ -922,7 +921,8 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean isReadOnly() throws SQLException {
-    return infoFlag(connection.isReadOnly(), "read_only");
+    // Without the key, the connection's own read-only hint.
+    return infoFlag(connection.isReadOnly(), "server_read_only");
   }
 
   // ---- Identifiers and SQL ----
@@ -1072,10 +1072,9 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsTransactions() throws SQLException {
-    return infoFlag(
-        connection.client().hasCapability("transactions"),
-        "sql_transactions_supported",
-        "transactions_supported");
+    // commit() and rollback() need the capability (spec §5.5); the server-info key can only say no.
+    return connection.client().hasCapability("transactions")
+        && infoFlag(true, "sql_transactions_supported");
   }
 
   /** Flight SQL's isolation codes 0 to 4, as JDBC's constants. */
@@ -1594,7 +1593,7 @@ public final class WarpDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public int getMaxSchemaNameLength() throws SQLException {
-    return infoNumber(0, "sql_db_schema_name_length", "sql_max_schema_name_length");
+    return infoNumber(0, "sql_db_schema_name_length");
   }
 
   @Override

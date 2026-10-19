@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 
 /** A statement's status (spec §6.2), as the server reported it at one moment. */
 public final class StatementDocument {
@@ -22,7 +21,12 @@ public final class StatementDocument {
     /** Finished with an error. */
     FAILED,
     /** Stopped before finishing. */
-    CANCELLED;
+    CANCELLED,
+    /**
+     * A state this driver does not know, from a later version of the protocol. Later versions add
+     * only states that are not terminal (spec §12), so the statement is still going.
+     */
+    OTHER;
 
     /**
      * Returns whether the state can no longer change.
@@ -31,6 +35,23 @@ public final class StatementDocument {
      */
     public boolean isTerminal() {
       return this == SUCCEEDED || this == FAILED || this == CANCELLED;
+    }
+
+    static State of(String text) {
+      switch (text) {
+        case "queued":
+          return QUEUED;
+        case "running":
+          return RUNNING;
+        case "succeeded":
+          return SUCCEEDED;
+        case "failed":
+          return FAILED;
+        case "cancelled":
+          return CANCELLED;
+        default:
+          return OTHER;
+      }
     }
   }
 
@@ -110,16 +131,24 @@ public final class StatementDocument {
     if (id == null || stateText == null) {
       throw new IllegalArgumentException("not a statement document: " + json);
     }
-    State state;
-    try {
-      state = State.valueOf(stateText.toUpperCase(Locale.ROOT));
-    } catch (IllegalArgumentException e) {
-      throw new IllegalArgumentException("unknown statement state '" + stateText + "'", e);
-    }
+    State state = State.of(stateText);
     JsonNode errorJson = json.get("error");
     WarpProblem error =
         errorJson == null || errorJson.isNull() ? null : Problems.parse(errorJson, 0);
     String cancelReason = json.path("cancel_reason").asText(null);
+    if (error != null && error.cancelReason() == null && cancelReason != null) {
+      // The document says why; its error then says it too, as an error response's would.
+      error =
+          new WarpProblem(
+              error.status(),
+              error.code(),
+              error.title(),
+              error.detail(),
+              error.sqlState(),
+              error.requestId(),
+              error.reason(),
+              cancelReason);
+    }
     JsonNode result = json.get("result");
     boolean rows = false;
     long rowsAffected = -1;
@@ -188,7 +217,7 @@ public final class StatementDocument {
   }
 
   /**
-   * Returns why a cancelled statement was cancelled.
+   * Returns why a cancelled statement was cancelled. Later versions may add reasons (spec §12).
    *
    * @return for example {@code client} or {@code timeout}, or {@code null}
    */
@@ -244,8 +273,8 @@ public final class StatementDocument {
   /**
    * Returns how a result split into several partitions spreads its rows over them (spec §6.10).
    *
-   * @return {@code interleaved} or {@code any}, or {@code null} for one partition, a split not
-   *     decided yet, or partitions on other servers
+   * @return {@code interleaved} or {@code any}, or {@code null} for one partition or a split not
+   *     decided yet
    */
   public String partitionOrder() {
     return partitionOrder;

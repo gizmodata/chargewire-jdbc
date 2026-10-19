@@ -26,7 +26,7 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Warp SQL spec, and is tested against the reference server,
 `warp-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 0.1.0-SNAPSHOT**, written against Warp SQL draft 0.1.0. Nothing is published yet.
+**Status: 0.1.0-SNAPSHOT**, written against the Warp SQL protocol, version 1 (spec 1.0.0). Nothing is published yet.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
 - One standalone jar, every dependency relocated inside it
@@ -134,7 +134,12 @@ For a local server without TLS, add `useEncryption=false`.
   any partition breaks off, the whole result fails with the statement's error (a retained
   partition resumes from its next batch first); closing the result or `cancel()` stops every
   partition. Per statement: `statement.unwrap(WarpStatement.class).setResultPartitions(4)` and
-  `setResultOrder("any")`.
+  `setResultOrder("any")`. A split result that does not say how it is split (no
+  `Warp-Result-Order` header, no `partition_order`) is refused as a protocol error. On a server
+  with the `result_locations` capability, `async=true` submissions also accept partitions held by
+  other servers (`Warp-Result-Locations: remote`): the driver reads each where its `location`
+  says, with the same token and TLS settings, concurrently with the others. Without the
+  capability, or on the streamed path, every partition is read from the connection's server.
 - **Several open results on one connection.** A server may hold other work on a session until a
   streaming result has been read (warp-duckdb does). So before the driver sends another statement,
   a metadata call or an option change on a session with an unread streaming result, it reads the
@@ -149,10 +154,21 @@ For a local server without TLS, add `useEncryption=false`.
 - **Lost sessions.** If the server no longer has the session (idle eviction, restart), the driver
   opens a new one, replays catalog, schema and autocommit, re-prepares prepared statements, and
   reports the loss of temporary state as a warning on the connection. If a transaction was open,
-  its work is gone and the statement fails with SQLSTATE `08007` instead.
+  its work is gone and the statement fails with SQLSTATE `08007` instead. A transaction is open
+  when autocommit is off and a statement ran since the last commit, or, with autocommit on, when
+  the session document last read said so (a SQL `BEGIN`):
+  `connection.unwrap(WarpConnection.class).getTransactionState()` reads it (`NONE`, `OPEN`,
+  `ABORTED`, or `UNKNOWN`).
+- **Ended sessions.** A session the server ended because its token expired is reopened after
+  signing in again. One it ended for any other reason (`killed`, `token_revoked`,
+  `credentials_changed`, `principal_dropped`, or a reason this driver does not know) closes the
+  connection with SQLSTATE `08003` and the reason in the message.
 
 Every request that creates a statement carries an `Idempotency-Key`, so retrying one whose response
-was lost cannot run it twice. An expired access token is renewed with the connection's credential.
+was lost cannot run it twice. A token the server refuses (`invalid_token`) is renewed once with the
+connection's credential, unless the server says it was revoked or its credentials changed or were
+dropped (`token_revoked`, `credentials_changed`, `principal_dropped`): signing in again would not
+help, so that error reaches the application with its reason.
 
 ## 🔢 Types
 
@@ -194,6 +210,15 @@ HTTP status as the vendor code. The problem itself is the cause:
   String code = WarpProblem.codeOf(e);   // for example "sql_error" or "statement_timeout"
 }
 ```
+
+Decide on the `code`, never on the message. `WarpProblem.of(e)` also gives the `reason` of an
+`invalid_token` or `session_ended` error and the `cancel_reason` of a cancelled statement (a
+statement cancelled before its submission was answered fails at once with `statement_cancelled`).
+A code the driver does not know maps by its HTTP status. Failures the driver finds itself carry
+codes that begin with `client_`: `client_http_error` (an error response that is not a problem
+document, such as a proxy's page) and `client_protocol_error` (SQLSTATE `08P01`, a response that
+breaks the protocol). A TLS handshake the server refuses with the alert `certificate_required` or
+`certificate_revoked` is reported as that code (SQLSTATE `28000`).
 
 ## 🦫 DBeaver and other tools
 
