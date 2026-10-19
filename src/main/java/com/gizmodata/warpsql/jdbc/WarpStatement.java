@@ -26,7 +26,7 @@ import java.util.List;
  * #setQueryTimeout(int)} becomes {@code Warp-Statement-Timeout}, and {@link #cancel()} posts the
  * statement's cancel request.
  *
- * <p>With {@link #setResultPartitions(int)} above 1 (the {@code resultPartitions} property, 8 by
+ * <p>With {@link #setResultPartitions(int)} above 1 (the {@code resultPartitions} property, 32 by
  * default), a server with the {@code result_partitions} capability may split a result into
  * partitions, which the driver reads over separate connections at once and returns as one result
  * set (spec §6.10).

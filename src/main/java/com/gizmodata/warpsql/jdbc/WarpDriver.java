@@ -1,6 +1,7 @@
 package com.gizmodata.warpsql.jdbc;
 
 import com.gizmodata.warpsql.jdbc.client.ConnectionConfig;
+import com.gizmodata.warpsql.jdbc.client.IpcCompression;
 import com.gizmodata.warpsql.jdbc.client.WarpClient;
 import java.io.IOException;
 import java.io.InputStream;
@@ -149,9 +150,12 @@ public final class WarpDriver implements Driver {
 
   private static ConnectionConfig config(WarpUrl url, Map<String, String> properties)
       throws SQLException {
-    String compression = WarpProperty.IPC_COMPRESSION.get(properties).toLowerCase(Locale.ROOT);
-    if (!"none".equals(compression) && !"zstd".equals(compression)) {
-      throw invalid(WarpProperty.IPC_COMPRESSION, compression, "none or zstd");
+    String compression = IpcCompression.parse(WarpProperty.IPC_COMPRESSION.get(properties));
+    if (compression == null) {
+      throw invalid(
+          WarpProperty.IPC_COMPRESSION,
+          WarpProperty.IPC_COMPRESSION.get(properties),
+          "auto, lz4_frame, zstd or none");
     }
     String retain = WarpProperty.RETAIN_RESULTS.get(properties);
     long partitions = number(properties, WarpProperty.RESULT_PARTITIONS);
@@ -183,7 +187,7 @@ public final class WarpDriver implements Driver {
             path(properties, WarpProperty.CLIENT_KEY))
         .connectTimeout(milliseconds(number(properties, WarpProperty.CONNECT_TIMEOUT)))
         .execution(
-            "zstd".equals(compression),
+            compression,
             retain == null ? null : bool(properties, WarpProperty.RETAIN_RESULTS),
             bool(properties, WarpProperty.ASYNC),
             (int) number(properties, WarpProperty.POLL_WAIT))

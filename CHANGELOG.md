@@ -8,10 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- `resultPartitions` defaults to 8 (was 1): large results are split and read over several
-  connections at once. The server decides: a result of fewer than two batches still comes as
-  one stream, and a server without `result_partitions` never sees the request. Set
-  `resultPartitions=1` for one stream. The driver has no bulk-ingest path (batches of a
+- `ipcCompression` defaults to `auto` (was `none`), and accepts `auto`, `lz4_frame`, `zstd` and
+  `none`. `auto` times the discovery request when the connection opens and asks for `lz4_frame`
+  under a 10 ms round trip, `zstd` from 10 ms on, the same rule as the Warp SQL ADBC driver; a
+  codec the server does not list is never asked for. The `Warp-IPC-Compression` request header
+  names the one codec chosen, on the submission and on every partition's and every resumed fetch.
+- `resultPartitions` defaults to 32 (was 1), like the Go driver: large results are split and read
+  over several connections at once. The server decides how many partitions a result gets (a
+  small one still comes as one stream), and a server without `result_partitions` never sees the
+  request. Set `resultPartitions=1` for one stream. The driver has no bulk-ingest path (batches of a
   prepared statement are bound parameters, spec §7), so partitioned ingest (§8.3) does not
   apply to it.
 
@@ -25,6 +30,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- LZ4_FRAME Arrow results (spec §8.2, capability `ipc_compression_lz4_frame`). The driver
+  decodes LZ4 frames itself instead of through Arrow Java's commons-compress codec (about 0.01
+  GB/s): about 2.7 GB/s per thread end to end on SF1 `lineitem` (Apple M5 Max), against 2.0 GB/s
+  for `zstd`. It reads linked blocks (what Arrow C++ writes, and lz4-java's frame reader refuses)
+  and independent ones, every block size, block and content checksums (verified), content sizes,
+  stored blocks, concatenated and skippable frames, and buffers the server left uncompressed. No
+  new dependency. `DecodeBenchmark` (test sources) measures it.
 - Sign-in with the mutual-TLS client certificate (Warp SQL spec §4.4): `authType=client_certificate`
   (alias `mtls`) sends `{"grant_type":"client_certificate"}` over the TLS connection that presents
   `clientCertificate`/`clientKey`, with no user name or password, and renews the token the same

@@ -98,9 +98,9 @@ For a local server without TLS, add `useEncryption=false`.
 | `async` | `false` | Submit with `respond-async`, long-poll, then fetch: no request stays open for a whole query |
 | `pollWait` | `10` | Seconds each status long-poll may wait on the server |
 | `retainResults` | server's | `true` asks the server to keep results, so a dropped download resumes; `false` asks it not to |
-| `ipcCompression` | `none` | `zstd` accepts ZSTD-compressed Arrow buffers, if the server offers them |
+| `ipcCompression` | `auto` | Arrow compression to ask results in: `auto`, `lz4_frame`, `zstd` or `none` (see below) |
 | `resultBufferSize` | `134217728` | Bytes an unread result may buffer when another statement needs its session (see below) |
-| `resultPartitions` | `8` | Read up to this many partitions of a result at once, each over its own connection (1 to 256; 1: one stream; see below) |
+| `resultPartitions` | `32` | Read up to this many partitions of a result at once, each over its own connection (1 to 256; 1: one stream; see below) |
 | `resultOrder` | `preserve` | `any` lets a result read in partitions come back in any row order, which can be faster |
 
 `WarpDataSource` takes the same URL and properties.
@@ -121,7 +121,7 @@ For a local server without TLS, add `useEncryption=false`.
 - **Resumption.** If a download breaks off and the server retained the result, the driver fetches
   it again from the next unread batch. A result that was not retained cannot be resumed; set
   `retainResults=true` to have the server keep results (at the cost of its memory).
-- **Partitioned results** (by default). With `resultPartitions` above 1 (8 unless set), on a server with the
+- **Partitioned results** (by default). With `resultPartitions` above 1 (32 unless set), on a server with the
   `result_partitions` capability, the driver asks the server to split large results
   (`Warp-Result-Partitions`, spec §6.10) and reads every partition at once, each over its own HTTP
   connection on its own thread, a few batches ahead, into one `ResultSet`. With the default
@@ -133,6 +133,15 @@ For a local server without TLS, add `useEncryption=false`.
   partition resumes from its next batch first); closing the result or `cancel()` stops every
   partition. Per statement: `statement.unwrap(WarpStatement.class).setResultPartitions(4)` and
   `setResultOrder("any")`.
+- **Compression.** Results can come with Arrow's own buffer compression (spec §8.2), in each
+  partition's stream. `ipcCompression=auto` (the default) times the discovery request when the
+  connection opens: under 10 ms (a LAN or the same host) it asks for `lz4_frame`, which is cheap to
+  decode; from 10 ms on (a WAN) it asks for `zstd`, which compresses more. `lz4_frame` and `zstd`
+  ask for that codec whatever the link; `none` asks for none. A codec the server does not list
+  (`ipc_compression_lz4_frame`, `ipc_compression_zstd`) is never asked for, so `auto` against a
+  server with only `zstd` gets uncompressed results on a near link. The driver decodes LZ4 itself
+  (about 2.7 GB/s of TPC-H `lineitem` per thread on an Apple M5 Max, against about 2 GB/s for
+  `zstd`), including the linked blocks Arrow C++ writes; it never compresses what it uploads.
 - **Several open results on one connection.** A server may hold other work on a session until a
   streaming result has been read (warp-duckdb does). So before the driver sends another statement,
   a metadata call or an option change on a session with an unread streaming result, it reads the

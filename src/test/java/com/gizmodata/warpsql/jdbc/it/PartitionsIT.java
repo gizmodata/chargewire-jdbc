@@ -189,14 +189,19 @@ class PartitionsIT {
     }
   }
 
+  /**
+   * A result of fewer batches than the partitions asked for: the server may split it into fewer
+   * partitions (Hardcharger sizes a split by the result, about one partition per two batches), and
+   * the rows still come back exactly, in order.
+   */
   @Test
-  void emptyPartitionsEndTheResultCleanly() throws Exception {
+  void aResultOfFewerBatchesThanPartitionsReadsCleanly() throws Exception {
     long batchRows =
         new RawWarp(SharedServer.get())
             .firstBatchRows("SELECT i, i * 2 AS j FROM range(" + ROWS + ") t(i)");
     assertTrue(batchRows > 0 && batchRows < ROWS, "batch size " + batchRows);
-    // Two batches' worth of rows, split up to eight ways: some partitions get no batch.
-    long total = 2 * batchRows;
+    // Four batches' worth of rows, split up to eight ways.
+    long total = 4 * batchRows;
     try (ChaosProxy proxy = proxy();
         Connection connection = connect(proxy, "resultPartitions=8");
         Statement statement = connection.createStatement();
@@ -206,10 +211,10 @@ class PartitionsIT {
         assertEquals(expected++, rows.getLong(1));
       }
       assertEquals(total, expected);
-      TreeSet<Integer> fetched = partitionsFetched(proxy);
+      int partitions = partitionsFetched(proxy).size() + 1;
       assertTrue(
-          fetched.size() + 1 > 2,
-          (fetched.size() + 1) + " partitions for 2 batches: no empty partition to read");
+          partitions > 1 && partitions <= 8,
+          partitions + " partitions for 4 batches: " + proxy.requests());
     }
   }
 
@@ -385,7 +390,7 @@ class PartitionsIT {
         PreparedStatement statement =
             connection.prepareStatement("SELECT i FROM range(?) t(i) ORDER BY i")) {
       WarpStatement warp = statement.unwrap(WarpStatement.class);
-      assertEquals(8, warp.getResultPartitions(), "8 by default");
+      assertEquals(32, warp.getResultPartitions(), "32 by default");
       warp.setResultPartitions(4);
       assertEquals("preserve", warp.getResultOrder());
       assertThrows(SQLException.class, () -> warp.setResultPartitions(0));

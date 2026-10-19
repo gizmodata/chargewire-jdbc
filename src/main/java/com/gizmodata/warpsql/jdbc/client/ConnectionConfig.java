@@ -40,7 +40,7 @@ public final class ConnectionConfig {
   final Path clientCertificate;
   final Path clientKey;
   final Duration connectTimeout;
-  final boolean acceptZstd;
+  final String ipcCompression;
   final Boolean retainResults;
   final boolean async;
   final int pollWaitSeconds;
@@ -70,7 +70,7 @@ public final class ConnectionConfig {
     this.clientCertificate = builder.clientCertificate;
     this.clientKey = builder.clientKey;
     this.connectTimeout = builder.connectTimeout;
-    this.acceptZstd = builder.acceptZstd;
+    this.ipcCompression = builder.ipcCompression;
     this.retainResults = builder.retainResults;
     this.async = builder.async;
     this.pollWaitSeconds = builder.pollWaitSeconds;
@@ -165,11 +165,11 @@ public final class ConnectionConfig {
     private Path clientCertificate;
     private Path clientKey;
     private Duration connectTimeout = Duration.ofSeconds(30);
-    private boolean acceptZstd;
+    private String ipcCompression = IpcCompression.NONE;
     private Boolean retainResults;
     private boolean async;
     private int pollWaitSeconds = 10;
-    private int resultPartitions = 8;
+    private int resultPartitions = 32;
     private boolean anyOrder;
 
     /**
@@ -272,15 +272,16 @@ public final class ConnectionConfig {
     /**
      * Sets how statements run and results travel.
      *
-     * @param acceptZstd accept ZSTD-compressed Arrow buffers
+     * @param ipcCompression the Arrow compression to ask results in: one of {@link
+     *     IpcCompression#SETTINGS}
      * @param retainResults the {@code Warp-Retain-Result} preference, or {@code null}
      * @param async submit, poll and fetch instead of streaming in one request
      * @param pollWaitSeconds seconds each status long-poll may wait
      * @return this builder
      */
     public Builder execution(
-        boolean acceptZstd, Boolean retainResults, boolean async, int pollWaitSeconds) {
-      this.acceptZstd = acceptZstd;
+        String ipcCompression, Boolean retainResults, boolean async, int pollWaitSeconds) {
+      this.ipcCompression = ipcCompression;
       this.retainResults = retainResults;
       this.async = async;
       this.pollWaitSeconds = pollWaitSeconds;

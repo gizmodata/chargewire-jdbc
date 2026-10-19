@@ -760,6 +760,156 @@ class ClientBehaviourTest {
     assertEquals("application/json", submit.header("Accept"));
   }
 
+  private static final String BOTH_CODECS =
+      "[\"prepared_statements\",\"long_poll\",\"result_partitions\",\"result_retention\","
+          + "\"ipc_compression_zstd\",\"ipc_compression_lz4_frame\"]";
+
+  /** One batch of the integers from {@code first} to {@code first + rows - 1}. */
+  private static List<Object[]> batch(long first, int rows) {
+    return batches(first, 1, rows).get(0);
+  }
+
+  /**
+   * A streamed result split three ways (spec §6.10): the submission's own stream is partition 0,
+   * and the driver fetches partitions 1 and 2. Every one of those requests must ask for the codec,
+   * since each partition's header applies to that partition alone (§8.2).
+   */
+  @Test
+  void everyPartitionsRequestAsksForTheCodec() throws Exception {
+    server.capabilities = BOTH_CODECS;
+    byte[] partition0 = TestStreams.stream(allocator, INTS, List.of(batch(0, 5), batch(15, 5)));
+    byte[] partition1 = TestStreams.stream(allocator, INTS, List.of(batch(5, 5), batch(20, 5)));
+    byte[] partition2 = TestStreams.stream(allocator, INTS, List.of(batch(10, 5)));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          exchange.getResponseHeaders().set("Warp-Result-Partitions", "3");
+          exchange.getResponseHeaders().set("Warp-Result-Order", "interleaved");
+          exchange.getResponseHeaders().set("Warp-IPC-Compression", "none");
+          arrow(exchange, "q1", partition0);
+        });
+    server.route(
+        "GET",
+        "/v1/sessions/s1/statements/q1/result",
+        (exchange, request, path) ->
+            arrow(exchange, "q1", request.query.equals("partition=1") ? partition1 : partition2));
+    try (Connection connection = connect("ipcCompression=LZ4_FRAME");
+        Statement statement = connection.createStatement();
+        ResultSet rows = statement.executeQuery("SELECT i FROM big ORDER BY i")) {
+      assertEquals(range(0, 25), readAll(rows));
+    }
+    FakeWarpServer.Request submit = server.requests("POST", "/v1/sessions/s1/statements").get(0);
+    assertEquals("lz4_frame", submit.header("Warp-IPC-Compression"));
+    List<FakeWarpServer.Request> fetches =
+        server.requests("GET", "/v1/sessions/s1/statements/q1/result");
+    List<String> partitions = new ArrayList<>();
+    for (FakeWarpServer.Request fetch : fetches) {
+      partitions.add(fetch.query);
+      assertEquals("lz4_frame", fetch.header("Warp-IPC-Compression"), fetch.query);
+    }
+    partitions.sort(null);
+    assertEquals(List.of("partition=1", "partition=2"), partitions);
+  }
+
+  /** A fetch that resumes a broken stream (spec §6.5) asks for the codec too. */
+  @Test
+  void aResumedFetchAsksForTheCodec() throws Exception {
+    server.capabilities = BOTH_CODECS;
+    byte[] firstThree = TestStreams.withoutEndMarker(stream(0, 3, 100));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> arrow(exchange, "q1", firstThree));
+    retainedStatement("q1", true, "succeeded", null);
+    byte[] rest = stream(300, 2, 100);
+    server.route(
+        "GET",
+        "/v1/sessions/s1/statements/q1/result",
+        (exchange, request, path) -> arrow(exchange, "q1", rest));
+    try (Connection connection = connect("retainResults=true&ipcCompression=zstd");
+        Statement statement = connection.createStatement();
+        ResultSet rows = statement.executeQuery("SELECT i FROM big")) {
+      assertEquals(range(0, 500), readAll(rows));
+    }
+    FakeWarpServer.Request resume =
+        server.requests("GET", "/v1/sessions/s1/statements/q1/result").get(0);
+    assertEquals("partition=0&from_batch=3", resume.query);
+    assertEquals("zstd", resume.header("Warp-IPC-Compression"));
+  }
+
+  private String codecChosen(String options) throws SQLException {
+    try (Connection connection = connect(options)) {
+      return connection.unwrap(WarpConnection.class).client().resultCompression();
+    }
+  }
+
+  private String headerSent(String options) throws SQLException {
+    server.requests.clear();
+    server.route(
+        "POST",
+        "/v1/sessions/[^/]+/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q1", 0)));
+    try (Connection connection = connect(options);
+        Statement statement = connection.createStatement()) {
+      statement.execute("SELECT 1");
+    }
+    return server
+        .requests("POST", "/v1/sessions/[^/]+/statements")
+        .get(0)
+        .header("Warp-IPC-Compression");
+  }
+
+  @Test
+  void autoChoosesLz4OnANearLink() throws Exception {
+    server.capabilities = BOTH_CODECS;
+    assertEquals("lz4_frame", headerSent(""), "auto is the default");
+    assertEquals("lz4_frame", headerSent("ipcCompression=auto"));
+    assertTrue(
+        codecChosenRoundTrip("ipcCompression=auto").compareTo(Duration.ofMillis(10)) < 0,
+        "a loopback round trip");
+  }
+
+  private Duration codecChosenRoundTrip(String options) throws SQLException {
+    try (Connection connection = connect(options)) {
+      return connection.unwrap(WarpConnection.class).client().discoveryRoundTrip();
+    }
+  }
+
+  @Test
+  void autoChoosesZstdOnAFarLink() throws Exception {
+    server.capabilities = BOTH_CODECS;
+    server.discoveryDelayMillis = 25;
+    assertEquals("zstd", headerSent("ipcCompression=auto"));
+    assertEquals(
+        2,
+        server.requests("GET", "").size(),
+        "a slow first discovery is timed again on the open connection");
+    assertTrue(
+        codecChosenRoundTrip("").compareTo(Duration.ofMillis(25)) >= 0,
+        "the round trip includes the delay");
+    // An explicit codec is not second-guessed, and costs no second discovery.
+    server.requests.clear();
+    assertEquals("lz4_frame", headerSent("ipcCompression=lz4_frame"));
+    assertEquals(1, server.requests("GET", "").size());
+  }
+
+  @Test
+  void aCodecTheServerDoesNotListIsNeverUsed() throws Exception {
+    server.capabilities = "[\"prepared_statements\",\"ipc_compression_zstd\"]";
+    assertNull(headerSent("ipcCompression=auto"), "auto on a near link wants lz4_frame");
+    assertNull(headerSent("ipcCompression=lz4_frame"));
+    assertEquals("zstd", headerSent("ipcCompression=zstd"));
+    assertEquals("none", codecChosen("ipcCompression=lz4_frame"));
+    server.capabilities = "[\"prepared_statements\",\"ipc_compression_lz4_frame\"]";
+    server.discoveryDelayMillis = 25;
+    assertNull(headerSent("ipcCompression=auto"), "auto on a far link wants zstd");
+    assertNull(headerSent("ipcCompression=zstd"));
+    assertEquals("lz4_frame", headerSent("ipcCompression=lz4_frame"));
+    server.discoveryDelayMillis = 0;
+    assertNull(headerSent("ipcCompression=none"));
+  }
+
   @Test
   void aServerMountedElsewhere() throws Exception {
     try (FakeWarpServer mounted = new FakeWarpServer("/db/warp");

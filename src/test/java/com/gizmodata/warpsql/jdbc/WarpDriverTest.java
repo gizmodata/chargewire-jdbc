@@ -147,7 +147,12 @@ class WarpDriverTest {
     assertEquals("/warp", values.get("basePath"));
     DriverPropertyInfo compression =
         Arrays.stream(properties).filter(p -> p.name.equals("ipcCompression")).findFirst().get();
-    assertEquals(Arrays.asList("none", "zstd"), Arrays.asList(compression.choices));
+    assertEquals(
+        Arrays.asList("auto", "lz4_frame", "zstd", "none"), Arrays.asList(compression.choices));
+    assertEquals("auto", compression.value, "the default");
+    DriverPropertyInfo partitions =
+        Arrays.stream(properties).filter(p -> p.name.equals("resultPartitions")).findFirst().get();
+    assertEquals("32", partitions.value, "the default");
   }
 
   @Test
@@ -186,6 +191,9 @@ class WarpDriverTest {
         "connectTimeout=soon",
         "connectTimeout=-1",
         "ipcCompression=gzip",
+        "ipcCompression=lz4",
+        "ipcCompression=",
+        "ipcCompression=zstd,lz4_frame",
         "retainResults=perhaps"
       })
   void rejectsInvalidPropertyValues(String option) {
