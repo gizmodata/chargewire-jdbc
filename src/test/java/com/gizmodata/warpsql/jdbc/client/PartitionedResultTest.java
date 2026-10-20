@@ -277,6 +277,26 @@ class PartitionedResultTest {
     }
   }
 
+  /**
+   * A failure reaches the reader before the result stops the other downloads (the download that
+   * failed aborts them after waking the reader), so the stops are waited for, up to {@link #LIMIT}.
+   */
+  private static void awaitAborted(String message, FakePartition... partitions)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + LIMIT.toNanos();
+    while (true) {
+      boolean all = true;
+      for (FakePartition partition : partitions) {
+        all &= partition.aborted;
+      }
+      if (all) {
+        return;
+      }
+      assertTrue(System.nanoTime() < deadline, message);
+      Thread.sleep(5);
+    }
+  }
+
   @Test
   void aFailingPartitionFailsTheWholeResult() throws Exception {
     List<FakePartition> parts = interleaved(3, 30, 2);
@@ -292,7 +312,7 @@ class PartitionedResultTest {
       assertSame(boom, error, "the failing partition's own error");
       assertFalse(result.isFinished(), "a failed result never ends cleanly");
       assertSame(boom, assertThrows(SQLException.class, result::next), "and stays failed");
-      assertTrue(parts.get(0).aborted && parts.get(2).aborted, "the other downloads stop");
+      awaitAborted("the other downloads stop", parts.get(0), parts.get(2));
     }
   }
 
@@ -309,7 +329,7 @@ class PartitionedResultTest {
       SQLException error =
           assertTimeoutPreemptively(LIMIT, () -> assertThrows(SQLException.class, result::next));
       assertEquals("57014", error.getSQLState());
-      assertTrue(hanging.aborted);
+      awaitAborted("the hanging download stops", hanging);
     }
   }
 
@@ -424,7 +444,7 @@ class PartitionedResultTest {
       Thread.sleep(100);
       result.abort();
       assertEquals("24000", reading.get(20, TimeUnit.SECONDS).getSQLState());
-      assertTrue(hanging.aborted);
+      awaitAborted("the hanging download stops", hanging);
     } finally {
       executor.shutdownNow();
     }
