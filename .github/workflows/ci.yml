@@ -22,10 +22,11 @@ permissions:
   contents: read
   packages: read
 
-# "ci-" keeps this group apart from release.yml's when release.yml calls this workflow (a called
-# workflow sees the caller's github.workflow).
+# The group names the caller's workflow (a called workflow sees the caller's github.workflow),
+# so a release dispatch that calls this workflow never cancels a push run of it; "-tests" keeps
+# it apart from release.yml's own group, which would otherwise deadlock with it.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-tests
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
