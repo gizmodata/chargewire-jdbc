@@ -7,6 +7,7 @@ import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.Decimal256Vector;
 import org.apache.arrow.vector.DecimalVector;
+import org.apache.arrow.vector.FixedSizeBinaryVector;
 import org.apache.arrow.vector.Float2Vector;
 import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
@@ -200,6 +201,57 @@ final class NumberAccessors {
       return vector instanceof DecimalVector
           ? ((DecimalVector) vector).getObject(row)
           : ((Decimal256Vector) vector).getObject(row);
+    }
+
+    @Override
+    public BigDecimal getBigDecimal(int row) {
+      return getObject(row);
+    }
+
+    @Override
+    public String getString(int row) {
+      return getObject(row).toPlainString();
+    }
+
+    @Override
+    public boolean getBoolean(int row) {
+      return getObject(row).signum() != 0;
+    }
+
+    @Override
+    public long getLong(int row) throws SQLException {
+      return toLong(getObject(row));
+    }
+
+    @Override
+    public double getDouble(int row) {
+      return getObject(row).doubleValue();
+    }
+  }
+
+  /**
+   * DuckDB's HUGEINT and UHUGEINT as it sends them with {@code arrow_lossless_conversion}: 16
+   * bytes, little-endian, two's complement for HUGEINT. Read as {@link BigDecimal}, like UBIGINT
+   * and like HUGEINT as decimal128(38, 0), so every value is exact.
+   */
+  static final class Int128Accessor extends Accessor {
+    private final FixedSizeBinaryVector storage;
+    private final boolean signed;
+
+    Int128Accessor(ValueVector vector, FixedSizeBinaryVector storage, boolean signed) {
+      super(vector);
+      this.storage = storage;
+      this.signed = signed;
+    }
+
+    @Override
+    public BigDecimal getObject(int row) {
+      byte[] little = storage.get(row);
+      byte[] big = new byte[little.length];
+      for (int i = 0; i < little.length; i++) {
+        big[i] = little[little.length - 1 - i];
+      }
+      return new BigDecimal(signed ? new BigInteger(big) : new BigInteger(1, big));
     }
 
     @Override

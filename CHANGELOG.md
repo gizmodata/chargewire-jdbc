@@ -74,6 +74,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- DuckDB's `HUGEINT` and `UHUGEINT` are read exactly. With `SET arrow_lossless_conversion = true`
+  a DuckDB-based server sends them as its own 16-byte type (`arrow.opaque`, vendor `DuckDB`),
+  which the driver reads as `BigDecimal` (`getObject`, `getBigDecimal`, `getString`; `getLong`
+  throws 22003 past a `long`), reported as `NUMERIC` named `HUGEINT` or `UHUGEINT`, precision 39,
+  scale 0, signed for `HUGEINT` only. Without it a `HUGEINT` arrives as decimal128(38, 0), and a
+  value of 39 digits is refused by the server (`execution_error`, naming
+  `arrow_lossless_conversion`) rather than sent wrong; `TypesIT` covers both.
 - Browser sign-in (Warp SQL spec §4.3): `authType=oauth_browser` (alias `external`) creates a
   sign-in flow, opens its URL with `oauthBrowser` (a command, `none` to print the URL, default the
   desktop's browser), and polls with the flow's secret in the request body at the server's

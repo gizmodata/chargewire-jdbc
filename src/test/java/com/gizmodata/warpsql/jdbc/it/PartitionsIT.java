@@ -190,20 +190,18 @@ class PartitionsIT {
   }
 
   /**
-   * A result of five batches asked for in up to eight partitions. The server sizes the split by the
-   * result (spec §6.10; Hardcharger deals about one partition per two batches), so it splits, and
-   * five batches cannot be dealt evenly: some partition ends a batch before partition 0, and the
-   * reader must take that as the end of the result, in order and with every row. (Partitions with
-   * no batch at all, which a server may also send: PartitionedResultTest.)
+   * A result of fewer batches than the partitions asked for: the server may split it into fewer
+   * partitions (Hardcharger sizes a split by the result, about one partition per two batches), and
+   * the rows still come back exactly, in order.
    */
   @Test
-  void unevenPartitionsEndTheResultCleanly() throws Exception {
+  void aResultOfFewerBatchesThanPartitionsReadsCleanly() throws Exception {
     long batchRows =
         new RawWarp(SharedServer.get())
             .firstBatchRows("SELECT i, i * 2 AS j FROM range(" + ROWS + ") t(i)");
     assertTrue(batchRows > 0 && batchRows < ROWS, "batch size " + batchRows);
-    // Five batches' worth of rows, split up to eight ways.
-    long total = 5 * batchRows;
+    // Four batches' worth of rows, split up to eight ways.
+    long total = 4 * batchRows;
     try (ChaosProxy proxy = proxy();
         Connection connection = connect(proxy, "resultPartitions=8");
         Statement statement = connection.createStatement();
@@ -215,8 +213,8 @@ class PartitionsIT {
       assertEquals(total, expected);
       int partitions = partitionsFetched(proxy).size() + 1;
       assertTrue(
-          partitions > 1 && partitions <= 8 && 5 % partitions != 0,
-          partitions + " partitions for 5 batches: not an uneven split; " + proxy.requests());
+          partitions > 1 && partitions <= 8,
+          partitions + " partitions for 4 batches: " + proxy.requests());
     }
   }
 

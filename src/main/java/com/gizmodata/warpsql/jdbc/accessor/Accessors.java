@@ -1,5 +1,6 @@
 package com.gizmodata.warpsql.jdbc.accessor;
 
+import com.gizmodata.warpsql.jdbc.arrow.SqlTypes;
 import org.apache.arrow.vector.BaseIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
@@ -153,6 +154,13 @@ public final class Accessors {
     }
     if (vector instanceof UnionVector || vector instanceof DenseUnionVector) {
       return new NestedAccessors.UnionAccessor(vector, dictionaries);
+    }
+    String integer16 = SqlTypes.duckDbInteger(vector.getField().getType());
+    if (integer16 != null && vector instanceof ExtensionTypeVector) {
+      return new NumberAccessors.Int128Accessor(
+          vector,
+          (FixedSizeBinaryVector) ((ExtensionTypeVector<?>) vector).getUnderlyingVector(),
+          integer16.equals("HUGEINT"));
     }
     if (vector instanceof ExtensionTypeVector) {
       ExtensionTypeVector<?> extension = (ExtensionTypeVector<?>) vector;

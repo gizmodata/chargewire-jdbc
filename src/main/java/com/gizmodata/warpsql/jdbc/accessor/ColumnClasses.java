@@ -36,6 +36,9 @@ public final class ColumnClasses {
     if (SqlTypes.isUuid(type)) {
       return UUID.class;
     }
+    if (SqlTypes.duckDbInteger(type) != null) {
+      return BigDecimal.class;
+    }
     if (type instanceof ArrowType.ExtensionType) {
       type = ((ArrowType.ExtensionType) type).storageType();
     }

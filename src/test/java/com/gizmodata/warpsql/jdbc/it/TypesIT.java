@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.gizmodata.warpsql.jdbc.WarpInterval;
+import com.gizmodata.warpsql.jdbc.WarpProblem;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.sql.Connection;
@@ -36,6 +37,8 @@ import org.junit.jupiter.api.Test;
 
 /** Every common DuckDB type, read through the getters JDBC applications use, and bound back. */
 class TypesIT {
+  private static final String HUGEINT_MAX = "170141183460469231731687303715884105727";
+
   private static ResultSet one(Statement statement, String sql) throws SQLException {
     ResultSet rows = statement.executeQuery(sql);
     assertTrue(rows.next());
@@ -51,7 +54,8 @@ class TypesIT {
                 statement,
                 "SELECT -1::TINYINT a, -2::SMALLINT b, -3::INTEGER c, -4::BIGINT d,"
                     + " 255::UTINYINT e, 65535::USMALLINT f, 4294967295::UINTEGER g,"
-                    + " 18446744073709551615::UBIGINT h, 170141183460469231731687303715884105727::HUGEINT i")) {
+                    + " 18446744073709551615::UBIGINT h,"
+                    + " 99999999999999999999999999999999999999::HUGEINT i")) {
       assertEquals((byte) -1, rows.getObject("a"));
       assertEquals((short) -2, rows.getObject("b"));
       assertEquals(-3, rows.getObject("c"));
@@ -64,8 +68,9 @@ class TypesIT {
       SQLDataException overflow = assertThrows(SQLDataException.class, () -> rows.getLong("h"));
       assertEquals("22003", overflow.getSQLState());
       assertEquals(new BigInteger("18446744073709551615"), rows.getObject("h", BigInteger.class));
+      // The largest HUGEINT decimal128(38, 0) holds (beyond it: the two tests below).
       assertEquals(
-          new BigDecimal("170141183460469231731687303715884105727"), rows.getBigDecimal("i"));
+          new BigDecimal("99999999999999999999999999999999999999"), rows.getBigDecimal("i"));
       assertEquals(-1, rows.getInt("a"));
       assertEquals(255, rows.getInt("e"));
       assertEquals(
@@ -80,6 +85,76 @@ class TypesIT {
       assertEquals(20, metaData.getPrecision(8));
       assertFalse(metaData.isSigned(8));
       assertTrue(metaData.isSigned(4));
+    }
+  }
+
+  /**
+   * HUGEINT arrives as Arrow decimal128(38, 0), as from DuckDB's own Arrow export, and its maximum
+   * has 39 digits. The server refuses the value rather than send it wrong, and says how to get it.
+   */
+  @Test
+  void hugeintBeyondDecimal38IsRefusedWithoutLosslessConversion() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      SQLException refused =
+          assertThrows(
+              SQLException.class,
+              () -> statement.executeQuery("SELECT " + HUGEINT_MAX + "::HUGEINT i"));
+      assertEquals("execution_error", WarpProblem.codeOf(refused), refused.toString());
+      assertTrue(
+          refused.getMessage().contains(HUGEINT_MAX)
+              && refused.getMessage().contains("decimal128(38, 0)")
+              && refused.getMessage().contains("arrow_lossless_conversion"),
+          refused.getMessage());
+      // The session is still usable.
+      try (ResultSet rows = one(statement, "SELECT 1")) {
+        assertEquals(1, rows.getInt(1));
+      }
+    }
+  }
+
+  /**
+   * With {@code arrow_lossless_conversion} on, DuckDB sends HUGEINT and UHUGEINT as its own 16-byte
+   * types ({@code arrow.opaque}, vendor DuckDB), which the driver reads as exact numbers: every
+   * value, the extremes included, round-trips from Java through the server and back.
+   */
+  @Test
+  void hugeintAndUhugeintRoundTripWithLosslessConversion() throws SQLException {
+    String hugeintMin = "-170141183460469231731687303715884105728";
+    String uhugeintMax = "340282366920938463463374607431768211455";
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("SET SESSION arrow_lossless_conversion = true");
+      try (PreparedStatement prepared =
+          connection.prepareStatement(
+              "SELECT CAST(CAST(? AS VARCHAR) AS HUGEINT) i, CAST(CAST(? AS VARCHAR) AS HUGEINT) j,"
+                  + " CAST(CAST(? AS VARCHAR) AS UHUGEINT) u, NULL::HUGEINT n, -5::HUGEINT k")) {
+        prepared.setString(1, HUGEINT_MAX);
+        prepared.setString(2, hugeintMin);
+        prepared.setString(3, uhugeintMax);
+        try (ResultSet rows = prepared.executeQuery()) {
+          assertTrue(rows.next());
+          assertEquals(new BigDecimal(HUGEINT_MAX), rows.getObject("i"));
+          assertEquals(HUGEINT_MAX, rows.getString("i"));
+          assertEquals(new BigDecimal(hugeintMin), rows.getBigDecimal("j"));
+          assertEquals(new BigInteger(uhugeintMax), rows.getObject("u", BigInteger.class));
+          assertNull(rows.getObject("n"));
+          assertTrue(rows.wasNull());
+          assertEquals(-5L, rows.getLong("k"));
+          assertEquals(
+              "22003", assertThrows(SQLDataException.class, () -> rows.getLong("i")).getSQLState());
+          ResultSetMetaData metaData = rows.getMetaData();
+          assertEquals(Types.NUMERIC, metaData.getColumnType(1));
+          assertEquals("HUGEINT", metaData.getColumnTypeName(1));
+          assertEquals("UHUGEINT", metaData.getColumnTypeName(3));
+          assertEquals(39, metaData.getPrecision(1));
+          assertEquals(0, metaData.getScale(1));
+          assertTrue(metaData.isSigned(1));
+          assertFalse(metaData.isSigned(3));
+          assertEquals(BigDecimal.class.getName(), metaData.getColumnClassName(1));
+          assertFalse(rows.next());
+        }
+      }
     }
   }
 

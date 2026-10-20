@@ -2,6 +2,7 @@ package com.gizmodata.warpsql.jdbc.arrow;
 
 import java.sql.Types;
 import java.util.Map;
+import org.apache.arrow.vector.extension.OpaqueType;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
@@ -73,6 +74,9 @@ public final class SqlTypes {
    * @return a {@link Types} code
    */
   public static int jdbcType(ArrowType type) {
+    if (duckDbInteger(type) != null) {
+      return Types.NUMERIC;
+    }
     if (type instanceof ArrowType.ExtensionType) {
       return isUuid(type) ? Types.OTHER : jdbcType(((ArrowType.ExtensionType) type).storageType());
     }
@@ -138,6 +142,34 @@ public final class SqlTypes {
   }
 
   /**
+   * Returns DuckDB's 16-byte integers, which it sends as {@code arrow.opaque} (vendor {@code
+   * DuckDB}, 16-byte little-endian two's complement) when {@code arrow_lossless_conversion} is on;
+   * without it they arrive as decimal128(38, 0).
+   *
+   * @param type the Arrow type
+   * @return {@code HUGEINT}, {@code UHUGEINT}, or {@code null} for any other type
+   */
+  public static String duckDbInteger(ArrowType type) {
+    if (!(type instanceof OpaqueType)) {
+      return null;
+    }
+    OpaqueType opaque = (OpaqueType) type;
+    if (!"DuckDB".equals(opaque.vendorName())
+        || !(opaque.storageType() instanceof ArrowType.FixedSizeBinary)
+        || ((ArrowType.FixedSizeBinary) opaque.storageType()).getByteWidth() != 16) {
+      return null;
+    }
+    switch (opaque.typeName()) {
+      case "hugeint":
+        return "HUGEINT";
+      case "uhugeint":
+        return "UHUGEINT";
+      default:
+        return null;
+    }
+  }
+
+  /**
    * Returns whether a type is Arrow's canonical UUID extension.
    *
    * @param type the Arrow type
@@ -161,6 +193,10 @@ public final class SqlTypes {
   }
 
   private static String typeName(Field field, ArrowType type) {
+    String integer16 = duckDbInteger(type);
+    if (integer16 != null) {
+      return integer16;
+    }
     if (type instanceof ArrowType.ExtensionType) {
       return isUuid(type)
           ? "UUID"
@@ -235,6 +271,9 @@ public final class SqlTypes {
    * @return the size, or {@code null} where it does not apply
    */
   public static Integer columnSize(ArrowType type) {
+    if (duckDbInteger(type) != null) {
+      return 39;
+    }
     if (type instanceof ArrowType.ExtensionType) {
       return isUuid(type) ? 36 : columnSize(((ArrowType.ExtensionType) type).storageType());
     }
@@ -287,6 +326,9 @@ public final class SqlTypes {
    * @return the scale, or {@code null} where it does not apply
    */
   public static Integer decimalDigits(ArrowType type) {
+    if (duckDbInteger(type) != null) {
+      return 0;
+    }
     switch (type.getTypeID()) {
       case Int:
         return 0;
@@ -308,6 +350,10 @@ public final class SqlTypes {
    * @return {@code true} for signed numbers
    */
   public static boolean isSigned(ArrowType type) {
+    String integer16 = duckDbInteger(type);
+    if (integer16 != null) {
+      return integer16.equals("HUGEINT");
+    }
     switch (type.getTypeID()) {
       case Int:
         return ((ArrowType.Int) type).getIsSigned();
@@ -326,6 +372,9 @@ public final class SqlTypes {
    * @return {@code true} for integers, floating point and decimals
    */
   public static boolean isNumeric(ArrowType type) {
+    if (duckDbInteger(type) != null) {
+      return true;
+    }
     switch (type.getTypeID()) {
       case Int:
       case FloatingPoint:

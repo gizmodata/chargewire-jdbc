@@ -320,6 +320,8 @@ WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD \
 WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG=--mtls-ca-cert \
 WARP_SQL_JDBC_TEST_SERVER_USERNAME_FLAG=--admin-username \
 WARP_SQL_JDBC_TEST_SERVER_NAME=Hardcharger \
+WARP_SQL_JDBC_TEST_SERVER_OAUTH_ARGS='--token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url} --oauth-provider-name Mock' \
+WARP_SQL_JDBC_TEST_SERVER_OAUTH_SECRET_ENV=HARDCHARGER_OAUTH_CLIENT_SECRET \
 mvn verify
 ```
 

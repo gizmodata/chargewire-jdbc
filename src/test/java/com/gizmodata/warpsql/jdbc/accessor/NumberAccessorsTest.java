@@ -13,6 +13,7 @@ import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.Decimal256Vector;
 import org.apache.arrow.vector.DecimalVector;
+import org.apache.arrow.vector.FixedSizeBinaryVector;
 import org.apache.arrow.vector.Float2Vector;
 import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
@@ -23,6 +24,8 @@ import org.apache.arrow.vector.UInt1Vector;
 import org.apache.arrow.vector.UInt2Vector;
 import org.apache.arrow.vector.UInt4Vector;
 import org.apache.arrow.vector.UInt8Vector;
+import org.apache.arrow.vector.extension.OpaqueType;
+import org.apache.arrow.vector.extension.OpaqueVector;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.junit.jupiter.api.Test;
@@ -53,6 +56,59 @@ class NumberAccessorsTest extends AccessorFixture {
     assertEquals(0xAABBCCDDEEFFAABBL, accessor(big).getObject(0));
     assertEquals("-128", accessor(tiny).getString(0));
     assertEquals(Long.toString(0xAABBCCDDEEFFAABBL), accessor(big).getString(0));
+  }
+
+  /** 16 little-endian bytes, as DuckDB sends HUGEINT and UHUGEINT. */
+  private static byte[] littleEndian(BigInteger value) {
+    byte[] big = value.toByteArray();
+    byte[] little = new byte[16];
+    byte fill = (byte) (value.signum() < 0 ? 0xFF : 0);
+    for (int i = 0; i < 16; i++) {
+      little[i] = i < big.length ? big[big.length - 1 - i] : fill;
+    }
+    return little;
+  }
+
+  @Test
+  void duckDbSixteenByteIntegersReadExactly() throws SQLException {
+    BigInteger max = BigInteger.ONE.shiftLeft(127).subtract(BigInteger.ONE);
+    BigInteger min = BigInteger.ONE.shiftLeft(127).negate();
+    BigInteger unsignedMax = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
+    OpaqueVector hugeint =
+        vector(
+            new OpaqueType(new ArrowType.FixedSizeBinary(16), "hugeint", "DuckDB"),
+            4,
+            v -> {
+              FixedSizeBinaryVector storage = (FixedSizeBinaryVector) v.getUnderlyingVector();
+              storage.setSafe(0, littleEndian(max));
+              storage.setSafe(1, littleEndian(min));
+              storage.setSafe(2, littleEndian(BigInteger.valueOf(-5)));
+            });
+    OpaqueVector uhugeint =
+        vector(
+            new OpaqueType(new ArrowType.FixedSizeBinary(16), "uhugeint", "DuckDB"),
+            1,
+            v ->
+                ((FixedSizeBinaryVector) v.getUnderlyingVector())
+                    .setSafe(0, littleEndian(unsignedMax)));
+    Accessor signed = accessor(hugeint);
+    assertEquals(new BigDecimal(max), signed.getObject(0));
+    assertEquals(new BigDecimal(min), signed.getBigDecimal(1));
+    assertEquals("-5", signed.getString(2));
+    assertEquals(-5L, signed.getLong(2));
+    assertEquals(
+        "22003", assertThrows(SQLDataException.class, () -> signed.getLong(0)).getSQLState());
+    assertTrue(signed.isNull(3));
+    assertEquals(unsignedMax, accessor(uhugeint).getObject(0, BigInteger.class));
+    // Another vendor's 16-byte opaque type stays bytes.
+    OpaqueVector other =
+        vector(
+            new OpaqueType(new ArrowType.FixedSizeBinary(16), "hugeint", "Other"),
+            1,
+            v ->
+                ((FixedSizeBinaryVector) v.getUnderlyingVector())
+                    .setSafe(0, littleEndian(BigInteger.ONE)));
+    assertTrue(accessor(other).getObject(0) instanceof byte[]);
   }
 
   @Test

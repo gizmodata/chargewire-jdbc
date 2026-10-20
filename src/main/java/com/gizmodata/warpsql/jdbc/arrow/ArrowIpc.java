@@ -12,6 +12,7 @@ import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.VectorUnloader;
+import org.apache.arrow.vector.extension.OpaqueType;
 import org.apache.arrow.vector.extension.UuidType;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ReadChannel;
@@ -38,6 +39,8 @@ public final class ArrowIpc {
     // Arrow registers its canonical UUID type only when the class loads; register it before
     // any schema is read, so arrow.uuid columns always decode as UUIDs.
     ExtensionTypeRegistry.register(UuidType.INSTANCE);
+    // And arrow.opaque, in which DuckDB sends HUGEINT and UHUGEINT with arrow_lossless_conversion.
+    OpaqueType.ensureRegistered();
   }
 
   private ArrowIpc() {}
