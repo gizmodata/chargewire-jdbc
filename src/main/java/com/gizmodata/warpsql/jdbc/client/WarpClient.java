@@ -80,6 +80,8 @@ public final class WarpClient implements AutoCloseable {
   private String serverName;
   private String serverVersion;
   private String browserProvider;
+  private Duration roundTrip = Duration.ZERO;
+  private String resultCompression;
 
   private final Object tokenLock = new Object();
   private String accessToken;
@@ -203,8 +205,8 @@ public final class WarpClient implements AutoCloseable {
   // ---- Discovery and authentication ----
 
   private void discover() throws SQLException {
-    JsonNode doc =
-        json(send(() -> request(config.baseUri).GET(), handlerBytes(), true, false), "discovery");
+    long[] times = new long[2];
+    JsonNode doc = json(send(timedDiscovery(times), timed(times), true, false), "discovery");
     if (!"warp-sql".equals(doc.path("protocol").asText())) {
       throw new SQLNonTransientConnectionException(
           config.baseUri + " is not a Warp SQL server (no \"protocol\": \"warp-sql\")", "08001");
@@ -226,6 +228,57 @@ public final class WarpClient implements AutoCloseable {
     serverName = doc.path("server").path("name").asText(null);
     serverVersion = doc.path("server").path("version").asText(null);
     browserProvider = doc.path("auth").path("oauth_browser").path("provider").asText(null);
+    roundTrip = Duration.ofNanos(times[1] - times[0]);
+    if (IpcCompression.AUTO.equals(config.ipcCompression)
+        && roundTrip.compareTo(IpcCompression.FAR_LINK) >= 0) {
+      // The first exchange also opened the connection (TCP, and TLS), so it took a round trip or
+      // more longer than one; time a second on the open connection before calling the link far.
+      try {
+        send(timedDiscovery(times), timed(times), false, false);
+        Duration again = Duration.ofNanos(times[1] - times[0]);
+        if (again.compareTo(roundTrip) < 0) {
+          roundTrip = again;
+        }
+      } catch (SQLException e) {
+        // Keep the first measurement.
+      }
+    }
+    resultCompression = IpcCompression.codec(config.ipcCompression, capabilities, roundTrip);
+  }
+
+  /** The discovery request, noting in {@code times[0]} when it goes out. */
+  private Supplier<HttpRequest.Builder> timedDiscovery(long[] times) {
+    return () -> {
+      times[0] = System.nanoTime();
+      return request(config.baseUri).GET();
+    };
+  }
+
+  /** Reads a body, noting in {@code times[1]} when the response's headers arrived. */
+  private static HttpResponse.BodyHandler<byte[]> timed(long[] times) {
+    return info -> {
+      times[1] = System.nanoTime();
+      return HttpResponse.BodyHandlers.ofByteArray().apply(info);
+    };
+  }
+
+  /**
+   * Returns the Arrow compression results are asked in (spec §8.2).
+   *
+   * @return {@code lz4_frame}, {@code zstd}, or {@code none}
+   */
+  public String resultCompression() {
+    return resultCompression == null ? IpcCompression.NONE : resultCompression;
+  }
+
+  /**
+   * Returns how long the discovery request took, from sending it to its response's headers: about
+   * one network round trip.
+   *
+   * @return the round trip
+   */
+  public Duration discoveryRoundTrip() {
+    return roundTrip;
   }
 
   private void signIn() throws SQLException {
@@ -1271,9 +1324,10 @@ public final class WarpClient implements AutoCloseable {
         .POST(HttpRequest.BodyPublishers.ofByteArray(body));
   }
 
+  /** Asks for the connection's Arrow compression, on every request that can return Arrow. */
   private void acceptCompression(HttpRequest.Builder builder) {
-    if (config.acceptZstd && hasCapability("ipc_compression_zstd")) {
-      builder.header("Warp-IPC-Compression", "zstd");
+    if (resultCompression != null) {
+      builder.header("Warp-IPC-Compression", resultCompression);
     }
   }
 

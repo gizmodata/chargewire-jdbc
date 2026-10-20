@@ -99,6 +99,9 @@ final class FakeWarpServer implements AutoCloseable {
   /** The {@code transaction} the session document reports (spec §5.1), or {@code null} for none. */
   volatile String transaction = "none";
 
+  /** How long discovery ({@code GET /warp}) takes to answer, as on a far link. */
+  volatile int discoveryDelayMillis;
+
   FakeWarpServer() throws IOException {
     this("/warp");
   }
@@ -139,18 +142,26 @@ final class FakeWarpServer implements AutoCloseable {
     route(
         "GET",
         "",
-        (exchange, request, path) ->
-            json(
-                exchange,
-                200,
-                "{\"protocol\":\"warp-sql\",\"protocol_versions\":"
-                    + protocolVersions
-                    + ",\"server\":{\"name\":\"fake\",\"version\":\"9.8.7\"},\"capabilities\":"
-                    + capabilities
-                    + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\","
-                    + "\"client_certificate\"]"
-                    + authExtra
-                    + "}}"));
+        (exchange, request, path) -> {
+          if (discoveryDelayMillis > 0) {
+            try {
+              Thread.sleep(discoveryDelayMillis);
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+          }
+          json(
+              exchange,
+              200,
+              "{\"protocol\":\"warp-sql\",\"protocol_versions\":"
+                  + protocolVersions
+                  + ",\"server\":{\"name\":\"fake\",\"version\":\"9.8.7\"},\"capabilities\":"
+                  + capabilities
+                  + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\","
+                  + "\"client_certificate\"]"
+                  + authExtra
+                  + "}}");
+        });
     route(
         "POST",
         "/v1/auth/token",

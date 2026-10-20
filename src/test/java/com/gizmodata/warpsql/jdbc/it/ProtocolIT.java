@@ -153,24 +153,124 @@ class ProtocolIT {
     }
   }
 
+  /**
+   * About 2 million rows of what compresses well: few distinct values. (The server sends a buffer
+   * LZ4 would shrink by less than about half uncompressed, which BIG's consecutive integers are.)
+   */
+  private static final String COMPRESSIBLE =
+      "SELECT i // 1000 AS g, 'status-' || (i % 3) AS s FROM range(2000000) t(i)";
+
   @Test
-  void zstdCompressionShrinksResults() throws Exception {
+  void compressionShrinksResults() throws Exception {
     WarpServer server = SharedServer.get();
-    long[] bytes = new long[2];
-    String[] modes = {"none", "zstd"};
-    for (int i = 0; i < 2; i++) {
+    String[] modes = {"none", "zstd", "lz4_frame"};
+    long[] bytes = new long[modes.length];
+    for (int i = 0; i < modes.length; i++) {
       try (ChaosProxy counter = new ChaosProxy(server.port, "$^", 0, 0);
           Connection connection =
               DriverManager.getConnection(
                   "jdbc:warp://127.0.0.1:" + counter.port() + "?ipcCompression=" + modes[i],
                   server.properties());
           Statement statement = connection.createStatement();
-          ResultSet rows = statement.executeQuery(BIG)) {
-        assertBigResult(rows);
+          ResultSet rows = statement.executeQuery(COMPRESSIBLE)) {
+        long count = 0;
+        long sum = 0;
+        while (rows.next()) {
+          count++;
+          sum += rows.getLong(1);
+          if (!rows.getString(2).startsWith("status-")) {
+            throw new AssertionError("row " + count + ": " + rows.getString(2));
+          }
+        }
+        assertEquals(2_000_000, count);
+        assertEquals(1_999_000_000L, sum);
         bytes[i] = counter.bytesFromServer();
       }
     }
     assertTrue(bytes[1] * 2 < bytes[0], "zstd " + bytes[1] + " bytes vs plain " + bytes[0]);
+    assertTrue(bytes[2] * 2 < bytes[0], "lz4 " + bytes[2] + " bytes vs plain " + bytes[0]);
+  }
+
+  /** About 12 batches of 122,880 rows: enough for the server to split it four ways. */
+  private static final long SPLIT_ROWS = 1_500_000;
+
+  /**
+   * Rows that exercise compression: {@code i} compresses well, {@code h} (53 random bits as a
+   * DOUBLE) not at all, so the server may send its buffers uncompressed inside a compressed stream
+   * (spec §8.2), and {@code n} and {@code s} have NULLs.
+   */
+  private static final String MIXED =
+      "SELECT i, (hash(i) >> 11)::DOUBLE AS h,"
+          + " CASE WHEN i % 5 = 0 THEN NULL ELSE i * 3 END AS n,"
+          + " CASE WHEN i % 7 = 0 THEN NULL ELSE 'v' || (i % 1000) END AS s"
+          + " FROM range("
+          + SPLIT_ROWS
+          + ") t(i) ORDER BY i";
+
+  private static final java.util.regex.Pattern PARTITION_FETCH =
+      java.util.regex.Pattern.compile("GET /warp/v1/sessions/\\S+/result\\?partition=\\d+");
+
+  /**
+   * A result split into partitions arrives compressed with the codec asked for, in every
+   * partition's response, and decodes to exactly the rows the server computed.
+   */
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"lz4_frame", "zstd"})
+  void compressedPartitionsDecodeExactly(String codec) throws Exception {
+    WarpServer server = SharedServer.get();
+    long expectedBits;
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement();
+        ResultSet rows =
+            statement.executeQuery(
+                "SELECT bit_xor(hash(i) >> 11) FROM range(" + SPLIT_ROWS + ") t(i)")) {
+      assertTrue(rows.next());
+      expectedBits = rows.getLong(1);
+    }
+    try (ChaosProxy proxy = new ChaosProxy(server.port, "$^", 0, 0);
+        Connection connection =
+            DriverManager.getConnection(
+                "jdbc:warp://127.0.0.1:"
+                    + proxy.port()
+                    + "?resultPartitions=4&ipcCompression="
+                    + codec,
+                server.properties());
+        Statement statement = connection.createStatement();
+        ResultSet rows = statement.executeQuery(MIXED)) {
+      long expected = 0;
+      long bits = 0;
+      while (rows.next()) {
+        long i = rows.getLong(1);
+        if (i != expected) {
+          throw new AssertionError("row " + expected + " has i = " + i);
+        }
+        double h = rows.getDouble(2);
+        bits ^= (long) h;
+        long n = rows.getLong(3);
+        if (rows.wasNull() != (i % 5 == 0) || (i % 5 != 0 && n != i * 3)) {
+          throw new AssertionError("row " + i + " has n = " + rows.getObject(3));
+        }
+        String text = rows.getString(4);
+        if ((text == null) != (i % 7 == 0) || (text != null && !text.equals("v" + (i % 1000)))) {
+          throw new AssertionError("row " + i + " has s = " + text);
+        }
+        expected++;
+      }
+      assertEquals(SPLIT_ROWS, expected, "every row");
+      assertEquals(expectedBits, bits, "the incompressible column came through bit for bit");
+      long fetched =
+          proxy.requests().stream().filter(r -> PARTITION_FETCH.matcher(r).matches()).count();
+      assertTrue(fetched >= 1, "the result was not split: " + proxy.requests());
+      List<String> asked = proxy.requestCompression();
+      assertTrue(
+          asked.size() >= fetched + 1 && asked.stream().allMatch(codec::equals),
+          "requests asked for " + asked);
+      List<String> used = proxy.responseCompression();
+      assertEquals(
+          fetched + 1,
+          used.stream().filter(codec::equals).count(),
+          "every partition's response says " + codec + ": " + used);
+    }
   }
 
   // ---- Retention and resumption (spec §6.5, §6.6) ----

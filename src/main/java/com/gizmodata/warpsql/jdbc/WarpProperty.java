@@ -1,5 +1,6 @@
 package com.gizmodata.warpsql.jdbc;
 
+import com.gizmodata.warpsql.jdbc.client.IpcCompression;
 import java.sql.DriverPropertyInfo;
 import java.util.Locale;
 import java.util.Map;
@@ -75,8 +76,16 @@ public enum WarpProperty {
   CONNECT_TIMEOUT("connectTimeout", "30000", "Connect timeout in milliseconds"),
   /** Milliseconds to wait for each response's headers; 0 waits forever. */
   NETWORK_TIMEOUT("networkTimeout", "0", "Response timeout in milliseconds (0: none)"),
-  /** Arrow buffer compression to accept for results: {@code none} or {@code zstd}. */
-  IPC_COMPRESSION("ipcCompression", "none", "Arrow result compression to accept: none or zstd"),
+  /**
+   * Arrow buffer compression to ask results in: {@code auto} ({@code lz4_frame} on a link with a
+   * round trip under 10 ms, {@code zstd} on a slower one), {@code lz4_frame}, {@code zstd} or
+   * {@code none}. A codec the server does not offer is never used.
+   */
+  IPC_COMPRESSION(
+      "ipcCompression",
+      "auto",
+      "Arrow result compression: auto (lz4_frame under 10 ms round trip, else zstd), lz4_frame,"
+          + " zstd or none"),
   /** Ask the server to keep (or not keep) results so they can be re-read and resumed. */
   RETAIN_RESULTS(
       "retainResults", null, "true or false: ask the server to retain results for resumption"),
@@ -103,7 +112,7 @@ public enum WarpProperty {
    */
   RESULT_PARTITIONS(
       "resultPartitions",
-      "8",
+      "32",
       "Partitions of a result to read at once over separate connections (1 to 256; 1: one)"),
   /** Whether the rows of a result split into partitions must keep their order. */
   RESULT_ORDER(
@@ -157,7 +166,7 @@ public enum WarpProperty {
     if ("true".equals(defaultValue) || "false".equals(defaultValue) || this == RETAIN_RESULTS) {
       info.choices = new String[] {"true", "false"};
     } else if (this == IPC_COMPRESSION) {
-      info.choices = new String[] {"none", "zstd"};
+      info.choices = IpcCompression.SETTINGS.clone();
     } else if (this == RESULT_ORDER) {
       info.choices = new String[] {"preserve", "any"};
     } else if (this == AUTH_TYPE) {

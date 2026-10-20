@@ -190,18 +190,20 @@ class PartitionsIT {
   }
 
   /**
-   * A result of two batches asked for in up to eight partitions. The server sizes the split by the
-   * result (spec §6.10) and may keep it in one, or deal some partitions no batch; either way the
-   * result reads to its end in order. (Empty interleaved partitions: PartitionedResultTest.)
+   * A result of five batches asked for in up to eight partitions. The server sizes the split by the
+   * result (spec §6.10; Hardcharger deals about one partition per two batches), so it splits, and
+   * five batches cannot be dealt evenly: some partition ends a batch before partition 0, and the
+   * reader must take that as the end of the result, in order and with every row. (Partitions with
+   * no batch at all, which a server may also send: PartitionedResultTest.)
    */
   @Test
-  void aSmallResultAskedForInManyPartitionsReadsCleanly() throws Exception {
+  void unevenPartitionsEndTheResultCleanly() throws Exception {
     long batchRows =
         new RawWarp(SharedServer.get())
             .firstBatchRows("SELECT i, i * 2 AS j FROM range(" + ROWS + ") t(i)");
     assertTrue(batchRows > 0 && batchRows < ROWS, "batch size " + batchRows);
-    // Two batches' worth of rows, split up to eight ways: some partitions get no batch.
-    long total = 2 * batchRows;
+    // Five batches' worth of rows, split up to eight ways.
+    long total = 5 * batchRows;
     try (ChaosProxy proxy = proxy();
         Connection connection = connect(proxy, "resultPartitions=8");
         Statement statement = connection.createStatement();
@@ -211,7 +213,10 @@ class PartitionsIT {
         assertEquals(expected++, rows.getLong(1));
       }
       assertEquals(total, expected);
-      assertTrue(partitionsFetched(proxy).size() < 8, proxy.requests().toString());
+      int partitions = partitionsFetched(proxy).size() + 1;
+      assertTrue(
+          partitions > 1 && partitions <= 8 && 5 % partitions != 0,
+          partitions + " partitions for 5 batches: not an uneven split; " + proxy.requests());
     }
   }
 
@@ -393,7 +398,7 @@ class PartitionsIT {
         PreparedStatement statement =
             connection.prepareStatement("SELECT i FROM range(?) t(i) ORDER BY i")) {
       WarpStatement warp = statement.unwrap(WarpStatement.class);
-      assertEquals(8, warp.getResultPartitions(), "8 by default");
+      assertEquals(32, warp.getResultPartitions(), "32 by default");
       warp.setResultPartitions(4);
       assertEquals("preserve", warp.getResultOrder());
       assertThrows(SQLException.class, () -> warp.setResultPartitions(0));

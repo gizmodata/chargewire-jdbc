@@ -34,6 +34,10 @@ final class ChaosProxy implements AutoCloseable {
   private final AtomicInteger mostOpen = new AtomicInteger();
   private static final Pattern REQUEST_LINE =
       Pattern.compile("(?m)^(?:GET|POST|DELETE|PATCH|PUT) \\S+(?= HTTP/1\\.1)");
+  private static final Pattern COMPRESSION_HEADER =
+      Pattern.compile("(?i)\r\nWarp-IPC-Compression: *([^\r\n]*)\r\n");
+  private final ConcurrentLinkedQueue<String> requestCompression = new ConcurrentLinkedQueue<>();
+  private final ConcurrentLinkedQueue<String> responseCompression = new ConcurrentLinkedQueue<>();
 
   ChaosProxy(int targetPort, String requestPattern, long cutAfterBytes, int times)
       throws IOException {
@@ -64,6 +68,35 @@ final class ChaosProxy implements AutoCloseable {
   /** The request lines forwarded so far, for example {@code GET /warp/v1/...}. */
   List<String> requests() {
     return new ArrayList<>(requests);
+  }
+
+  /** The {@code Warp-IPC-Compression} values of the requests forwarded so far, in order. */
+  List<String> requestCompression() {
+    return new ArrayList<>(requestCompression);
+  }
+
+  /** The {@code Warp-IPC-Compression} values of the responses forwarded so far, in order. */
+  List<String> responseCompression() {
+    return new ArrayList<>(responseCompression);
+  }
+
+  /**
+   * Notes the compression headers in a chunk of one direction's bytes; {@code tail} holds the end
+   * of the chunks before it, so a header split between two chunks is found once.
+   */
+  private static void noteCompression(
+      StringBuilder tail, String chunk, ConcurrentLinkedQueue<String> values) {
+    int seen = tail.length();
+    tail.append(chunk);
+    java.util.regex.Matcher header = COMPRESSION_HEADER.matcher(tail);
+    while (header.find()) {
+      if (header.end() > seen) {
+        values.add(header.group(1).trim());
+      }
+    }
+    if (tail.length() > 256) {
+      tail.delete(0, tail.length() - 256);
+    }
   }
 
   /** The most client connections that were open at the same time. */
@@ -116,6 +149,7 @@ final class ChaosProxy implements AutoCloseable {
 
     void clientToServer() {
       StringBuilder recent = new StringBuilder();
+      StringBuilder tail = new StringBuilder();
       try (InputStream in = client.getInputStream();
           OutputStream out = server.getOutputStream()) {
         byte[] buffer = new byte[16384];
@@ -125,6 +159,7 @@ final class ChaosProxy implements AutoCloseable {
           while (line.find()) {
             requests.add(line.group());
           }
+          noteCompression(tail, text, requestCompression);
           recent.append(text);
           if (recent.length() > 8192) {
             recent.delete(0, recent.length() - 8192);
@@ -148,6 +183,7 @@ final class ChaosProxy implements AutoCloseable {
     }
 
     void serverToClient() {
+      StringBuilder tail = new StringBuilder();
       try (InputStream in = server.getInputStream();
           OutputStream out = client.getOutputStream()) {
         byte[] buffer = new byte[16384];
@@ -161,6 +197,10 @@ final class ChaosProxy implements AutoCloseable {
             fromServer += read;
           }
           bytesFromServer.addAndGet(allowed);
+          noteCompression(
+              tail,
+              new String(buffer, 0, allowed, StandardCharsets.ISO_8859_1),
+              responseCompression);
           out.write(buffer, 0, allowed);
           out.flush();
           if (allowed < read) {

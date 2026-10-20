@@ -8,7 +8,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
-import org.apache.arrow.compression.CommonsCompressionFactory;
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -44,7 +43,7 @@ public final class ArrowIpc {
   private ArrowIpc() {}
 
   /**
-   * Opens a stream reader that decodes ZSTD and LZ4 compressed buffers.
+   * Opens a stream reader that decodes LZ4_FRAME and ZSTD compressed buffers.
    *
    * @param channel where the stream comes from
    * @param allocator where batches are allocated
@@ -52,9 +51,7 @@ public final class ArrowIpc {
    */
   public static ArrowStreamReader reader(HeapReadChannel channel, BufferAllocator allocator) {
     return new ArrowStreamReader(
-        new MessageChannelReader(channel, allocator),
-        allocator,
-        CommonsCompressionFactory.INSTANCE);
+        new MessageChannelReader(channel, allocator), allocator, WarpCompressionFactory.INSTANCE);
   }
 
   /**
