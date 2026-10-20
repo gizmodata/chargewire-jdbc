@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-20
+<!-- Set the date above at tag time. -->
+
+The first release, for Warp SQL protocol 1.0.0. Earlier builds (0.1.0-SNAPSHOT) were never
+published; the Changed and Fixed entries below describe what moved since them.
+
 ### Release
 
 - Maven Central publishing, for 1.0.0 at the Hardcharger launch: `com.gizmodata:warp-sql-jdbc`
