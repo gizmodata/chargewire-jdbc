@@ -397,3 +397,7 @@ USER_MANAGED (`-Dcentral.autoPublish=true` publishes as soon as it validates), a
   <a href="https://gizmodata.com"><img src="docs/assets/gizmodata-logo.png" alt="GizmoData" width="56"></a><br>
   <sub>Built by <a href="https://gizmodata.com">GizmoData</a></sub>
 </p>
+
+---
+
+<p align="center"><sub>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</sub></p>
