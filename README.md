@@ -26,7 +26,8 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Warp SQL spec, and is tested against the reference server,
 `warp-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 0.1.0-SNAPSHOT**, written against the Warp SQL protocol, version 1 (spec 1.0.0). Nothing is published yet.
+**Status: 1.0.0-SNAPSHOT**, for Warp SQL 1.0. Nothing is published yet: 1.0.0 goes to Maven
+Central at the Hardcharger launch.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
 - One standalone jar, every dependency relocated inside it
@@ -36,6 +37,30 @@ any server that implements the Warp SQL spec, and is tested against the referenc
   dropped downloads of retained results resume from the next batch
 - TLS by default, with PEM or trust-store roots, mutual TLS, and an explicit development-only
   switch to skip verification
+
+## 📦 Install
+
+<!-- LAUNCH: these coordinates resolve once 1.0.0 is on Maven Central (Hardcharger GA). -->
+
+Maven:
+
+```xml
+<dependency>
+  <groupId>com.gizmodata</groupId>
+  <artifactId>warp-sql-jdbc</artifactId>
+  <version>1.0.0</version>
+</dependency>
+```
+
+Gradle:
+
+```groovy
+implementation 'com.gizmodata:warp-sql-jdbc:1.0.0'
+```
+
+The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
+brings no dependencies and can't clash with an application's own. For a tool's class path, download
+`warp-sql-jdbc.jar` from the [latest release](https://github.com/gizmodata/warp-sql-jdbc/releases/latest).
 
 ## 🛠️ Build
 
@@ -328,13 +353,39 @@ mvn verify
 The server is started with only `PATH`, `HOME` (an empty directory), `TMPDIR` and its password
 variable in its environment, so credentials in your shell never reach it. They run against `target/warp-sql-jdbc.jar` with no other
 dependency on the class path, so they also prove the jar is self-contained, and without
-`--add-opens`. CI runs the unit tests only, since the server build comes from a private repository.
+`--add-opens`. CI runs the unit tests on JDK 17, 21 and 25, and the integration tests on JDK 17
+and 25 against `hardcharger-server` from the image named in `.github/workflows/ci.yml`
+(`ghcr.io/gizmodata/hardcharger:main`; pulled with the workflow's `GITHUB_TOKEN`, so the package
+grants this repository read access).
 
 Tests disabled with `@Disabled` document server bugs; each names the bug and fails if enabled
 (`-Djunit.jupiter.conditions.deactivate='org.junit.*DisabledCondition'`). The test certificates
 come from `dev/generate-test-certs.sh`.
 
 Formatting is google-java-format, checked by Spotless: `mvn spotless:apply`.
+
+## 🚢 Releases
+
+The version in `pom.xml` is the next release with `-SNAPSHOT`. To release X.Y.Z: set
+`<version>X.Y.Z</version>`, move `[Unreleased]` in the [CHANGELOG](CHANGELOG.md) to
+`## [X.Y.Z] - <date>`, commit, and push the commit and the tag `vX.Y.Z` together.
+`.github/workflows/release.yml` then runs the full test suite (unit and integration) on the tagged
+commit, builds the jar, sources and Javadoc jars, signs each file with GizmoData's Maven Central key
+(`BAAC1F9A2083FE825C9834D39CB426669B8EEEAA`), checks the bundle (`dev/check-central-bundle.sh`),
+uploads it to Maven Central and waits until it is published, and makes a GitHub Release with the
+jar, its signature and the CHANGELOG section. Pushing the tag is the decision to publish; Maven
+Central never takes a version twice.
+
+A dry run, from a `release/*` branch: **Actions > release > Run workflow**. It runs the tests and
+builds, signs and checks the bundle (a workflow artifact) without uploading. With `central_upload`
+it also uploads it as USER_MANAGED: Central validates it and holds it under **Deployments** on
+[central.sonatype.com](https://central.sonatype.com/publishing/deployments) for Publish or Drop.
+Drop it there to test without publishing.
+
+By hand: `mvn -P release deploy` with the Central Portal token as server `central` in
+`settings.xml`, the key in gpg's keyring and its passphrase in `MAVEN_GPG_PASSPHRASE`. It uploads
+USER_MANAGED (`-Dcentral.autoPublish=true` publishes as soon as it validates), and
+`-Dcentral.skipUpload=true` only builds `target/central-publishing/central-bundle.zip`.
 
 ## 📄 License
 

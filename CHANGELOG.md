@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Release
+
+- Maven Central publishing, for 1.0.0 at the Hardcharger launch: `com.gizmodata:warp-sql-jdbc`
+  is the standalone jar (every dependency relocated inside, so its POM lists none), with sources
+  and Javadoc jars, each file GPG-signed (`-P release`, through `central-publishing-maven-plugin`
+  0.12.0; uploads are USER_MANAGED unless `-Dcentral.autoPublish=true`). The POM carries the
+  developer, SCM and issue metadata Central requires. The version line moves to `1.0.0-SNAPSHOT`.
+- `release.yml`: on a `v*` tag, the full test suite on the tagged commit, then the signed bundle
+  is checked (`dev/check-central-bundle.sh`: every file, signature by the release key, checksums,
+  POM metadata, no SNAPSHOT dependency) and published to Maven Central, and a GitHub Release gets
+  the jar, its signature and the CHANGELOG section. By hand from a `release/*` branch it is a dry
+  run, or with `central_upload` a USER_MANAGED upload to validate and drop.
+- CI runs the integration tests, against `hardcharger-server` from its image, on JDK 17 and 25:
+  the release gate now includes them. Builds skip documentation-only changes.
+
+### Fixed
+
+- The integration tests run in the project directory again: with the standalone jar as the
+  project's jar, failsafe ran them in `target/`, where the TLS tests' certificate paths don't exist.
+
 ### Changed
 
 - Follows Warp SQL 1.0.0, the protocol's first stable version (no fallbacks for the shapes
