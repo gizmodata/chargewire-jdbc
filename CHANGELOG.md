@@ -7,7 +7,6 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ## [1.0.0] - 2026-10-20
-<!-- Set the date above at tag time. -->
 
 The first release, for Warp SQL protocol 1.0.0. Earlier builds (0.1.0-SNAPSHOT) were never
 published; the Changed and Fixed entries below describe what moved since them.
@@ -18,7 +17,7 @@ published; the Changed and Fixed entries below describe what moved since them.
   is the standalone jar (every dependency relocated inside, so its POM lists none), with sources
   and Javadoc jars, each file GPG-signed (`-P release`, through `central-publishing-maven-plugin`
   0.12.0; uploads are USER_MANAGED unless `-Dcentral.autoPublish=true`). The POM carries the
-  developer, SCM and issue metadata Central requires. The version line moves to `1.0.0-SNAPSHOT`.
+  developer, SCM and issue metadata Central requires. The release version is `1.0.0`.
 - `release.yml`: on a `v*` tag, the full test suite on the tagged commit, then the signed bundle
   is checked (`dev/check-central-bundle.sh`: every file, signature by the release key, checksums,
   POM metadata, no SNAPSHOT dependency) and published to Maven Central, and a GitHub Release gets
