@@ -28,6 +28,8 @@ published; the Changed and Fixed entries below describe what moved since them.
 
 ### Fixed
 
+- Closing a partitioned result also aborts a stream whose open finishes after cancellation.
+  The late stream is closed before the result's close returns.
 - The integration tests run in the project directory again: with the standalone jar as the
   project's jar, failsafe ran them in `target/`, where the TLS tests' certificate paths don't exist.
 

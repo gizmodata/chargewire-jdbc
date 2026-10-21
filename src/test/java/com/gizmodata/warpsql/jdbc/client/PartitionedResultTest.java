@@ -431,6 +431,32 @@ class PartitionedResultTest {
   }
 
   @Test
+  void closingWhileAPartitionOpensAbortsItsStream() throws Exception {
+    FakePartition first = new FakePartition(List.of(new long[] {1}));
+    FakePartition late = new FakePartition(List.of(new long[] {2}));
+    CountDownLatch opening = new CountDownLatch(1);
+    PartitionedResult.Opener opener =
+        () -> {
+          opening.countDown();
+          try {
+            new CountDownLatch(1).await();
+            throw new SQLException("The opener must be interrupted by close");
+          } catch (InterruptedException expected) {
+            // An HTTP open can finish just as close interrupts its partition thread.
+            return late;
+          }
+        };
+    try (PartitionedResult result =
+        new PartitionedResult(
+            "q_test", allocator, first, List.of(opener), PartitionedResult.Order.INTERLEAVED, () -> false)) {
+      assertTrue(opening.await(20, TimeUnit.SECONDS));
+      assertTimeoutPreemptively(LIMIT, result::close);
+      assertTrue(late.aborted, "a stream opened after cancellation is aborted too");
+      assertTrue(late.closed, "the late stream is closed before close returns");
+    }
+  }
+
+  @Test
   void abortWakesAWaitingReader() throws Exception {
     FakePartition hanging = new FakePartition(List.of(new long[] {0}));
     hanging.gate = new CountDownLatch(1);

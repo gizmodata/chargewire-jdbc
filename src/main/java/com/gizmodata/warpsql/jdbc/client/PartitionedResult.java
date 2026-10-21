@@ -463,6 +463,8 @@ public final class PartitionedResult implements ResultStream {
       stream = opener.open();
       lane.stream = stream;
       if (closed) {
+        // close may have stopped the other lanes before this opener published its stream.
+        stream.abort();
         return;
       }
       if (!schema.equals(stream.schema())) {
