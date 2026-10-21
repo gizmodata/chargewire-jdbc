@@ -448,7 +448,12 @@ class PartitionedResultTest {
         };
     try (PartitionedResult result =
         new PartitionedResult(
-            "q_test", allocator, first, List.of(opener), PartitionedResult.Order.INTERLEAVED, () -> false)) {
+            "q_test",
+            allocator,
+            first,
+            List.of(opener),
+            PartitionedResult.Order.INTERLEAVED,
+            () -> false)) {
       assertTrue(opening.await(20, TimeUnit.SECONDS));
       assertTimeoutPreemptively(LIMIT, result::close);
       assertTrue(late.aborted, "a stream opened after cancellation is aborted too");
