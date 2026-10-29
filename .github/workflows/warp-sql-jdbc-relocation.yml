@@ -1,0 +1,113 @@
+name: warp-sql-jdbc-relocation
+
+# Publishes com.gizmodata:warp-sql-jdbc:1.0.1, a relocation POM (legacy/warp-sql-jdbc/pom.xml) that sends the
+# coordinates from before the protocol's rename to com.gizmodata:chargewire-jdbc:2.0.0. By hand only, from a
+# release/* branch (the production environment admits v* tags and release/* branches). First a consumer project
+# that depends on warp-sql-jdbc:1.0.1 must resolve chargewire-jdbc:2.0.0 through the locally installed POM; then
+# the POM is signed with the release key and uploaded to Maven Central as AUTOMATIC (published once validated).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELOCATION_POM: legacy/warp-sql-jdbc/pom.xml
+  SIGNING_KEY_FINGERPRINT: BAAC1F9A2083FE825C9834D39CB426669B8EEEAA
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: A consumer of warp-sql-jdbc:1.0.1 resolves chargewire-jdbc:2.0.0
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -q -f "$RELOCATION_POM" install -Dgpg.skip=true -Dcentral.skipUpload=true
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cat > "$RUNNER_TEMP/consumer/pom.xml" <<'EOF'
+          <project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+            <groupId>probe</groupId><artifactId>consumer</artifactId><version>0</version>
+            <dependencies><dependency>
+              <groupId>com.gizmodata</groupId><artifactId>warp-sql-jdbc</artifactId><version>1.0.1</version>
+            </dependency></dependencies>
+          </project>
+          EOF
+          mvn -B -ntp -f "$RUNNER_TEMP/consumer/pom.xml" dependency:tree > "$RUNNER_TEMP/tree.txt"
+          cat "$RUNNER_TEMP/tree.txt"
+          grep -qF 'com.gizmodata:chargewire-jdbc:jar:2.0.0:compile' "$RUNNER_TEMP/tree.txt"
+          grep -qF 'has been relocated to com.gizmodata:chargewire-jdbc:jar:2.0.0' "$RUNNER_TEMP/tree.txt"
+
+  publish:
+    needs: [test]
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check Maven Central doesn't have warp-sql-jdbc 1.0.1 yet
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 \
+            https://repo1.maven.org/maven2/com/gizmodata/warp-sql-jdbc/1.0.1/warp-sql-jdbc-1.0.1.pom)
+          [ "$code" = 404 ] || { echo "::error::Maven Central already answers $code for warp-sql-jdbc 1.0.1"; exit 1; }
+
+      - name: Check the secrets are set
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in CENTRAL_TOKEN_USERNAME CENTRAL_TOKEN_PASSWORD GPG_PRIVATE_KEY GPG_PASSPHRASE; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::missing secrets in the production environment: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Import the signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import 2>&1 | grep -v '^gpg: key .*: secret key imported$' || true
+          fingerprints=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10 }')
+          if [[ $'\n'$fingerprints$'\n' != *$'\n'$SIGNING_KEY_FINGERPRINT$'\n'* ]]; then
+            echo "::error::GPG_PRIVATE_KEY is not the signing key $SIGNING_KEY_FINGERPRINT"
+            exit 1
+          fi
+
+      # settings.xml server "central", its credentials read from the environment at run time.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+
+      - name: Sign and upload to Maven Central (published once validated)
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -f "$RELOCATION_POM" -Dgpg.keyname="$SIGNING_KEY_FINGERPRINT" -DwaitMaxTime=3600 deploy

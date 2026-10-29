@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `legacy/warp-sql-jdbc` and the `warp-sql-jdbc-relocation` workflow (run by hand): a relocation POM,
+  `com.gizmodata:warp-sql-jdbc:1.0.1`, that sends the coordinates from before the rename to
+  `com.gizmodata:chargewire-jdbc:2.0.0`.
+
 ## [2.0.0] - 2026-10-29
 
 The driver for the protocol under its new name, Chargewire: `com.gizmodata:chargewire-jdbc` on Maven

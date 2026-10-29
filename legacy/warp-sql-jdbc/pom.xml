@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Maven coordinates from before the protocol's rename. This release is a relocation POM only: Maven and
+     Gradle resolve com.gizmodata:warp-sql-jdbc:1.0.1 to com.gizmodata:chargewire-jdbc:2.0.0 and print the message
+     below. Published by .github/workflows/warp-sql-jdbc-relocation.yml. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.gizmodata</groupId>
+  <artifactId>warp-sql-jdbc</artifactId>
+  <version>1.0.1</version>
+  <packaging>pom</packaging>
+
+  <name>Renamed to com.gizmodata:chargewire-jdbc</name>
+  <description>Renamed to com.gizmodata:chargewire-jdbc. This release only relocates to it.</description>
+  <url>https://github.com/gizmodata/chargewire-jdbc</url>
+
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <organization>
+    <name>GizmoData LLC</name>
+    <url>https://gizmodata.com</url>
+  </organization>
+
+  <developers>
+    <developer>
+      <name>Philip Moore</name>
+      <email>philip@gizmodata.com</email>
+      <organization>GizmoData LLC</organization>
+      <organizationUrl>https://gizmodata.com</organizationUrl>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/gizmodata/chargewire-jdbc.git</connection>
+    <developerConnection>scm:git:https://github.com/gizmodata/chargewire-jdbc.git</developerConnection>
+    <url>https://github.com/gizmodata/chargewire-jdbc</url>
+  </scm>
+
+  <distributionManagement>
+    <relocation>
+      <groupId>com.gizmodata</groupId>
+      <artifactId>chargewire-jdbc</artifactId>
+      <version>2.0.0</version>
+      <message>com.gizmodata:warp-sql-jdbc is now com.gizmodata:chargewire-jdbc (package com.gizmodata.chargewire.jdbc). Connection URLs written for warp-sql-jdbc keep working.</message>
+    </relocation>
+  </distributionManagement>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-gpg-plugin</artifactId>
+        <version>3.2.8</version>
+        <executions>
+          <execution>
+            <id>sign-artifacts</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>sign</goal>
+            </goals>
+            <configuration>
+              <!-- No pinentry dialog: the passphrase comes from MAVEN_GPG_PASSPHRASE. -->
+              <gpgArguments>
+                <arg>--pinentry-mode</arg>
+                <arg>loopback</arg>
+              </gpgArguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.sonatype.central</groupId>
+        <artifactId>central-publishing-maven-plugin</artifactId>
+        <version>0.12.0</version>
+        <extensions>true</extensions>
+        <configuration>
+          <publishingServerId>central</publishingServerId>
+          <autoPublish>true</autoPublish>
+          <waitUntil>published</waitUntil>
+          <deploymentName>warp-sql-jdbc 1.0.1 (relocation)</deploymentName>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
