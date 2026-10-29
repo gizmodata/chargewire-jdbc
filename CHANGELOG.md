@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-29
+
+The driver for the protocol under its new name, Chargewire: `com.gizmodata:chargewire-jdbc` on Maven
+Central. It works with servers on either side of the rename.
+
 ### Changed
 
 - The protocol is now called Chargewire, and the driver speaks it under the new names: Maven
