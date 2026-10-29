@@ -26,8 +26,8 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 1.0.0-SNAPSHOT**, for Chargewire 1.0. Nothing is published yet: 1.0.0 goes to Maven
-Central at the Hardcharger launch.
+**Status: 2.0.0**, for Chargewire protocol 1.0, on Maven Central. It works with servers on either
+side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
 - One standalone jar, every dependency relocated inside it
@@ -39,8 +39,6 @@ Central at the Hardcharger launch.
   switch to skip verification
 
 ## 📦 Install
-
-<!-- LAUNCH: these coordinates resolve once 1.0.0 is on Maven Central (Hardcharger GA). -->
 
 Maven:
 
@@ -55,7 +53,7 @@ Maven:
 Gradle:
 
 ```groovy
-implementation 'com.gizmodata:chargewire-jdbc:1.0.0'
+implementation 'com.gizmodata:chargewire-jdbc:2.0.0'
 ```
 
 The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
