@@ -15,6 +15,11 @@ All notable changes to this project are documented here. The format follows
   `jdbc:chargewire://`, and the server root `/chargewire` with `Chargewire-*` headers. Connection
   URLs written for earlier versions keep working unchanged: the driver still accepts their URL
   prefixes and former default `basePath`, and connects with today's names.
+- The driver also works with servers from before the rename (Hardcharger 2.0.x, for one): at the
+  default `basePath`, when discovery at `/chargewire` answers 404 and the server's former root
+  announces the former protocol, the connection speaks that server's spelling (path, headers,
+  problem types and the column-default key). Discovery happens once per connection; a custom
+  `basePath` never falls back, and otherwise the first error stands.
 
 ## [1.0.0] - 2026-10-20
 

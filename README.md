@@ -83,6 +83,9 @@ or come in the `Properties`; keys are case-insensitive, and a value in the URL w
 `&`, `;`, `#` and `%` in URL values. URLs written for 1.0.0, before the protocol was renamed
 Chargewire, keep working unchanged.
 
+Servers from before the rename work too: at the default `basePath`, the driver notices one at
+discovery and speaks its spelling for the whole connection. A custom `basePath` never falls back.
+
 ```java
 Properties properties = new Properties();
 properties.setProperty("user", "joe");
@@ -337,6 +340,10 @@ Other servers run the same suite when told how they differ from `chargewire-duck
 | `CHARGEWIRE_JDBC_TEST_SERVER_MTLS_FLAG` | `--tls-client-ca` | Its flag for the CA that client certificates must chain to |
 | `CHARGEWIRE_JDBC_TEST_SERVER_NAME` | `chargewire-duckdb` | The product name its `server-info` reports |
 | `CHARGEWIRE_JDBC_TEST_SERVER_USERNAME_FLAG` | `--username` | The flag that names its administrator |
+
+`LegacyDialectIT` also runs against a reference server from before the rename, named by
+`CHARGEWIRE_JDBC_TEST_FORMER_SERVER_BINARY` (default: the sibling pre-rename checkout's build); its
+former-server tests are skipped when there is none.
 
 For example, for Hardcharger:
 

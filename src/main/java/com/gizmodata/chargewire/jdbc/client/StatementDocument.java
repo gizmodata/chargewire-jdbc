@@ -126,6 +126,18 @@ public final class StatementDocument {
    * @throws IllegalArgumentException if the document is not a statement document
    */
   public static StatementDocument parse(JsonNode json) {
+    return parse(json, Dialect.CURRENT.problemTypePrefix());
+  }
+
+  /**
+   * Reads a statement document whose problem types start with {@code problemTypePrefix}.
+   *
+   * @param json the document
+   * @param problemTypePrefix the connection's problem-type prefix
+   * @return the parsed document
+   * @throws IllegalArgumentException if the document is not a statement document
+   */
+  static StatementDocument parse(JsonNode json, String problemTypePrefix) {
     String id = json.path("statement_id").asText(null);
     String stateText = json.path("state").asText(null);
     if (id == null || stateText == null) {
@@ -134,7 +146,9 @@ public final class StatementDocument {
     State state = State.of(stateText);
     JsonNode errorJson = json.get("error");
     ChargewireProblem error =
-        errorJson == null || errorJson.isNull() ? null : Problems.parse(errorJson, 0);
+        errorJson == null || errorJson.isNull()
+            ? null
+            : Problems.parse(errorJson, 0, problemTypePrefix);
     String cancelReason = json.path("cancel_reason").asText(null);
     if (error != null && error.cancelReason() == null && cancelReason != null) {
       // The document says why; its error then says it too, as an error response's would.

@@ -5,24 +5,34 @@ import com.gizmodata.chargewire.jdbc.ChargewireProblem;
 
 /** Reads problem documents (spec §11). */
 final class Problems {
-  private static final String TYPE_PREFIX = "urn:chargewire:error:";
-
   private Problems() {}
 
   /**
-   * Reads a problem document.
+   * Reads a problem document in today's spelling.
    *
    * @param json the document
    * @param httpStatus the response's status, used when the document has none
    * @return the problem
    */
   static ChargewireProblem parse(JsonNode json, int httpStatus) {
+    return parse(json, httpStatus, Dialect.CURRENT.problemTypePrefix());
+  }
+
+  /**
+   * Reads a problem document whose types start with {@code typePrefix}.
+   *
+   * @param json the document
+   * @param httpStatus the response's status, used when the document has none
+   * @param typePrefix the connection's problem-type prefix, before the code
+   * @return the problem
+   */
+  static ChargewireProblem parse(JsonNode json, int httpStatus, String typePrefix) {
     String code = text(json, "code");
     if (code == null) {
       String type = text(json, "type");
       code =
-          type != null && type.startsWith(TYPE_PREFIX)
-              ? type.substring(TYPE_PREFIX.length())
+          type != null && type.startsWith(typePrefix)
+              ? type.substring(typePrefix.length())
               : ChargewireProblem.CLIENT_HTTP_ERROR;
     }
     int status = json.path("status").asInt(httpStatus);

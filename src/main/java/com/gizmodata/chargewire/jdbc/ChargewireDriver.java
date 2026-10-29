@@ -167,6 +167,7 @@ public final class ChargewireDriver implements Driver {
     }
     boolean anyOrder = resultOrderIsAny(ChargewireProperty.RESULT_ORDER.get(properties));
     boolean certificateGrant = clientCertificateGrant(properties);
+    String basePath = LegacyUrls.basePath(ChargewireProperty.BASE_PATH.get(properties));
     ConnectionConfig.Builder builder = new ConnectionConfig.Builder();
     if (browserSignIn(properties)) {
       long timeout = number(properties, ChargewireProperty.OAUTH_TIMEOUT);
@@ -181,7 +182,8 @@ public final class ChargewireDriver implements Driver {
     return builder
         .clientCertificateGrant(certificateGrant)
         .address(url.host, url.port)
-        .basePath(LegacyUrls.basePath(ChargewireProperty.BASE_PATH.get(properties)))
+        .basePath(basePath)
+        .fallback(LegacyDialect.fallbackFor(basePath))
         .credentials(
             ChargewireProperty.USER.get(properties),
             ChargewireProperty.PASSWORD.get(properties),

@@ -72,6 +72,12 @@ public final class ChargewireClient implements AutoCloseable {
       Set.of("token_revoked", "credentials_changed", "principal_dropped");
 
   private final ConnectionConfig config;
+
+  /** Where the protocol is mounted, and how it is spelled there: set once, by discovery. */
+  private volatile URI baseUri;
+
+  private volatile Dialect dialect = Dialect.CURRENT;
+
   private final HttpClient http;
   private final ObjectMapper mapper = new ObjectMapper();
   private final String userAgent;
@@ -91,6 +97,7 @@ public final class ChargewireClient implements AutoCloseable {
   private ChargewireClient(ConnectionConfig config, String userAgent, Duration requestTimeout)
       throws SQLException {
     this.config = config;
+    this.baseUri = config.baseUri;
     this.userAgent = userAgent;
     this.requestTimeout = requestTimeout;
     HttpClient.Builder builder =
@@ -145,6 +152,15 @@ public final class ChargewireClient implements AutoCloseable {
    */
   public ObjectNode newObject() {
     return mapper.createObjectNode();
+  }
+
+  /**
+   * Returns the protocol spelling the connection speaks, as discovery found it.
+   *
+   * @return the dialect
+   */
+  public Dialect dialect() {
+    return dialect;
   }
 
   /**
@@ -206,11 +222,10 @@ public final class ChargewireClient implements AutoCloseable {
 
   private void discover() throws SQLException {
     long[] times = new long[2];
-    JsonNode doc = json(send(timedDiscovery(times), timed(times), true, false), "discovery");
-    if (!"chargewire".equals(doc.path("protocol").asText())) {
+    JsonNode doc = discoveryDocument(times);
+    if (!dialect.protocol().equals(doc.path("protocol").asText())) {
       throw new SQLNonTransientConnectionException(
-          config.baseUri + " is not a Chargewire server (no \"protocol\": \"chargewire\")",
-          "08001");
+          baseUri + " is not a Chargewire server (no \"protocol\": \"chargewire\")", "08001");
     }
     boolean v1 = false;
     for (JsonNode version : doc.path("protocol_versions")) {
@@ -235,7 +250,7 @@ public final class ChargewireClient implements AutoCloseable {
       // The first exchange also opened the connection (TCP, and TLS), so it took a round trip or
       // more longer than one; time a second on the open connection before calling the link far.
       try {
-        send(timedDiscovery(times), timed(times), false, false);
+        send(timedDiscovery(baseUri, times), timed(times), false, false);
         Duration again = Duration.ofNanos(times[1] - times[0]);
         if (again.compareTo(roundTrip) < 0) {
           roundTrip = again;
@@ -247,11 +262,43 @@ public final class ChargewireClient implements AutoCloseable {
     resultCompression = IpcCompression.codec(config.ipcCompression, capabilities, roundTrip);
   }
 
+  /**
+   * Reads the discovery document at the base path. When that answers 404 and the configuration
+   * names a fallback dialect, reads it at the fallback's root instead, and if the server there
+   * announces that dialect's protocol, the connection speaks it from then on. Otherwise the first
+   * error stands.
+   */
+  private JsonNode discoveryDocument(long[] times) throws SQLException {
+    try {
+      return json(send(timedDiscovery(baseUri, times), timed(times), true, false), "discovery");
+    } catch (SQLException e) {
+      Dialect fallback = config.fallback;
+      ChargewireProblem problem = ChargewireProblem.of(e);
+      if (fallback == null || problem == null || problem.status() != 404) {
+        throw e;
+      }
+      URI fallbackUri = baseUri.resolve(fallback.root());
+      JsonNode doc;
+      try {
+        doc =
+            json(send(timedDiscovery(fallbackUri, times), timed(times), true, false), "discovery");
+      } catch (SQLException ignored) {
+        throw e;
+      }
+      if (!fallback.protocol().equals(doc.path("protocol").asText())) {
+        throw e;
+      }
+      baseUri = fallbackUri;
+      dialect = fallback;
+      return doc;
+    }
+  }
+
   /** The discovery request, noting in {@code times[0]} when it goes out. */
-  private Supplier<HttpRequest.Builder> timedDiscovery(long[] times) {
+  private Supplier<HttpRequest.Builder> timedDiscovery(URI target, long[] times) {
     return () -> {
       times[0] = System.nanoTime();
-      return request(config.baseUri).GET();
+      return request(target).GET();
     };
   }
 
@@ -867,19 +914,20 @@ public final class ChargewireClient implements AutoCloseable {
               }
               if (options.timeoutMillis > 0) {
                 builder.header(
-                    "Chargewire-Statement-Timeout", Long.toString(options.timeoutMillis));
+                    dialect.header("Statement-Timeout"), Long.toString(options.timeoutMillis));
               }
               if (config.retainResults != null) {
-                builder.header("Chargewire-Retain-Result", config.retainResults.toString());
+                builder.header(dialect.header("Retain-Result"), config.retainResults.toString());
               }
               if (options.resultPartitions > 1 && hasCapability("result_partitions")) {
                 builder.header(
-                    "Chargewire-Result-Partitions",
+                    dialect.header("Result-Partitions"),
                     Integer.toString(Math.min(options.resultPartitions, MAX_RESULT_PARTITIONS)));
-                builder.header("Chargewire-Result-Order", options.anyOrder ? "any" : "preserve");
+                builder.header(
+                    dialect.header("Result-Order"), options.anyOrder ? "any" : "preserve");
               }
               if (followsLocations()) {
-                builder.header("Chargewire-Result-Locations", "remote");
+                builder.header(dialect.header("Result-Locations"), "remote");
               }
               acceptCompression(builder);
               return builder;
@@ -892,9 +940,9 @@ public final class ChargewireClient implements AutoCloseable {
           null,
           new ArrowResponse(
               response.body(),
-              response.headers().firstValue("Chargewire-Statement-Id").orElse(null),
-              response.headers().firstValue("Chargewire-Result-Partitions").orElse(null),
-              response.headers().firstValue("Chargewire-Result-Order").orElse(null)));
+              response.headers().firstValue(dialect.header("Statement-Id")).orElse(null),
+              response.headers().firstValue(dialect.header("Result-Partitions")).orElse(null),
+              response.headers().firstValue(dialect.header("Result-Order")).orElse(null)));
     }
     return new Submission(statementDocument(readJson(response)), null);
   }
@@ -1185,7 +1233,7 @@ public final class ChargewireClient implements AutoCloseable {
         response = http.send(request.build(), handler);
       } catch (HttpConnectTimeoutException e) {
         throw new SQLNonTransientConnectionException(
-            "Timed out connecting to " + config.baseUri, "08001", e);
+            "Timed out connecting to " + baseUri, "08001", e);
       } catch (HttpTimeoutException e) {
         throw new SQLTimeoutException("Timed out waiting for the server's response", "HYT01", e);
       } catch (IOException e) {
@@ -1235,7 +1283,7 @@ public final class ChargewireClient implements AutoCloseable {
                   "certificate_revoked".equals(alert)
                       ? "Certificate revoked"
                       : "Certificate required",
-                  "The server refused the TLS handshake with " + config.baseUri + ": " + message,
+                  "The server refused the TLS handshake with " + baseUri + ": " + message,
                   null,
                   null,
                   null));
@@ -1244,14 +1292,14 @@ public final class ChargewireClient implements AutoCloseable {
     }
     if (e instanceof ConnectException) {
       return new SQLNonTransientConnectionException(
-          "Cannot connect to " + config.baseUri + ": " + message, "08001", e);
+          "Cannot connect to " + baseUri + ": " + message, "08001", e);
     }
     if (e instanceof SSLException) {
       return new SQLNonTransientConnectionException(
-          "TLS failure with " + config.baseUri + ": " + message, "08001", e);
+          "TLS failure with " + baseUri + ": " + message, "08001", e);
     }
     return new SQLTransientConnectionException(
-        "Connection to " + config.baseUri + " failed: " + message, "08006", e);
+        "Connection to " + baseUri + " failed: " + message, "08006", e);
   }
 
   /**
@@ -1296,13 +1344,13 @@ public final class ChargewireClient implements AutoCloseable {
     } else {
       body = new byte[0];
     }
-    String requestId = response.headers().firstValue("Chargewire-Request-Id").orElse(null);
+    String requestId = response.headers().firstValue(dialect.header("Request-Id")).orElse(null);
     String contentType = response.headers().firstValue("Content-Type").orElse("");
     if (contentType.toLowerCase(Locale.ROOT).contains("json") && body.length > 0) {
       try {
         JsonNode json = mapper.readTree(body);
         if (json.isObject()) {
-          return Problems.parse(json, response.statusCode());
+          return Problems.parse(json, response.statusCode(), dialect.problemTypePrefix());
         }
       } catch (IOException e) {
         // Not JSON after all; report the raw response below.
@@ -1330,16 +1378,16 @@ public final class ChargewireClient implements AutoCloseable {
   /** Asks for the connection's Arrow compression, on every request that can return Arrow. */
   private void acceptCompression(HttpRequest.Builder builder) {
     if (resultCompression != null) {
-      builder.header("Chargewire-IPC-Compression", resultCompression);
+      builder.header(dialect.header("IPC-Compression"), resultCompression);
     }
   }
 
   private URI uri(String path) {
-    return URI.create(config.baseUri + path);
+    return URI.create(baseUri + path);
   }
 
   private URI sessionUri(String sessionId, String path) {
-    return URI.create(config.baseUri + "/v1/sessions/" + sessionId + path);
+    return URI.create(baseUri + "/v1/sessions/" + sessionId + path);
   }
 
   private static String trimSlash(String text) {
@@ -1400,9 +1448,9 @@ public final class ChargewireClient implements AutoCloseable {
     }
   }
 
-  private static StatementDocument statementDocument(JsonNode json) throws SQLException {
+  private StatementDocument statementDocument(JsonNode json) throws SQLException {
     try {
-      return StatementDocument.parse(json);
+      return StatementDocument.parse(json, dialect.problemTypePrefix());
     } catch (IllegalArgumentException e) {
       throw SqlErrors.protocolError(e.getMessage(), e);
     }

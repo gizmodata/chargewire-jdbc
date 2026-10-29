@@ -304,6 +304,7 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
     Pattern columnPattern = columnNamePattern == null ? null : likePattern(columnNamePattern);
     List<Object[]> rows = new ArrayList<>();
+    String defaultKey = connection.client().dialect().columnDefaultKey();
     for (Row table : tables(catalog, schemaPattern, tableNamePattern, null, true)) {
       byte[] serialized = (byte[]) table.get("table_schema");
       if (serialized == null) {
@@ -323,7 +324,7 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
         if (columnPattern != null && !columnPattern.matcher(field.getName()).matches()) {
           continue;
         }
-        rows.add(columnRow(table, field, position));
+        rows.add(columnRow(table, field, position, defaultKey));
       }
     }
     return result(
@@ -355,7 +356,7 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
         rows);
   }
 
-  private static Object[] columnRow(Row table, Field field, int position) {
+  private static Object[] columnRow(Row table, Field field, int position, String defaultKey) {
     Map<String, String> metadata = field.getMetadata() == null ? Map.of() : field.getMetadata();
     ArrowType type = field.getType();
     boolean described = SqlTypes.takesPrecisionMetadata(type);
@@ -389,7 +390,7 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
       radix,
       field.isNullable() ? columnNullable : columnNoNulls,
       metadata.get(SqlTypes.REMARKS),
-      metadata.get(SqlTypes.COLUMN_DEFAULT),
+      metadata.get(defaultKey),
       null,
       null,
       SqlTypes.isText(type) ? size : null,

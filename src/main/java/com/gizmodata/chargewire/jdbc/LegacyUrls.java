@@ -6,7 +6,7 @@ import java.util.List;
  * Connection settings written before the protocol was renamed Chargewire, read as today's: URLs
  * starting {@code jdbc:warp:} or {@code jdbc:warpsql:} (any case), and {@code basePath=/warp}, the
  * protocol's former root. The mapping is silent, so existing configurations keep working unchanged.
- * This class is the only place the former names appear.
+ * This class and {@link LegacyDialect} are the only places the former names appear.
  */
 final class LegacyUrls {
   private static final List<String> PREFIXES = List.of("jdbc:warp:", "jdbc:warpsql:");

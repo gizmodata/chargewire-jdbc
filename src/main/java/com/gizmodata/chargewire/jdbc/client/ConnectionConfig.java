@@ -28,6 +28,7 @@ public final class ConnectionConfig {
   }
 
   final URI baseUri;
+  final Dialect fallback;
   final String user;
   final String password;
   final String token;
@@ -61,6 +62,7 @@ public final class ConnectionConfig {
             ? builder.basePath.substring(0, builder.basePath.length() - 1)
             : builder.basePath;
     this.baseUri = URI.create(scheme + "://" + host + ":" + port + basePath);
+    this.fallback = builder.fallback;
     this.user = builder.user;
     this.password = builder.password;
     this.token = builder.token;
@@ -161,7 +163,8 @@ public final class ConnectionConfig {
   public static final class Builder {
     private String host;
     private int port = -1;
-    private String basePath = "/chargewire";
+    private String basePath = Dialect.CURRENT.root();
+    private Dialect fallback;
     private String user;
     private String password;
     private String token;
@@ -207,6 +210,18 @@ public final class ConnectionConfig {
      */
     public Builder basePath(String basePath) {
       this.basePath = basePath.startsWith("/") ? basePath : "/" + basePath;
+      return this;
+    }
+
+    /**
+     * Sets the dialect to try, at its own root on the same host and port, when discovery at the
+     * base path answers 404; {@code null} (the default) for none.
+     *
+     * @param fallback the earlier dialect, or {@code null}
+     * @return this builder
+     */
+    public Builder fallback(Dialect fallback) {
+      this.fallback = fallback;
       return this;
     }
 

@@ -63,6 +63,9 @@ final class ChargewireServer implements AutoCloseable {
 
   final int port;
 
+  /** The administrator the server was started with. */
+  final String user;
+
   /**
    * Contains {@code :} and {@code @}: credentials travel as JSON fields, so nothing may split them.
    */
@@ -74,8 +77,9 @@ final class ChargewireServer implements AutoCloseable {
   private final Path log;
 
   private ChargewireServer(
-      int port, String password, boolean tls, Process process, Path home, Path log) {
+      int port, String user, String password, boolean tls, Process process, Path home, Path log) {
     this.port = port;
+    this.user = user;
     this.password = password;
     this.tls = tls;
     this.process = process;
@@ -123,7 +127,27 @@ final class ChargewireServer implements AutoCloseable {
    */
   static ChargewireServer start(
       Map<String, String> extraEnvironment, boolean tls, String... extraArgs) {
-    Path binary = binary();
+    return start(
+        binary(), USER, USERNAME_FLAG, PASSWORD_VARIABLE, extraEnvironment, tls, extraArgs);
+  }
+
+  /**
+   * Starts another server binary, whose administrator, user-name flag and password variable are
+   * given, over plain HTTP.
+   */
+  static ChargewireServer startBinary(
+      Path binary, String user, String usernameFlag, String passwordVariable, String... extraArgs) {
+    return start(binary, user, usernameFlag, passwordVariable, Map.of(), false, extraArgs);
+  }
+
+  private static ChargewireServer start(
+      Path binary,
+      String user,
+      String usernameFlag,
+      String passwordVariable,
+      Map<String, String> extraEnvironment,
+      boolean tls,
+      String... extraArgs) {
     int port = freePort();
     byte[] random = new byte[12];
     new SecureRandom().nextBytes(random);
@@ -139,8 +163,8 @@ final class ChargewireServer implements AutoCloseable {
                   "127.0.0.1",
                   "--port",
                   Integer.toString(port),
-                  USERNAME_FLAG,
-                  USER));
+                  usernameFlag,
+                  user));
       for (String arg : extraArgs) {
         command.add(arg.replace("{port}", Integer.toString(port)));
       }
@@ -156,9 +180,9 @@ final class ChargewireServer implements AutoCloseable {
       environment.put("HOME", home.toString());
       environment.put("TMPDIR", home.toString());
       environment.putAll(extraEnvironment);
-      environment.put(PASSWORD_VARIABLE, password);
+      environment.put(passwordVariable, password);
       Process process = builder.start();
-      ChargewireServer server = new ChargewireServer(port, password, tls, process, home, log);
+      ChargewireServer server = new ChargewireServer(port, user, password, tls, process, home, log);
       Runtime.getRuntime().addShutdownHook(new Thread(server::close));
       server.awaitUp();
       return server;
@@ -217,7 +241,7 @@ final class ChargewireServer implements AutoCloseable {
   /** The user and password, plus plain HTTP for a server without TLS. */
   Properties properties() {
     Properties properties = new Properties();
-    properties.setProperty("user", USER);
+    properties.setProperty("user", user);
     properties.setProperty("password", password);
     if (!tls) {
       properties.setProperty("useEncryption", "false");
