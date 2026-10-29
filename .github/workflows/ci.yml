@@ -1,6 +1,6 @@
 name: CI
 
-# Unit tests on JDK 17, 21 and 25, and the integration tests against a real Warp SQL server
+# Unit tests on JDK 17, 21 and 25, and the integration tests against a real Chargewire server
 # (hardcharger-server), on every push to main and every pull request, and as the release gate
 # (release.yml calls this workflow on the tagged commit). The integration tests fail, never skip,
 # without a server.
@@ -61,7 +61,7 @@ jobs:
         if: matrix.jdk == 17
         run: |
           set -euo pipefail
-          jar tf target/warp-sql-jdbc.jar > entries.txt
+          jar tf target/chargewire-jdbc.jar > entries.txt
           grep -q '^META-INF/services/java.sql.Driver$' entries.txt
           # Every dependency is relocated except zstd-jni, whose JNI symbols name its package.
           if grep -E '^(org|com/fasterxml|com/google)/' entries.txt; then
@@ -88,8 +88,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: matrix.jdk == 17
         with:
-          name: warp-sql-jdbc
-          path: target/warp-sql-jdbc.jar
+          name: chargewire-jdbc
+          path: target/chargewire-jdbc.jar
 
   integration:
     name: Integration tests (JDK ${{ matrix.jdk }}, Hardcharger)
@@ -99,17 +99,17 @@ jobs:
       matrix:
         jdk: [17, 25]
     env:
-      # How hardcharger-server differs from warp-duckdb, the suite's default (README "Testing").
-      WARP_SQL_JDBC_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-      WARP_SQL_JDBC_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
-      WARP_SQL_JDBC_TEST_SERVER_USERNAME_FLAG: --admin-username
-      WARP_SQL_JDBC_TEST_SERVER_NAME: Hardcharger
+      # How hardcharger-server differs from chargewire-duckdb, the suite's default (README "Testing").
+      CHARGEWIRE_JDBC_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+      CHARGEWIRE_JDBC_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
+      CHARGEWIRE_JDBC_TEST_SERVER_USERNAME_FLAG: --admin-username
+      CHARGEWIRE_JDBC_TEST_SERVER_NAME: Hardcharger
       # Browser sign-in (BrowserSignInIT): Hardcharger's provider flags, a template the suite fills.
-      WARP_SQL_JDBC_TEST_SERVER_OAUTH_ARGS: >-
+      CHARGEWIRE_JDBC_TEST_SERVER_OAUTH_ARGS: >-
         --token-allowed-issuer {issuer} --token-allowed-audience {client_id}
         --token-default-role admin --token-authorized-emails {identity}
         --oauth-client-id {client_id} --oauth-base-url {base_url} --oauth-provider-name Mock
-      WARP_SQL_JDBC_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+      CHARGEWIRE_JDBC_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
     steps:
       - uses: actions/checkout@v7
         with:

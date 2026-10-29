@@ -5,13 +5,13 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>com.gizmodata</groupId>
-  <artifactId>warp-sql-jdbc</artifactId>
+  <artifactId>chargewire-jdbc</artifactId>
   <version>1.0.0</version>
   <packaging>jar</packaging>
 
-  <name>Warp SQL JDBC Driver</name>
-  <description>A JDBC driver for the Warp SQL protocol (SQL over HTTP with Apache Arrow).</description>
-  <url>https://github.com/gizmodata/warp-sql-jdbc</url>
+  <name>Chargewire JDBC Driver</name>
+  <description>A JDBC driver for the Chargewire protocol (SQL over HTTP with Apache Arrow).</description>
+  <url>https://github.com/gizmodata/chargewire-jdbc</url>
 
   <!-- Name, description, url, licenses, developers and scm are what Maven Central requires of
        every POM; the scm and issue URLs are the public repository's from the launch on. -->
@@ -38,15 +38,15 @@
   </developers>
 
   <scm>
-    <connection>scm:git:https://github.com/gizmodata/warp-sql-jdbc.git</connection>
-    <developerConnection>scm:git:https://github.com/gizmodata/warp-sql-jdbc.git</developerConnection>
-    <url>https://github.com/gizmodata/warp-sql-jdbc</url>
+    <connection>scm:git:https://github.com/gizmodata/chargewire-jdbc.git</connection>
+    <developerConnection>scm:git:https://github.com/gizmodata/chargewire-jdbc.git</developerConnection>
+    <url>https://github.com/gizmodata/chargewire-jdbc</url>
     <tag>v${project.version}</tag>
   </scm>
 
   <issueManagement>
     <system>GitHub Issues</system>
-    <url>https://github.com/gizmodata/warp-sql-jdbc/issues</url>
+    <url>https://github.com/gizmodata/chargewire-jdbc/issues</url>
   </issueManagement>
 
   <properties>
@@ -73,7 +73,7 @@
     <central.waitUntil>validated</central.waitUntil>
     <central.skipUpload>false</central.skipUpload>
 
-    <shaded.jar>${project.build.directory}/warp-sql-jdbc.jar</shaded.jar>
+    <shaded.jar>${project.build.directory}/chargewire-jdbc.jar</shaded.jar>
   </properties>
 
   <dependencyManagement>
@@ -124,7 +124,7 @@
       <artifactId>arrow-memory-unsafe</artifactId>
       <version>${arrow.version}</version>
     </dependency>
-    <!-- ZSTD Arrow buffer compression (Warp-IPC-Compression: zstd). -->
+    <!-- ZSTD Arrow buffer compression (Chargewire-IPC-Compression: zstd). -->
     <dependency>
       <groupId>org.apache.arrow</groupId>
       <artifactId>arrow-compression</artifactId>
@@ -164,8 +164,8 @@
   </dependencies>
 
   <build>
-    <!-- A fixed file name, target/warp-sql-jdbc.jar: the integration tests, CI and the docs name
-         it. Maven still deploys it as warp-sql-jdbc-<version>.jar. -->
+    <!-- A fixed file name, target/chargewire-jdbc.jar: the integration tests, CI and the docs name
+         it. Maven still deploys it as chargewire-jdbc-<version>.jar. -->
     <finalName>${project.artifactId}</finalName>
     <resources>
       <resource>
@@ -306,7 +306,7 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <!-- The standalone jar is the project's jar (target/warp-sql-jdbc.jar, from finalName),
+              <!-- The standalone jar is the project's jar (target/chargewire-jdbc.jar, from finalName),
                    so it is what Maven Central gets: a JDBC driver is one file with nothing to
                    resolve, and its relocated Arrow and Jackson can't clash with an application's.
                    The deployed POM lists no dependencies, since every one is inside. -->
@@ -315,27 +315,27 @@
               <relocations>
                 <relocation>
                   <pattern>org.apache.arrow</pattern>
-                  <shadedPattern>com.gizmodata.warpsql.jdbc.shaded.org.apache.arrow</shadedPattern>
+                  <shadedPattern>com.gizmodata.chargewire.jdbc.shaded.org.apache.arrow</shadedPattern>
                 </relocation>
                 <relocation>
                   <pattern>com.fasterxml.jackson</pattern>
-                  <shadedPattern>com.gizmodata.warpsql.jdbc.shaded.com.fasterxml.jackson</shadedPattern>
+                  <shadedPattern>com.gizmodata.chargewire.jdbc.shaded.com.fasterxml.jackson</shadedPattern>
                 </relocation>
                 <relocation>
                   <pattern>com.google.flatbuffers</pattern>
-                  <shadedPattern>com.gizmodata.warpsql.jdbc.shaded.com.google.flatbuffers</shadedPattern>
+                  <shadedPattern>com.gizmodata.chargewire.jdbc.shaded.com.google.flatbuffers</shadedPattern>
                 </relocation>
                 <relocation>
                   <pattern>org.apache.commons</pattern>
-                  <shadedPattern>com.gizmodata.warpsql.jdbc.shaded.org.apache.commons</shadedPattern>
+                  <shadedPattern>com.gizmodata.chargewire.jdbc.shaded.org.apache.commons</shadedPattern>
                 </relocation>
                 <relocation>
                   <pattern>org.slf4j</pattern>
-                  <shadedPattern>com.gizmodata.warpsql.jdbc.shaded.org.slf4j</shadedPattern>
+                  <shadedPattern>com.gizmodata.chargewire.jdbc.shaded.org.slf4j</shadedPattern>
                 </relocation>
                 <relocation>
                   <pattern>org.immutables</pattern>
-                  <shadedPattern>com.gizmodata.warpsql.jdbc.shaded.org.immutables</shadedPattern>
+                  <shadedPattern>com.gizmodata.chargewire.jdbc.shaded.org.immutables</shadedPattern>
                 </relocation>
                 <!-- zstd-jni is not relocated: its JNI symbols name its own package. -->
               </relocations>
@@ -345,7 +345,7 @@
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer"/>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <manifestEntries>
-                    <Automatic-Module-Name>com.gizmodata.warpsql.jdbc</Automatic-Module-Name>
+                    <Automatic-Module-Name>com.gizmodata.chargewire.jdbc</Automatic-Module-Name>
                     <Implementation-Title>${project.name}</Implementation-Title>
                     <Implementation-Version>${project.version}</Implementation-Version>
                   </manifestEntries>

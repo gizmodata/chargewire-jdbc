@@ -3,7 +3,7 @@ description: >
   Copies hardcharger-server (and its libraries) out of the private image
   ghcr.io/gizmodata/hardcharger, pulled with the workflow's GITHUB_TOKEN (packages: read; the
   package must grant this repository read access under "Manage Actions access"), and sets
-  WARP_SQL_JDBC_TEST_SERVER_BINARY. Linux runners only.
+  CHARGEWIRE_JDBC_TEST_SERVER_BINARY. Linux runners only.
 inputs:
   image:
     description: The image, e.g. ghcr.io/gizmodata/hardcharger:0.2.0
@@ -36,4 +36,4 @@ runs:
         binary="$RUNNER_TEMP/hardcharger/bin/hardcharger-server"
         "$binary" --version
         echo "binary=$binary" >> "$GITHUB_OUTPUT"
-        echo "WARP_SQL_JDBC_TEST_SERVER_BINARY=$binary" >> "$GITHUB_ENV"
+        echo "CHARGEWIRE_JDBC_TEST_SERVER_BINARY=$binary" >> "$GITHUB_ENV"

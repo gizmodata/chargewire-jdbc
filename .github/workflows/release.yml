@@ -1,6 +1,6 @@
 name: release
 
-# Maven Central (com.gizmodata:warp-sql-jdbc) and the GitHub Release.
+# Maven Central (com.gizmodata:chargewire-jdbc) and the GitHub Release.
 #
 # On a vX.Y.Z tag: the full test suite (ci.yml: unit tests, and the integration tests against a
 # real hardcharger-server) on the tagged commit, then the signed bundle is built, checked and
@@ -43,7 +43,7 @@ concurrency:
 
 env:
   GROUP_ID: com.gizmodata
-  ARTIFACT_ID: warp-sql-jdbc
+  ARTIFACT_ID: chargewire-jdbc
   # "GizmoData LLC (Maven Central signing) <philip@gizmodata.com>", RSA-4096, expires 2029-10-19.
   SIGNING_KEY_FINGERPRINT: BAAC1F9A2083FE825C9834D39CB426669B8EEEAA
 
@@ -254,7 +254,7 @@ jobs:
           staged="target/central-staging/${GROUP_ID//.//}/$ARTIFACT_ID/$VERSION"
           mkdir dist
           cp "$staged/$ARTIFACT_ID-$VERSION.jar" "$staged/$ARTIFACT_ID-$VERSION.jar.asc" dist/
-          # A version-free name for releases/latest/download/warp-sql-jdbc.jar.
+          # A version-free name for releases/latest/download/chargewire-jdbc.jar.
           cp "$staged/$ARTIFACT_ID-$VERSION.jar" "dist/$ARTIFACT_ID.jar"
           awk -v header="## [$VERSION] " '
             index($0, header) == 1 { found = 1; next }

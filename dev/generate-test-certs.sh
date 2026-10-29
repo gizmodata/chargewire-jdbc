@@ -6,7 +6,7 @@ cd "$(dirname "$0")/../src/test/resources/certs"
 openssl version | grep -q "^OpenSSL 3" || { echo "needs OpenSSL 3" >&2; exit 1; }
 days=36500
 
-openssl req -x509 -newkey rsa:2048 -nodes -days "$days" -subj "/CN=warp-sql-jdbc test CA" \
+openssl req -x509 -newkey rsa:2048 -nodes -days "$days" -subj "/CN=chargewire-jdbc test CA" \
   -keyout ca-key.pem -out ca.pem
 openssl req -x509 -newkey rsa:2048 -nodes -days "$days" -subj "/CN=untrusted test CA" \
   -keyout other-ca-key.pem -out other-ca.pem
@@ -25,7 +25,7 @@ openssl x509 -req -in wrong-host.csr -CA ca.pem -CAkey ca-key.pem -CAcreateseria
 
 # Client certificates carry an e-mail subject alternative name: the identity the
 # client_certificate grant signs in by (spec §4.4).
-openssl req -newkey rsa:2048 -nodes -subj "/CN=warp" -keyout client-key.pem -out client.csr
+openssl req -newkey rsa:2048 -nodes -subj "/CN=chargewire" -keyout client-key.pem -out client.csr
 openssl x509 -req -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -days "$days" \
   -extfile <(printf "extendedKeyUsage=clientAuth\nsubjectAltName=email:client@example.com") \
   -out client.pem
