@@ -33,14 +33,15 @@ final class ChargewireUrl {
   }
 
   static boolean accepts(String url) {
-    return url != null && url.regionMatches(true, 0, PREFIX, 0, PREFIX.length());
+    String current = LegacyUrls.modernize(url);
+    return current != null && current.regionMatches(true, 0, PREFIX, 0, PREFIX.length());
   }
 
   static ChargewireUrl parse(String url) throws SQLException {
     if (!accepts(url)) {
       throw invalid(url, "it must start with " + PREFIX + "//");
     }
-    String rest = url.substring(PREFIX.length());
+    String rest = LegacyUrls.modernize(url).substring(PREFIX.length());
     if (!rest.startsWith("//")) {
       throw invalid(url, "it must start with " + PREFIX + "//");
     }

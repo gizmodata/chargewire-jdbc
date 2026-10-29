@@ -181,7 +181,7 @@ public final class ChargewireDriver implements Driver {
     return builder
         .clientCertificateGrant(certificateGrant)
         .address(url.host, url.port)
-        .basePath(ChargewireProperty.BASE_PATH.get(properties))
+        .basePath(LegacyUrls.basePath(ChargewireProperty.BASE_PATH.get(properties)))
         .credentials(
             ChargewireProperty.USER.get(properties),
             ChargewireProperty.PASSWORD.get(properties),

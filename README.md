@@ -80,7 +80,8 @@ jdbc:chargewire://host[:port][/catalog][?key=value&...]
 The port defaults to 443 (TLS) or 80 (`useEncryption=false`): Chargewire is HTTP and works through
 ordinary reverse proxies. Options can also follow semicolons (`jdbc:chargewire://host:31337;user=joe`)
 or come in the `Properties`; keys are case-insensitive, and a value in the URL wins. Percent-encode
-`&`, `;`, `#` and `%` in URL values.
+`&`, `;`, `#` and `%` in URL values. URLs written for 1.0.0, before the protocol was renamed
+Chargewire, keep working unchanged.
 
 ```java
 Properties properties = new Properties();

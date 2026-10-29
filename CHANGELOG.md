@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The protocol is now called Chargewire, and the driver speaks it under the new names: Maven
+  artifact `com.gizmodata:chargewire-jdbc` (1.0.0 was published under the protocol's former
+  name), jar `chargewire-jdbc.jar`, package `com.gizmodata.chargewire.jdbc` with classes
+  `ChargewireDriver`, `ChargewireDataSource`, `ChargewireConnection` and so on, URL prefix
+  `jdbc:chargewire://`, and the server root `/chargewire` with `Chargewire-*` headers. Connection
+  URLs written for earlier versions keep working unchanged: the driver still accepts their URL
+  prefixes and former default `basePath`, and connects with today's names.
+
 ## [1.0.0] - 2026-10-20
 
 The first release, for Chargewire protocol 1.0.0. Earlier builds (0.1.0-SNAPSHOT) were never
