@@ -20,6 +20,7 @@ import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLTransactionRollbackException;
 import java.sql.SQLTransientConnectionException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
@@ -34,6 +35,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 
@@ -43,16 +45,22 @@ import org.apache.arrow.memory.RootAllocator;
  * <p>If the server no longer has the session (evicted for idleness, or the server restarted), the
  * connection opens a new one, replays its catalog, schema and autocommit setting, and reports the
  * loss of temporary state as a {@link SQLWarning} on {@link #getWarnings()}. A statement that found
- * the session gone is run again in the new session, unless a transaction was open: its work is
- * gone, so that statement fails with SQLSTATE {@code 08007} instead. With autocommit off, a
- * transaction is open once a statement ran since the last commit or rollback; with autocommit on,
- * one is open when the session document last read said so ({@link #getTransactionState()}: a SQL
- * {@code BEGIN}, spec §5.1).
+ * the session gone is run again in the new session only when the driver knows no transaction was
+ * open in the old one, since a transaction's work is rolled back with its session and the statement
+ * would otherwise commit on its own: with autocommit off, when no statement ran since the last
+ * commit or rollback; with autocommit on, when the session document read after the last statement
+ * said {@code none} ({@link #getTransactionState()}, {@link #isValid(int)}, or {@link
+ * #getCatalog()} and {@link #getSchema()} after a statement; a SQL {@code BEGIN} shows only there,
+ * spec §5.2). Otherwise the statement fails with SQLSTATE {@code 08007} and is not run; the new
+ * session is open for the next one.
  *
- * <p>A session the server ended ({@code session_ended}, spec §5.6) is reopened only when its token
- * expired, after signing in again; after any other reason ({@code killed}, {@code token_revoked},
- * {@code credentials_changed}, {@code principal_dropped}, or one this driver does not know) the
- * connection is closed and the error names the reason.
+ * <p>A session the server ended ({@code session_ended}, spec §5.6) for a transaction left idle
+ * ({@code idle_in_transaction}, §5.7) is replaced the same way, and the statement fails with
+ * SQLSTATE {@code 40000} ({@link java.sql.SQLTransactionRollbackException}): the server rolled the
+ * transaction back. A session ended because its token expired is reopened after signing in again,
+ * under the rule above. After any other reason ({@code killed}, {@code token_revoked}, {@code
+ * credentials_changed}, {@code principal_dropped}, or one this driver does not know) the connection
+ * is closed and the error names the reason.
  */
 public final class ChargewireConnection implements Connection {
   /**
@@ -68,7 +76,10 @@ public final class ChargewireConnection implements Connection {
      * rollback.
      */
     ABORTED,
-    /** The server did not say, or said something this driver does not know (spec §12). */
+    /**
+     * The server did not say, or said something this driver does not know (spec §12); inside the
+     * driver also: a statement ran since the session was last read.
+     */
     UNKNOWN;
 
     static TransactionState of(JsonNode session) {
@@ -86,6 +97,9 @@ public final class ChargewireConnection implements Connection {
   }
 
   private static final BufferAllocator ROOT = new RootAllocator();
+
+  /** The {@code session_ended} reason for a transaction left idle too long (spec §5.6, §5.7). */
+  static final String IDLE_IN_TRANSACTION = "idle_in_transaction";
 
   private final ChargewireClient client;
   private final String url;
@@ -105,6 +119,13 @@ public final class ChargewireConnection implements Connection {
   private volatile boolean autoCommit = true;
   private volatile boolean transactionDirty;
   private volatile TransactionState transaction = TransactionState.UNKNOWN;
+
+  /**
+   * Counts statements run, so a session read that a statement on another thread overtook does not
+   * report the state from before it as current.
+   */
+  private final AtomicLong statementsRun = new AtomicLong();
+
   private volatile boolean closed;
   private volatile boolean closing;
   private volatile boolean released;
@@ -258,6 +279,11 @@ public final class ChargewireConnection implements Connection {
     }
   }
 
+  /**
+   * Replaces a session the server no longer has, and returns normally only when the call that found
+   * it gone may run again in the new session: when the driver knows no transaction was open in the
+   * old one. Otherwise the new session is open and the error says the call did not run.
+   */
   private void recover(int generation, SQLException cause) throws SQLException {
     synchronized (sessionLock) {
       if (sessionGeneration != generation) {
@@ -265,21 +291,33 @@ public final class ChargewireConnection implements Connection {
       }
       ChargewireProblem problem = ChargewireProblem.of(cause);
       String lost = sessionId;
+      String reason = problem.reason();
+      boolean idleInTransaction = false;
       if ("session_ended".equals(problem.code())) {
-        String reason = problem.reason();
-        if (!"token_expired".equals(reason)) {
+        if (IDLE_IN_TRANSACTION.equals(reason)) {
+          // The server rolled the transaction back (spec §5.7); a new session may use the same
+          // token (§5.6).
+          idleInTransaction = true;
+        } else if (!"token_expired".equals(reason)) {
           // Unusable from now on; close() still releases what the connection holds.
           ended = true;
           closed = true;
           throw new SQLNonTransientConnectionException(endedMessage(reason), "08003", cause);
+        } else {
+          // The session's token expired: a new session needs a new token (spec §5.6).
+          client.renewToken();
         }
-        // The session's token expired: a new session needs a new token (spec §5.6).
-        client.renewToken();
       }
-      boolean lostTransaction =
-          autoCommit
-              ? transaction == TransactionState.OPEN || transaction == TransactionState.ABORTED
-              : transactionDirty;
+      // Whether a transaction was open is known only from the session document read after the
+      // last statement, or, with autocommit off, from no statement having run since the last
+      // commit or rollback (statementRan() marks both).
+      TransactionState before = autoCommit ? transaction : TransactionState.NONE;
+      boolean openTransaction =
+          idleInTransaction
+              || (autoCommit
+                  ? before == TransactionState.OPEN || before == TransactionState.ABORTED
+                  : transactionDirty);
+      boolean unknownTransaction = !openTransaction && before != TransactionState.NONE;
       transactionDirty = false;
       openSession();
       addWarning(
@@ -288,15 +326,41 @@ public final class ChargewireConnection implements Connection {
                   + lost
                   + " ("
                   + problem.code()
+                  + (reason == null ? "" : ": " + reason)
                   + "); session "
                   + sessionId
                   + " was opened with the same catalog, schema and autocommit. Temporary tables,"
                   + " prepared statements and settings made in SQL were lost.",
               "01000"));
-      if (lostTransaction) {
+      if (idleInTransaction) {
+        throw new SQLTransactionRollbackException(
+            "The server ended session "
+                + lost
+                + " because its transaction was left idle longer than the server allows ("
+                + IDLE_IN_TRANSACTION
+                + "), and rolled the transaction back; session "
+                + sessionId
+                + " is open, and this statement was not run: run the transaction again",
+            "40000",
+            cause);
+      }
+      if (openTransaction) {
         throw new SQLTransientConnectionException(
-            "The session was lost with a transaction open, so its uncommitted work is gone; a new"
-                + " session is open: run the transaction again",
+            "The session was lost with a transaction open, so its uncommitted work is gone;"
+                + " session "
+                + sessionId
+                + " is open, and this statement was not run: run the transaction again",
+            "08007",
+            cause);
+      }
+      if (unknownTransaction) {
+        throw new SQLTransientConnectionException(
+            "The session was lost, and the driver cannot tell whether a transaction was open in it"
+                + " (a statement ran since the session was last read, and a SQL BEGIN shows only"
+                + " there); if one was, its uncommitted work is gone. Session "
+                + sessionId
+                + " is open, and this statement was not run, so that it cannot commit on its own:"
+                + " run it again, or the transaction if there was one",
             "08007",
             cause);
       }
@@ -317,12 +381,17 @@ public final class ChargewireConnection implements Connection {
   }
 
   /**
-   * Marks that a statement ran, so the session's options may have changed and a transaction may be
-   * open.
+   * Marks that a statement ran (or may have, having failed) in the current session, so its options
+   * may have changed and a transaction may be open: with autocommit off, the transaction has work;
+   * with autocommit on, whether one is open is unknown until the session is read again (a SQL
+   * {@code BEGIN}, spec §5.2).
    */
   void statementRan() {
+    statementsRun.incrementAndGet();
     optionsStale = true;
-    if (!autoCommit) {
+    if (autoCommit) {
+      transaction = TransactionState.UNKNOWN;
+    } else {
       transactionDirty = true;
     }
   }
@@ -648,12 +717,27 @@ public final class ChargewireConnection implements Connection {
 
   /** Reads the session document: its options and its transaction. */
   private void readSession() throws SQLException {
+    long statements = statementsRun.get();
     JsonNode session = withSession(client::getSession, false);
     synchronized (sessionLock) {
       catalog = session.path("options").path("catalog").asText(null);
       schema = session.path("options").path("schema").asText(null);
       optionsStale = false;
-      transaction = TransactionState.of(session);
+      takeTransaction(session, statements);
+    }
+  }
+
+  /**
+   * Takes the transaction state from a session document, unless a statement ran after the read
+   * began (its effect may not show in it).
+   */
+  private void takeTransaction(JsonNode session, long statementsBefore) {
+    synchronized (sessionLock) {
+      if (statementsRun.get() == statementsBefore) {
+        transaction = TransactionState.of(session);
+      } else if (autoCommit) {
+        transaction = TransactionState.UNKNOWN;
+      }
     }
   }
 
@@ -738,8 +822,9 @@ public final class ChargewireConnection implements Connection {
     }
     Duration wait = timeout > 0 ? Duration.ofSeconds(timeout) : null;
     try {
+      long statements = statementsRun.get();
       JsonNode session = withSession(id -> client.getSession(id, wait), false);
-      transaction = TransactionState.of(session);
+      takeTransaction(session, statements);
       return true;
     } catch (SQLException e) {
       return false;

@@ -26,8 +26,8 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 2.0.0**, for Chargewire protocol 1.0, on Maven Central. It works with servers on either
-side of the protocol's rename.
+**Status: 2.1.0**, for Chargewire protocol 1.0 (Chargewire 2.1.0), on Maven Central. It works with
+servers on either side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
 - One standalone jar, every dependency relocated inside it
@@ -46,14 +46,14 @@ Maven:
 <dependency>
   <groupId>com.gizmodata</groupId>
   <artifactId>chargewire-jdbc</artifactId>
-  <version>2.0.0</version>
+  <version>2.1.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.gizmodata:chargewire-jdbc:2.0.0'
+implementation 'com.gizmodata:chargewire-jdbc:2.1.0'
 ```
 
 The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
@@ -190,16 +190,28 @@ For a local server without TLS, add `useEncryption=false`.
   several is `SUCCESS_NO_INFO`.
 - **Lost sessions.** If the server no longer has the session (idle eviction, restart), the driver
   opens a new one, replays catalog, schema and autocommit, re-prepares prepared statements, and
-  reports the loss of temporary state as a warning on the connection. If a transaction was open,
-  its work is gone and the statement fails with SQLSTATE `08007` instead. A transaction is open
-  when autocommit is off and a statement ran since the last commit, or, with autocommit on, when
-  the session document last read said so (a SQL `BEGIN`):
-  `connection.unwrap(ChargewireConnection.class).getTransactionState()` reads it (`NONE`, `OPEN`,
-  `ABORTED`, or `UNKNOWN`).
-- **Ended sessions.** A session the server ended because its token expired is reopened after
-  signing in again. One it ended for any other reason (`killed`, `token_revoked`,
-  `credentials_changed`, `principal_dropped`, or a reason this driver does not know) closes the
-  connection with SQLSTATE `08003` and the reason in the message.
+  reports the loss of temporary state as a warning on the connection. A transaction's work is
+  rolled back with its session, so the statement that found the session gone runs again in the new
+  one only when the driver knows no transaction was open: with autocommit off, when no statement
+  ran since the last commit or rollback; with autocommit on, when the session document, read after
+  the last statement, said so (a SQL `BEGIN` shows only there). `isValid()`, `getCatalog()`,
+  `getSchema()` and `connection.unwrap(ChargewireConnection.class).getTransactionState()` (`NONE`,
+  `OPEN`, `ABORTED`, or `UNKNOWN`) read it. Otherwise the statement fails with SQLSTATE `08007`
+  without running, so it can never commit on its own, and the next statement runs in the new
+  session. A connection pool that checks connections with `isValid()` gets `false` for such a
+  connection and replaces it.
+- **Ended sessions.** A session the server ended because its transaction sat idle too long
+  (`session_ended`, reason `idle_in_transaction`; Hardcharger's
+  `--idle-in-transaction-session-timeout`) had its transaction rolled back: the driver opens a new
+  session, and the statement fails with SQLSTATE `40000` (`SQLTransactionRollbackException`, the
+  reason in the message) without running; run the transaction again. A session ended because its
+  token expired is reopened after signing in again, under the rule above. One ended for any other
+  reason (`killed`, `token_revoked`, `credentials_changed`, `principal_dropped`, or a reason this
+  driver does not know) closes the connection with SQLSTATE `08003` and the reason in the message.
+- **Nested schemas.** On a server whose engine nests schemas (DuckDB 2.0's `CREATE SCHEMA
+  sales.payroll`, Hardcharger 2.7.0 and later), `DatabaseMetaData` names a nested schema by its
+  path, `sales.payroll`, and takes that path as a schema argument; a part containing a dot or a
+  double quote is quoted (`"sales.payroll"` is a top-level schema of that name).
 
 Every request that creates a statement carries an `Idempotency-Key`, so retrying one whose response
 was lost cannot run it twice. A token the server refuses (`invalid_token`) is renewed once with the
@@ -338,6 +350,8 @@ Other servers run the same suite when told how they differ from `chargewire-duck
 | `CHARGEWIRE_JDBC_TEST_SERVER_MTLS_FLAG` | `--tls-client-ca` | Its flag for the CA that client certificates must chain to |
 | `CHARGEWIRE_JDBC_TEST_SERVER_NAME` | `chargewire-duckdb` | The product name its `server-info` reports |
 | `CHARGEWIRE_JDBC_TEST_SERVER_USERNAME_FLAG` | `--username` | The flag that names its administrator |
+| `CHARGEWIRE_JDBC_TEST_SERVER_IDLE_TIMEOUT_FLAG` | `--session-idle-timeout-seconds` | Its flag for the idle-session eviction limit, in seconds |
+| `CHARGEWIRE_JDBC_TEST_SERVER_IDLE_IN_TRANSACTION_TIMEOUT_FLAG` | `--idle-in-transaction-timeout-seconds` | Its flag for the idle-in-transaction limit, in seconds |
 
 `LegacyDialectIT` also runs against a reference server from before the rename, named by
 `CHARGEWIRE_JDBC_TEST_FORMER_SERVER_BINARY` (default: the sibling pre-rename checkout's build); its
@@ -353,6 +367,8 @@ CHARGEWIRE_JDBC_TEST_SERVER_USERNAME_FLAG=--admin-username \
 CHARGEWIRE_JDBC_TEST_SERVER_NAME=Hardcharger \
 CHARGEWIRE_JDBC_TEST_SERVER_OAUTH_ARGS='--token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url} --oauth-provider-name Mock' \
 CHARGEWIRE_JDBC_TEST_SERVER_OAUTH_SECRET_ENV=HARDCHARGER_OAUTH_CLIENT_SECRET \
+CHARGEWIRE_JDBC_TEST_SERVER_IDLE_TIMEOUT_FLAG=--session-idle-timeout \
+CHARGEWIRE_JDBC_TEST_SERVER_IDLE_IN_TRANSACTION_TIMEOUT_FLAG=--idle-in-transaction-session-timeout \
 mvn verify
 ```
 
@@ -361,7 +377,7 @@ variable in its environment, so credentials in your shell never reach it. They r
 dependency on the class path, so they also prove the jar is self-contained, and without
 `--add-opens`. CI runs the unit tests on JDK 17, 21 and 25, and the integration tests on JDK 17
 and 25 against `hardcharger-server` from the image named in `.github/workflows/ci.yml`
-(`ghcr.io/gizmodata/hardcharger:main`; pulled with the workflow's `GITHUB_TOKEN`, so the package
+(`ghcr.io/gizmodata/hardcharger:2.7.0` for now, otherwise `:main`; pulled with the workflow's `GITHUB_TOKEN`, so the package
 grants this repository read access).
 
 Tests disabled with `@Disabled` document server bugs; each names the bug and fails if enabled

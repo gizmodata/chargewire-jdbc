@@ -65,6 +65,8 @@ public final class SqlErrors {
       case "certificate_identity_mismatch":
         return "28000";
       case "session_ended":
+        // A transaction left idle too long: the server rolled it back (spec §5.6, §5.7).
+        return "idle_in_transaction".equals(problem.reason()) ? "40000" : "08003";
       case "session_not_found":
         return "08003";
       case "session_elsewhere":

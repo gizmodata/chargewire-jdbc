@@ -613,6 +613,9 @@ class ProtocolIT {
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE SCHEMA IF NOT EXISTS lost_options");
       connection.setSchema("lost_options");
+      // The driver runs a statement again only when it knows no transaction was open: it read
+      // the session (here through isValid) after the last statement.
+      assertTrue(connection.isValid(5));
       String before = sessionOf(connection);
       endSessionBehindTheDriversBack(connection);
       try (ResultSet rows = statement.executeQuery("SELECT current_schema()")) {
@@ -654,6 +657,53 @@ class ProtocolIT {
   }
 
   @Test
+  void lostSessionAfterASqlBeginIsNotRunAgain() throws Exception {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("CREATE OR REPLACE TABLE lost_begin (v INTEGER)");
+      statement.execute("BEGIN");
+      statement.execute("INSERT INTO lost_begin VALUES (1)");
+      endSessionBehindTheDriversBack(connection);
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.execute("INSERT INTO lost_begin VALUES (2)"));
+      assertEquals("08007", error.getSQLState());
+      assertEquals("session_not_found", ChargewireProblem.codeOf(error));
+      assertTrue(connection.getAutoCommit());
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM lost_begin")) {
+        assertTrue(rows.next());
+        assertEquals(
+            0, rows.getInt(1), "the second insert did not run on the new session in autocommit");
+      }
+      statement.execute("DROP TABLE lost_begin");
+    }
+  }
+
+  @Test
+  void lostSessionAfterAStatementIsNotRunAgainUnlessTheSessionWasRead() throws Exception {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("CREATE OR REPLACE TABLE lost_unread (v INTEGER)");
+      endSessionBehindTheDriversBack(connection);
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.execute("INSERT INTO lost_unread VALUES (1)"));
+      assertEquals("08007", error.getSQLState());
+      assertTrue(error.getMessage().contains("cannot tell"), error.getMessage());
+      assertTrue(connection.isValid(5), "the new session's state is read");
+      endSessionBehindTheDriversBack(connection);
+      assertEquals(1, statement.executeUpdate("INSERT INTO lost_unread VALUES (2)"));
+      try (ResultSet rows = statement.executeQuery("SELECT list(v) FROM lost_unread")) {
+        assertTrue(rows.next());
+        assertEquals(List.of(2), rows.getObject(1));
+      }
+      statement.execute("DROP TABLE lost_unread");
+    }
+  }
+
+  @Test
   void preparedStatementsSurviveALostSession() throws Exception {
     try (Connection connection = SharedServer.connect();
         PreparedStatement select = connection.prepareStatement("SELECT ? * 2")) {
@@ -662,6 +712,7 @@ class ProtocolIT {
         assertTrue(rows.next());
         assertEquals(42, rows.getInt(1));
       }
+      assertTrue(connection.isValid(5), "the session is read after the statement: no transaction");
       endSessionBehindTheDriversBack(connection);
       select.setInt(1, 50);
       try (ResultSet rows = select.executeQuery()) {

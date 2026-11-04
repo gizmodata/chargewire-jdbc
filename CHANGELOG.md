@@ -6,8 +6,39 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-04
+
+For Chargewire 2.1.0 (Hardcharger 2.7.0): the idle-in-transaction limit, and nested schemas in
+metadata.
+
+### Fixed
+
+- **A statement is never run again on a replacement session unless the driver knows no transaction
+  was open in the lost one.** With autocommit on, the driver took the transaction state from the
+  session document it had last read, which a SQL `BEGIN` run since did not change. So when the
+  server evicted a session that held a transaction begun in SQL (the idle sweep, which since
+  Chargewire 2.1.0 also evicts a session whose statement no one is waiting on), the statement that
+  found it gone ran again in autocommit on the new session and committed on its own, while the
+  transaction's earlier statements had been rolled back. Now the state counts as unknown once a
+  statement has run (or failed) since the session was last read, and the statement fails with
+  SQLSTATE `08007` without running unless the state read after the last statement was `none`
+  (`isValid()`, `getTransactionState()`, `getCatalog()`/`getSchema()` read it). With autocommit off
+  nothing changes: a statement since the last commit or rollback still means a transaction. A
+  connection pool that checks connections with `isValid()` replaces such a connection.
+- **A session the server ended for an idle transaction (`session_ended`, reason
+  `idle_in_transaction`, spec §5.6, §5.7) is replaced, and the statement fails with SQLSTATE `40000`**
+  (`SQLTransactionRollbackException`, the reason in the message) without running: the server rolled
+  the transaction back. Before, the connection was closed with `08003`. `SqlErrors` maps the
+  problem to `40000` too.
+
 ### Added
 
+- `IdleSessionsIT` runs a server with a one-second idle limit and a one-second idle-in-transaction
+  limit (flags `CHARGEWIRE_JDBC_TEST_SERVER_IDLE_TIMEOUT_FLAG` and
+  `CHARGEWIRE_JDBC_TEST_SERVER_IDLE_IN_TRANSACTION_TIMEOUT_FLAG`, set for Hardcharger in CI), and
+  `MetadataIT` checks that nested schemas pass through `getSchemas`, `getTables`, `getColumns` and
+  `getPrimaryKeys` by their path, with a top-level schema whose name contains a dot kept apart. The
+  driver passes those names through unchanged, so it needed no change for them.
 - `legacy/warp-sql-jdbc` and the `warp-sql-jdbc-relocation` workflow (run by hand): a relocation POM,
   `com.gizmodata:warp-sql-jdbc:1.0.1`, that sends the coordinates from before the rename to
   `com.gizmodata:chargewire-jdbc:2.0.0`.
