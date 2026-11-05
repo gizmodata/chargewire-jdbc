@@ -377,7 +377,7 @@ variable in its environment, so credentials in your shell never reach it. They r
 dependency on the class path, so they also prove the jar is self-contained, and without
 `--add-opens`. CI runs the unit tests on JDK 17, 21 and 25, and the integration tests on JDK 17
 and 25 against `hardcharger-server` from the image named in `.github/workflows/ci.yml`
-(`ghcr.io/gizmodata/hardcharger:2.7.0` for now, otherwise `:main`; pulled with the workflow's `GITHUB_TOKEN`, so the package
+(`ghcr.io/gizmodata/hardcharger:main`, 2.7.0 or later; pulled with the workflow's `GITHUB_TOKEN`, so the package
 grants this repository read access).
 
 Tests disabled with `@Disabled` document server bugs; each names the bug and fails if enabled

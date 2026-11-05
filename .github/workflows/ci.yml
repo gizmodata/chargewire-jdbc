@@ -31,11 +31,10 @@ concurrency:
 
 env:
   # The server the integration tests run against: Hardcharger's main branch, which its CI
-  # publishes on every green push (:main, and :sha-<short> for a fixed build), or a release. Pin a
-  # :sha- tag here to reproduce an old run. 2.7.0 for now: the tests need Chargewire 2.1.0 (the
-  # idle-in-transaction limit, nested schema paths), which :main has once Hardcharger's main is
-  # past its 2.7.0 release.
-  HARDCHARGER_IMAGE: ghcr.io/gizmodata/hardcharger:2.7.0
+  # publishes on every green push (:main, and :sha-<short> for a fixed build). Pin a :sha- tag
+  # here to reproduce an old run. The tests need Hardcharger 2.7.0 or later (Chargewire 2.1.0: the
+  # idle-in-transaction limit, nested schema paths).
+  HARDCHARGER_IMAGE: ghcr.io/gizmodata/hardcharger:main
 
 jobs:
   build:
