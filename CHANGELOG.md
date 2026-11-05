@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A server that is starting again after a stop (`server_resuming`: HTTP 503 with `Retry-After`) no
+  longer fails the connection: the driver waits the `Retry-After` (3 s when absent, 1 s to 60 s)
+  and repeats the same request, the login included, until the server answers something else or
+  the new `resumeTimeout` property (seconds, default `600`; `0` turns the retries off) has passed
+  since the first such answer. Then the error carries the server's message, code
+  `server_resuming` and SQLSTATE `08001` (`SQLTransientConnectionException`). Other 503 answers,
+  `server_draining` among them, are not retried.
+- The login waits at least 30 s for its answer, whatever `connectTimeout` or `networkTimeout` say,
+  because a resuming server may hold it for up to 25 s. `connectTimeout` still bounds the TCP and
+  TLS connect and the other requests made while connecting.
+
 ## [2.1.0] - 2026-11-04
 
 For Chargewire 2.1.0 (Hardcharger 2.7.0): the idle-in-transaction limit, and nested schemas in

@@ -122,8 +122,9 @@ For a local server without TLS, add `useEncryption=false`.
 | `clientCertificate`, `clientKey` | | PEM certificate and key (PKCS#8, PKCS#1 RSA or SEC1 EC, unencrypted) for mutual TLS |
 | `disableCertificateVerification` | `false` | Accept any certificate and host name. **Development only.** |
 | `basePath` | `/chargewire` | Where the server mounts the protocol |
-| `connectTimeout` | `30000` | Milliseconds to connect, and to wait for answers while connecting; `0` waits forever |
+| `connectTimeout` | `30000` | Milliseconds to connect, and to wait for answers while connecting (the login waits at least 30 s; see [A server that is resuming](#-a-server-that-is-resuming)); `0` waits forever |
 | `networkTimeout` | `0` | Milliseconds to wait for each response's headers (also `Connection.setNetworkTimeout`) |
+| `resumeTimeout` | `600` | Seconds to keep repeating a request while the server answers `server_resuming` (a stopped server starting again); `0` reports the first such answer at once |
 | `async` | `false` | Submit with `respond-async`, long-poll, then fetch: no request stays open for a whole query |
 | `pollWait` | `10` | Seconds each status long-poll may wait on the server |
 | `retainResults` | server's | `true` asks the server to keep results, so a dropped download resumes; `false` asks it not to |
@@ -219,6 +220,22 @@ connection's credential, unless the server says it was revoked or its credential
 dropped (`token_revoked`, `credentials_changed`, `principal_dropped`): signing in again would not
 help, so that error reaches the application with its reason.
 
+## ⏳ A server that is resuming
+
+A server that was stopped and is starting again (a GizmoData Cloud cluster with auto-resume, for
+one) answers `server_resuming` (HTTP 503, with `Retry-After` in seconds) to any request but
+discovery, and may hold the login for up to 25 s before answering. The driver waits the
+`Retry-After` (3 s when it is missing, at least 1 s, never more than 60 s) and sends the same request again, the
+login included, until the server answers something else or `resumeTimeout` seconds (600 by
+default) have passed since the first `server_resuming`. Then the error reaches the application with
+the server's message, SQLSTATE `08001` and code `server_resuming` (a `SQLTransientConnectionException`).
+`resumeTimeout=0` turns the retries off. While the driver waits, `getConnection` (or the statement)
+does not return, so a pool's own connection timeout may need to allow for the resume.
+
+The login waits at least 30 s for its answer, whatever `connectTimeout` or `networkTimeout` say, so
+a held login is never cut short; `connectTimeout` still bounds the TCP and TLS connect. Other
+`503` answers, such as `server_draining`, are not retried.
+
 ## 🔢 Types
 
 | Arrow | JDBC type | `getObject` returns |
@@ -267,7 +284,8 @@ A code the driver does not know maps by its HTTP status. Failures the driver fin
 codes that begin with `client_`: `client_http_error` (an error response that is not a problem
 document, such as a proxy's page) and `client_protocol_error` (SQLSTATE `08P01`, a response that
 breaks the protocol). A TLS handshake the server refuses with the alert `certificate_required` or
-`certificate_revoked` is reported as that code (SQLSTATE `28000`).
+`certificate_revoked` is reported as that code (SQLSTATE `28000`). `server_resuming` reaches the
+application only after `resumeTimeout` (see [A server that is resuming](#-a-server-that-is-resuming)).
 
 ## 🦫 DBeaver and other tools
 

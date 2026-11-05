@@ -43,6 +43,13 @@ import javax.net.ssl.SSLException;
  * dropped (spec §4.2): signing in again would not help, so that error reaches the application with
  * its reason.
  *
+ * <p>A server that is starting again after a stop answers {@code server_resuming} (HTTP 503, with
+ * {@code Retry-After}) to any request but discovery: the client waits the {@code Retry-After} (3 s
+ * when absent, 1 s to 60 s) and repeats the same request until it gets another answer or {@link
+ * ConnectionConfig#resumeTimeout()} has passed since the first {@code server_resuming}. Such a
+ * server may also hold the login for up to 25 s before answering, so the login waits at least 30 s
+ * for its response whatever the request timeout.
+ *
  * <p>Internal API.
  */
 public final class ChargewireClient implements AutoCloseable {
@@ -58,6 +65,27 @@ public final class ChargewireClient implements AutoCloseable {
 
   /** How long to poll a statement without long-polling. */
   private static final long SHORT_POLLING_NANOS = Duration.ofMillis(250).toNanos();
+
+  /** The problem a server answers while it starts again after a stop. */
+  static final String SERVER_RESUMING = "server_resuming";
+
+  /** How long to wait before repeating a {@code server_resuming} answer without Retry-After. */
+  static final Duration DEFAULT_RESUME_RETRY_AFTER = Duration.ofSeconds(3);
+
+  /** The longest wait before repeating a {@code server_resuming} answer, whatever it says. */
+  static final Duration MAX_RESUME_RETRY_AFTER = Duration.ofSeconds(60);
+
+  /** The shortest wait: {@code Retry-After: 0} must not turn the retries into a busy loop. */
+  static final Duration MIN_RESUME_RETRY_AFTER = Duration.ofSeconds(1);
+
+  /**
+   * The shortest time the login waits for its answer: a resuming server may hold it for up to 25 s
+   * before answering.
+   */
+  static final Duration LOGIN_TIMEOUT_FLOOR = Duration.ofSeconds(30);
+
+  /** The clock and pause of the {@code server_resuming} retries; replaced only by tests. */
+  private static volatile ResumeClock resumeClock = ResumeClock.SYSTEM;
 
   /** Renew a token this long before the server says it expires. */
   private static final long TOKEN_MARGIN_NANOS = Duration.ofSeconds(30).toNanos();
@@ -143,6 +171,18 @@ public final class ChargewireClient implements AutoCloseable {
       client.close();
       throw e;
     }
+  }
+
+  /**
+   * Replaces the clock and pause of the {@code server_resuming} retries, for tests.
+   *
+   * @param clock the clock to use, or {@code null} for the system's
+   * @return the clock used until now
+   */
+  public static ResumeClock setResumeClockForTesting(ResumeClock clock) {
+    ResumeClock previous = resumeClock;
+    resumeClock = clock == null ? ResumeClock.SYSTEM : clock;
+    return previous;
   }
 
   /**
@@ -389,10 +429,17 @@ public final class ChargewireClient implements AutoCloseable {
     long now = System.nanoTime();
     HttpResponse<byte[]> response =
         send(
-            () ->
-                request(uri("/v1/auth/token"))
-                    .header("Content-Type", JSON)
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(bytes)),
+            () -> {
+              HttpRequest.Builder builder =
+                  request(uri("/v1/auth/token"))
+                      .header("Content-Type", JSON)
+                      .POST(HttpRequest.BodyPublishers.ofByteArray(bytes));
+              Duration timeout = loginTimeout(requestTimeout);
+              if (timeout != null) {
+                builder.timeout(timeout);
+              }
+              return builder;
+            },
             handlerBytes(),
             true,
             false);
@@ -408,6 +455,20 @@ public final class ChargewireClient implements AutoCloseable {
       tokenExpires = expiresIn > 0;
       tokenRenewAtNanos = now + Duration.ofSeconds(expiresIn).toNanos() - TOKEN_MARGIN_NANOS;
     }
+  }
+
+  /**
+   * Returns how long the login waits for its answer: the request timeout, but at least {@link
+   * #LOGIN_TIMEOUT_FLOOR}, because a resuming server may hold the login before answering.
+   *
+   * @param requestTimeout the connection's request timeout, or {@code null} for none
+   * @return the login's timeout, or {@code null} for none
+   */
+  static Duration loginTimeout(Duration requestTimeout) {
+    if (requestTimeout == null) {
+      return null;
+    }
+    return requestTimeout.compareTo(LOGIN_TIMEOUT_FLOOR) < 0 ? LOGIN_TIMEOUT_FLOOR : requestTimeout;
   }
 
   /**
@@ -1223,6 +1284,9 @@ public final class ChargewireClient implements AutoCloseable {
       boolean authenticated)
       throws SQLException {
     boolean renewed = false;
+    // When the first server_resuming answer arrived, and so when the repeats stop.
+    long resumeDeadline = 0;
+    boolean resuming = false;
     for (int attempt = 1; ; attempt++) {
       HttpRequest.Builder request = builder.get();
       if (authenticated) {
@@ -1254,6 +1318,39 @@ public final class ChargewireClient implements AutoCloseable {
         return response;
       }
       ChargewireProblem problem = readProblem(response);
+      if (status == 503 && SERVER_RESUMING.equals(problem.code())) {
+        Duration resumeTimeout = config.resumeTimeout;
+        if (resumeTimeout.isZero() || resumeTimeout.isNegative()) {
+          throw SqlErrors.toSqlException(problem);
+        }
+        ResumeClock clock = resumeClock;
+        long now = clock.nanoTime();
+        if (!resuming) {
+          resuming = true;
+          resumeDeadline = now + resumeTimeout.toNanos();
+        }
+        long remaining = resumeDeadline - now;
+        if (remaining <= 0) {
+          throw SqlErrors.toSqlException(
+              problem,
+              " (still resuming after "
+                  + resumeTimeout.toSeconds()
+                  + " s of retries; resumeTimeout sets how long the driver waits)");
+        }
+        Duration pause = resumeRetryAfter(response);
+        if (pause.toNanos() > remaining) {
+          pause = Duration.ofNanos(remaining);
+        }
+        try {
+          clock.sleep(pause);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new SQLException("Interrupted while waiting for the server to resume", "HY008", e);
+        }
+        // The server did not take the request: repeat it as it was, without spending an attempt.
+        attempt--;
+        continue;
+      }
       if (status == 401
           && authenticated
           && !renewed
@@ -1267,6 +1364,33 @@ public final class ChargewireClient implements AutoCloseable {
       }
       throw SqlErrors.toSqlException(problem);
     }
+  }
+
+  /**
+   * Returns how long to wait before repeating a request the server answered with {@code
+   * server_resuming}: its {@code Retry-After} in seconds, 3 s when absent or not a number, at least
+   * 1 s and at most 60 s.
+   */
+  static Duration resumeRetryAfter(HttpResponse<?> response) {
+    String value = response.headers().firstValue("Retry-After").orElse(null);
+    return resumeRetryAfter(value);
+  }
+
+  static Duration resumeRetryAfter(String retryAfter) {
+    long seconds;
+    try {
+      seconds = retryAfter == null ? -1 : Long.parseLong(retryAfter.trim());
+    } catch (NumberFormatException e) {
+      seconds = -1;
+    }
+    if (seconds < 0) {
+      return DEFAULT_RESUME_RETRY_AFTER;
+    }
+    long bounded =
+        Math.max(
+            MIN_RESUME_RETRY_AFTER.toSeconds(),
+            Math.min(seconds, MAX_RESUME_RETRY_AFTER.toSeconds()));
+    return Duration.ofSeconds(bounded);
   }
 
   private SQLException connectionError(IOException e) {

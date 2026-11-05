@@ -46,6 +46,7 @@ public final class ConnectionConfig {
   final Path clientCertificate;
   final Path clientKey;
   final Duration connectTimeout;
+  final Duration resumeTimeout;
   final String ipcCompression;
   final Boolean retainResults;
   final boolean async;
@@ -80,6 +81,7 @@ public final class ConnectionConfig {
     this.clientCertificate = builder.clientCertificate;
     this.clientKey = builder.clientKey;
     this.connectTimeout = builder.connectTimeout;
+    this.resumeTimeout = builder.resumeTimeout;
     this.ipcCompression = builder.ipcCompression;
     this.retainResults = builder.retainResults;
     this.async = builder.async;
@@ -121,6 +123,15 @@ public final class ConnectionConfig {
       return Credential.PASSWORD;
     }
     return Credential.NONE;
+  }
+
+  /**
+   * Returns how long a request the server answers with {@code server_resuming} is repeated.
+   *
+   * @return the resume deadline; {@link Duration#ZERO} repeats nothing
+   */
+  public Duration resumeTimeout() {
+    return resumeTimeout;
   }
 
   /**
@@ -182,6 +193,7 @@ public final class ConnectionConfig {
     private Path clientCertificate;
     private Path clientKey;
     private Duration connectTimeout = Duration.ofSeconds(30);
+    private Duration resumeTimeout = Duration.ofSeconds(600);
     private String ipcCompression = IpcCompression.NONE;
     private Boolean retainResults;
     private boolean async;
@@ -311,6 +323,20 @@ public final class ConnectionConfig {
      */
     public Builder connectTimeout(Duration connectTimeout) {
       this.connectTimeout = connectTimeout;
+      return this;
+    }
+
+    /**
+     * Sets how long to keep repeating a request the server answers with {@code server_resuming}
+     * (the server is starting again after a stop): each repeat waits the answer's {@code
+     * Retry-After}.
+     *
+     * @param resumeTimeout the deadline, counted from the first such answer; {@link Duration#ZERO}
+     *     (or {@code null}) reports the first one at once
+     * @return this builder
+     */
+    public Builder resumeTimeout(Duration resumeTimeout) {
+      this.resumeTimeout = resumeTimeout == null ? Duration.ZERO : resumeTimeout;
       return this;
     }
 
