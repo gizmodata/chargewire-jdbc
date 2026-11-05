@@ -26,7 +26,7 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 2.2.0**, for Chargewire protocol 1.0 (Chargewire 2.1.0), on Maven Central. It works with
+**Status: 2.2.0**, for Chargewire protocol 1.0 (Chargewire 2.2.0), on Maven Central. It works with
 servers on either side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
