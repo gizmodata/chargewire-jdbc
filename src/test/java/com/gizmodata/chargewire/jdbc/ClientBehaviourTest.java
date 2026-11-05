@@ -284,6 +284,29 @@ class ClientBehaviourTest {
         "a commit is never sent twice");
   }
 
+  @Test
+  void aRefusedCommitCarriesTheServersError() throws Exception {
+    // A commit, a rollback, a cancel or ending a session discards a successful answer's body but
+    // must read an error's: the server's code, SQLSTATE and detail reach the application.
+    server.route(
+        "POST",
+        "/v1/sessions/s1/commit",
+        (exchange, request, path) ->
+            problem(exchange, 409, "transaction_conflict", ",\"sqlstate\":\"40001\""));
+    server.route(
+        "PATCH",
+        "/v1/sessions/s1",
+        (exchange, request, path) ->
+            json(exchange, 200, "{\"options\":{\"autocommit\":false},\"errors\":{}}"));
+    try (Connection connection = connect("")) {
+      connection.setAutoCommit(false);
+      SQLException error = assertThrows(SQLException.class, connection::commit);
+      assertEquals("transaction_conflict", ChargewireProblem.codeOf(error));
+      assertEquals("40001", error.getSQLState());
+      assertTrue(error.getMessage().startsWith("fake transaction_conflict"), error.getMessage());
+    }
+  }
+
   // ---- Lost sessions (spec §5.6) ----
 
   @Test

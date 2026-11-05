@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-05
+
+For GizmoData Cloud's auto-resume: a stopped server that starts again at the next sign-in
+(`server_resuming`, Chargewire spec §11.2). A server with nothing in front of it never answers
+`server_resuming`, so nothing changes for one.
+
+### Added
+
+- A server that is starting again after a stop (`server_resuming`: HTTP 503 with `Retry-After`) no
+  longer fails the connection: the driver waits the `Retry-After` (3 s when absent, 1 s to 60 s)
+  and repeats the same request, the login included, until the server answers something else or
+  the new `resumeTimeout` property (seconds, default `600`; `0` turns the retries off) has passed
+  since the first such answer. Then the error carries the server's message, code
+  `server_resuming` and SQLSTATE `08001` (`SQLTransientConnectionException`). Other 503 answers,
+  `server_draining` among them, are not retried.
+- Every request but discovery waits at least 30 s for its answer, whatever `connectTimeout` or
+  `networkTimeout` say, because a resuming server may hold any answer for up to 25 s (spec §11.2).
+  `connectTimeout` still bounds the TCP and TLS connect and discovery, and `getNetworkTimeout()`
+  returns the value set.
+- A request with a limit of its own stops repeating there: `isValid(timeout)` returns `false` once
+  its timeout has passed (a pool's probe no longer waits out `resumeTimeout`), a statement's query
+  timeout ends its wait with SQLSTATE `HYT00`, and `Statement.cancel()` ends it within 0.1 s with
+  `57014`. Closing a connection, statement, prepared statement or result, and a cancel, are not
+  repeated: what they target does not survive a stop.
+- `ServerResumingIT` runs the sign-in and a statement through a stand-in that answers
+  `server_resuming` (`Retry-After: 1`, one answer held 3 s) in front of a real server.
+- CI runs `LegacyDialectIT` against Hardcharger 2.2.0, the last release from before the rename
+  (`CHARGEWIRE_JDBC_TEST_FORMER_SERVER_NAME`, `_USERNAME_FLAG` and `_PASSWORD_ENV` describe a former
+  server other than `warp-duckdb`). Its former-server tests had been skipped on every CI run, the
+  release gate's included; they now fail, never skip, without a former server.
+
+### Fixed
+
+- **A commit, a rollback, a cancel or ending a session that the server refused lost the server's
+  error.** These requests discarded the response body, error included, so the application got
+  `unexpected HTTP <status> [client_http_error]` instead of the server's code, SQLSTATE and detail,
+  and a commit or rollback answered `server_resuming` was not repeated.
+
 ## [2.1.0] - 2026-11-04
 
 For Chargewire 2.1.0 (Hardcharger 2.7.0): the idle-in-transaction limit, and nested schemas in

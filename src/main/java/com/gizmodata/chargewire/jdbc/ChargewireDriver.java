@@ -199,6 +199,7 @@ public final class ChargewireDriver implements Driver {
             path(properties, ChargewireProperty.CLIENT_CERTIFICATE),
             path(properties, ChargewireProperty.CLIENT_KEY))
         .connectTimeout(milliseconds(number(properties, ChargewireProperty.CONNECT_TIMEOUT)))
+        .resumeTimeout(Duration.ofSeconds(number(properties, ChargewireProperty.RESUME_TIMEOUT)))
         .execution(
             compression,
             retain == null ? null : bool(properties, ChargewireProperty.RETAIN_RESULTS),

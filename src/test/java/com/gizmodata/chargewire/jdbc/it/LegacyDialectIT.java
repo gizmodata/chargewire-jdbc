@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import com.gizmodata.chargewire.jdbc.ChargewireProblem;
 import com.sun.net.httpserver.HttpExchange;
@@ -47,14 +47,28 @@ import org.junit.jupiter.api.Test;
  * default base path, and today's server never asked for the former root.
  *
  * <p>The former server is {@code CHARGEWIRE_JDBC_TEST_FORMER_SERVER_BINARY}, or else a sibling
- * checkout's {@code ../warp-sql-preRename/cpp/build/warp-duckdb}. Its tests are skipped only when
- * neither exists.
+ * checkout's {@code ../warp-sql-preRename/cpp/build/warp-duckdb}. Without either the tests fail;
+ * they never skip. A former server other than {@code warp-duckdb} (CI uses Hardcharger 2.2.0, the
+ * last release before the rename) is described by {@code CHARGEWIRE_JDBC_TEST_FORMER_SERVER_NAME}
+ * (its product name), {@code CHARGEWIRE_JDBC_TEST_FORMER_SERVER_USERNAME_FLAG} and {@code
+ * CHARGEWIRE_JDBC_TEST_FORMER_SERVER_PASSWORD_ENV}.
  */
 class LegacyDialectIT {
   private static final String BINARY_VARIABLE = "CHARGEWIRE_JDBC_TEST_FORMER_SERVER_BINARY";
+  private static final String NAME =
+      environment("CHARGEWIRE_JDBC_TEST_FORMER_SERVER_NAME", "warp-duckdb");
+  private static final String USERNAME_FLAG =
+      environment("CHARGEWIRE_JDBC_TEST_FORMER_SERVER_USERNAME_FLAG", "--username");
+  private static final String PASSWORD_ENV =
+      environment("CHARGEWIRE_JDBC_TEST_FORMER_SERVER_PASSWORD_ENV", "WARP_DUCKDB_PASSWORD");
   private static final String ENDLESS = "SELECT count(*) FROM range(100000000000) t(i)";
 
   private static ChargewireServer former;
+
+  private static String environment(String name, String fallback) {
+    String value = System.getenv(name);
+    return value == null || value.isEmpty() ? fallback : value;
+  }
 
   private static Path formerBinary() {
     String configured = System.getenv(BINARY_VARIABLE);
@@ -70,7 +84,7 @@ class LegacyDialectIT {
   static void startFormerServer() {
     Path binary = formerBinary();
     if (Files.isExecutable(binary)) {
-      former = ChargewireServer.startBinary(binary, "warp", "--username", "WARP_DUCKDB_PASSWORD");
+      former = ChargewireServer.startBinary(binary, "warp", USERNAME_FLAG, PASSWORD_ENV);
     }
   }
 
@@ -81,8 +95,20 @@ class LegacyDialectIT {
     }
   }
 
+  /** Fails, never skips, without a former server: a green run must mean these tests ran. */
+  private static void assertFormerServer() {
+    if (former == null) {
+      fail(
+          "no former server at "
+              + formerBinary()
+              + ": set "
+              + BINARY_VARIABLE
+              + " (see the class comment)");
+    }
+  }
+
   private static Connection connectFormer(String options) throws SQLException {
-    assumeTrue(former != null, "no former server at " + formerBinary());
+    assertFormerServer();
     return DriverManager.getConnection(former.url(options), former.properties());
   }
 
@@ -92,7 +118,7 @@ class LegacyDialectIT {
         Statement statement = connection.createStatement();
         ResultSet rows = statement.executeQuery("SELECT 40 + 2 AS answer, 'ok' AS word")) {
       assertTrue(connection.isValid(2));
-      assertEquals("warp-duckdb", connection.getMetaData().getDatabaseProductName());
+      assertEquals(NAME, connection.getMetaData().getDatabaseProductName());
       assertTrue(rows.next());
       assertEquals(42, rows.getInt("answer"));
       assertEquals("ok", rows.getString("word"));
@@ -102,7 +128,7 @@ class LegacyDialectIT {
 
   @Test
   void aFormerUrlReachesAFormerServer() throws SQLException {
-    assumeTrue(former != null, "no former server at " + formerBinary());
+    assertFormerServer();
     String url = "jdbc:warp://127.0.0.1:" + former.port;
     try (Connection connection = DriverManager.getConnection(url, former.properties());
         Statement statement = connection.createStatement();

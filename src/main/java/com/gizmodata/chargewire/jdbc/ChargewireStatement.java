@@ -68,10 +68,11 @@ public class ChargewireStatement implements Statement {
 
   ChargewireClient.SubmitOptions submitOptions() {
     return new ChargewireClient.SubmitOptions(
-        queryTimeoutSeconds * 1000L,
-        connection.client().config().async(),
-        resultPartitions,
-        anyOrder);
+            queryTimeoutSeconds * 1000L,
+            connection.client().config().async(),
+            resultPartitions,
+            anyOrder)
+        .cancelledWhen(() -> cancelRequested);
   }
 
   /**

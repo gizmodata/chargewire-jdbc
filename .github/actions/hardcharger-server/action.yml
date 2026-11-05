@@ -3,7 +3,7 @@ description: >
   Copies hardcharger-server (and its libraries) out of the private image
   ghcr.io/gizmodata/hardcharger, pulled with the workflow's GITHUB_TOKEN (packages: read; the
   package must grant this repository read access under "Manage Actions access"), and sets
-  CHARGEWIRE_JDBC_TEST_SERVER_BINARY. Linux runners only.
+  CHARGEWIRE_JDBC_TEST_SERVER_BINARY (or the variable named by `variable`). Linux runners only.
 inputs:
   image:
     description: The image, e.g. ghcr.io/gizmodata/hardcharger:0.2.0
@@ -11,6 +11,12 @@ inputs:
   token:
     description: github.token
     required: true
+  variable:
+    description: The environment variable to set to the binary's path
+    default: CHARGEWIRE_JDBC_TEST_SERVER_BINARY
+  directory:
+    description: The directory under RUNNER_TEMP to copy the server into
+    default: hardcharger
 outputs:
   binary:
     description: Path of hardcharger-server
@@ -23,6 +29,8 @@ runs:
       env:
         IMAGE: ${{ inputs.image }}
         TOKEN: ${{ inputs.token }}
+        VARIABLE: ${{ inputs.variable }}
+        DIRECTORY: ${{ inputs.directory }}
       run: |
         printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
         if ! docker pull -q "$IMAGE"; then
@@ -30,10 +38,10 @@ runs:
           exit 1
         fi
         id=$(docker create "$IMAGE")
-        docker cp "$id:/opt/hardcharger" "$RUNNER_TEMP/hardcharger"
+        docker cp "$id:/opt/hardcharger" "$RUNNER_TEMP/$DIRECTORY"
         docker rm "$id" >/dev/null
         docker logout ghcr.io >/dev/null
-        binary="$RUNNER_TEMP/hardcharger/bin/hardcharger-server"
+        binary="$RUNNER_TEMP/$DIRECTORY/bin/hardcharger-server"
         "$binary" --version
         echo "binary=$binary" >> "$GITHUB_OUTPUT"
-        echo "CHARGEWIRE_JDBC_TEST_SERVER_BINARY=$binary" >> "$GITHUB_ENV"
+        echo "$VARIABLE=$binary" >> "$GITHUB_ENV"

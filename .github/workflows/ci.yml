@@ -113,6 +113,11 @@ jobs:
         --token-default-role admin --token-authorized-emails {identity}
         --oauth-client-id {client_id} --oauth-base-url {base_url} --oauth-provider-name Mock
       CHARGEWIRE_JDBC_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+      # LegacyDialectIT's server from before the rename (Chargewire's former name): Hardcharger
+      # 2.2.0, the last release before it. The tests fail, never skip, without it.
+      CHARGEWIRE_JDBC_TEST_FORMER_SERVER_NAME: Hardcharger
+      CHARGEWIRE_JDBC_TEST_FORMER_SERVER_USERNAME_FLAG: --admin-username
+      CHARGEWIRE_JDBC_TEST_FORMER_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
     steps:
       - uses: actions/checkout@v7
         with:
@@ -126,6 +131,12 @@ jobs:
         with:
           image: ${{ env.HARDCHARGER_IMAGE }}
           token: ${{ github.token }}
+      - uses: ./.github/actions/hardcharger-server
+        with:
+          image: ghcr.io/gizmodata/hardcharger:2.2.0
+          token: ${{ github.token }}
+          variable: CHARGEWIRE_JDBC_TEST_FORMER_SERVER_BINARY
+          directory: hardcharger-former
       # failsafe's failIfNoTests and the suite's fail-without-a-server make a green job mean the
       # integration tests really ran.
       - name: Unit and integration tests

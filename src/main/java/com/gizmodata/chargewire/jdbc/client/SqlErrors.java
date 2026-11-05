@@ -36,11 +36,22 @@ public final class SqlErrors {
    * @return an exception whose cause is a {@link ChargewireProblemException}
    */
   public static SQLException toSqlException(ChargewireProblem problem) {
+    return toSqlException(problem, "");
+  }
+
+  /**
+   * Builds the exception for a problem, with a note of the driver's after the server's message.
+   *
+   * @param problem the server's error
+   * @param note text appended to the message, or an empty string
+   * @return an exception whose cause is a {@link ChargewireProblemException}
+   */
+  public static SQLException toSqlException(ChargewireProblem problem, String note) {
     String sqlState =
         problem.sqlState() != null && SQLSTATE.matcher(problem.sqlState()).matches()
             ? problem.sqlState()
             : defaultSqlState(problem);
-    SQLException error = create(problem, problem.message(), sqlState);
+    SQLException error = create(problem, problem.message() + note, sqlState);
     error.initCause(new ChargewireProblemException(problem));
     return error;
   }
@@ -74,6 +85,9 @@ public final class SqlErrors {
       case "server_draining":
       case "identity_provider_error":
         return "08004";
+      case "server_resuming":
+        // The server is starting again after a stop: connecting again shortly will succeed.
+        return "08001";
       case ChargewireProblem.CLIENT_PROTOCOL_ERROR:
         return "08P01";
       case "permission_denied":

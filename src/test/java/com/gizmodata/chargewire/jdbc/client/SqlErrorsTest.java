@@ -82,6 +82,7 @@ class SqlErrorsTest {
     "0, execution_error, HY000, java.sql.SQLNonTransientException",
     "500, internal_error, HY000, java.sql.SQLException",
     "503, server_draining, 08004, java.sql.SQLTransientConnectionException",
+    "503, server_resuming, 08001, java.sql.SQLTransientConnectionException",
     "501, not_implemented, 0A000, java.sql.SQLFeatureNotSupportedException",
   })
   void everySpecCodeMaps(int status, String code, String sqlState, String type) throws Exception {
@@ -109,6 +110,25 @@ class SqlErrorsTest {
         "HY000",
         SqlErrors.toSqlException(problem(422, "execution_error", "bogus")).getSQLState(),
         "a malformed SQLSTATE is ignored");
+  }
+
+  @Test
+  void aDriverNoteFollowsTheServersMessageAndKeepsTheProblem() {
+    ChargewireProblem resuming =
+        new ChargewireProblem(
+            503,
+            "server_resuming",
+            "Server resuming",
+            "the server is resuming; retry after 3 s",
+            null,
+            null,
+            null);
+    SQLException error = SqlErrors.toSqlException(resuming, " (gave up)");
+    assertInstanceOf(SQLTransientConnectionException.class, error);
+    assertEquals("08001", error.getSQLState());
+    assertEquals(
+        "the server is resuming; retry after 3 s [server_resuming] (gave up)", error.getMessage());
+    assertSame(resuming, ChargewireProblem.of(error));
   }
 
   @Test

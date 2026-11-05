@@ -74,8 +74,21 @@ public enum ChargewireProperty {
   BASE_PATH("basePath", "/chargewire", "Path the server mounts Chargewire under"),
   /** Milliseconds to wait for a TCP and TLS connection. */
   CONNECT_TIMEOUT("connectTimeout", "30000", "Connect timeout in milliseconds"),
-  /** Milliseconds to wait for each response's headers; 0 waits forever. */
+  /**
+   * Milliseconds to wait for each response's headers; 0 waits forever. Every request but discovery
+   * waits at least 30 s, because a resuming server may hold an answer for up to 25 s.
+   */
   NETWORK_TIMEOUT("networkTimeout", "0", "Response timeout in milliseconds (0: none)"),
+  /**
+   * Seconds to keep repeating a request the server answers with {@code server_resuming} (a stopped
+   * server starting again), each time after the answer's {@code Retry-After}; {@code 0} reports the
+   * first such answer at once. A resuming server may hold an answer for up to 25 s, so every
+   * request but discovery waits at least 30 s for its answer.
+   */
+  RESUME_TIMEOUT(
+      "resumeTimeout",
+      "600",
+      "Seconds to keep retrying while the server answers server_resuming (0: no retry)"),
   /**
    * Arrow buffer compression to ask results in: {@code auto} ({@code lz4_frame} on a link with a
    * round trip under 10 ms, {@code zstd} on a slower one), {@code lz4_frame}, {@code zstd} or
