@@ -28,6 +28,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import javax.net.ssl.SSLException;
 
@@ -47,8 +48,10 @@ import javax.net.ssl.SSLException;
  * {@code Retry-After}) to any request but discovery: the client waits the {@code Retry-After} (3 s
  * when absent, 1 s to 60 s) and repeats the same request until it gets another answer or {@link
  * ConnectionConfig#resumeTimeout()} has passed since the first {@code server_resuming}. Such a
- * server may also hold the login for up to 25 s before answering, so the login waits at least 30 s
- * for its response whatever the request timeout.
+ * server may hold any answer but discovery's for up to 25 s, so every request but discovery waits
+ * at least 30 s for its response whatever the request timeout. A request with a limit of its own
+ * stops repeating at that limit, and one whose target cannot outlive a stop (a cancel, freeing a
+ * result, ending a session) is not repeated at all (see {@link ResumeLimit}).
  *
  * <p>Internal API.
  */
@@ -79,10 +82,13 @@ public final class ChargewireClient implements AutoCloseable {
   static final Duration MIN_RESUME_RETRY_AFTER = Duration.ofSeconds(1);
 
   /**
-   * The shortest time the login waits for its answer: a resuming server may hold it for up to 25 s
-   * before answering.
+   * The shortest time a request waits for its answer: a resuming server may hold any answer but
+   * discovery's for up to 25 s before sending it (spec §11.2).
    */
-  static final Duration LOGIN_TIMEOUT_FLOOR = Duration.ofSeconds(30);
+  static final Duration REQUEST_TIMEOUT_FLOOR = Duration.ofSeconds(30);
+
+  /** How often a {@code server_resuming} pause looks whether its statement was cancelled. */
+  static final Duration CANCEL_CHECK_INTERVAL = Duration.ofMillis(100);
 
   /** The clock and pause of the {@code server_resuming} retries; replaced only by tests. */
   private static volatile ResumeClock resumeClock = ResumeClock.SYSTEM;
@@ -338,7 +344,14 @@ public final class ChargewireClient implements AutoCloseable {
   private Supplier<HttpRequest.Builder> timedDiscovery(URI target, long[] times) {
     return () -> {
       times[0] = System.nanoTime();
-      return request(target).GET();
+      // Discovery is never held (spec §11.2): a silent server must not stall the connect.
+      HttpRequest.Builder builder =
+          HttpRequest.newBuilder(target).header("User-Agent", userAgent).GET();
+      Duration timeout = requestTimeout;
+      if (timeout != null) {
+        builder.timeout(timeout);
+      }
+      return builder;
     };
   }
 
@@ -429,17 +442,10 @@ public final class ChargewireClient implements AutoCloseable {
     long now = System.nanoTime();
     HttpResponse<byte[]> response =
         send(
-            () -> {
-              HttpRequest.Builder builder =
-                  request(uri("/v1/auth/token"))
-                      .header("Content-Type", JSON)
-                      .POST(HttpRequest.BodyPublishers.ofByteArray(bytes));
-              Duration timeout = loginTimeout(requestTimeout);
-              if (timeout != null) {
-                builder.timeout(timeout);
-              }
-              return builder;
-            },
+            () ->
+                request(uri("/v1/auth/token"))
+                    .header("Content-Type", JSON)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(bytes)),
             handlerBytes(),
             true,
             false);
@@ -458,17 +464,19 @@ public final class ChargewireClient implements AutoCloseable {
   }
 
   /**
-   * Returns how long the login waits for its answer: the request timeout, but at least {@link
-   * #LOGIN_TIMEOUT_FLOOR}, because a resuming server may hold the login before answering.
+   * Returns how long a request waits for its answer: the request timeout, but at least {@link
+   * #REQUEST_TIMEOUT_FLOOR}, because a resuming server may hold an answer before sending it.
    *
    * @param requestTimeout the connection's request timeout, or {@code null} for none
-   * @return the login's timeout, or {@code null} for none
+   * @return the request's timeout, or {@code null} for none
    */
-  static Duration loginTimeout(Duration requestTimeout) {
+  static Duration heldTimeout(Duration requestTimeout) {
     if (requestTimeout == null) {
       return null;
     }
-    return requestTimeout.compareTo(LOGIN_TIMEOUT_FLOOR) < 0 ? LOGIN_TIMEOUT_FLOOR : requestTimeout;
+    return requestTimeout.compareTo(REQUEST_TIMEOUT_FLOOR) < 0
+        ? REQUEST_TIMEOUT_FLOOR
+        : requestTimeout;
   }
 
   /**
@@ -688,7 +696,8 @@ public final class ChargewireClient implements AutoCloseable {
             },
             handlerBytes(),
             true,
-            true),
+            true,
+            timeout == null ? ResumeLimit.UNLIMITED : ResumeLimit.within(timeout)),
         "session");
   }
 
@@ -715,16 +724,23 @@ public final class ChargewireClient implements AutoCloseable {
   }
 
   /**
-   * Ends a session; a session the server no longer has is already ended.
+   * Ends a session; a session the server no longer has is already ended, and so is one on a server
+   * that is resuming: no session survives a stop (spec §11.2), so the request is not repeated.
    *
    * @param sessionId the session
    * @throws SQLException on any other error
    */
   public void deleteSession(String sessionId) throws SQLException {
     try {
-      send(() -> request(sessionUri(sessionId, "")).DELETE(), handlerDiscard(), true, true);
+      send(
+          () -> request(sessionUri(sessionId, "")).DELETE(),
+          handlerDiscard(),
+          true,
+          true,
+          ResumeLimit.NO_RETRY);
     } catch (SQLException e) {
-      if (!"session_not_found".equals(ChargewireProblem.codeOf(e))) {
+      String code = ChargewireProblem.codeOf(e);
+      if (!"session_not_found".equals(code) && !SERVER_RESUMING.equals(code)) {
         throw e;
       }
     }
@@ -754,6 +770,7 @@ public final class ChargewireClient implements AutoCloseable {
     final boolean async;
     final int resultPartitions;
     final boolean anyOrder;
+    final BooleanSupplier cancelled;
 
     /**
      * Creates submit options for a result in one partition.
@@ -776,10 +793,31 @@ public final class ChargewireClient implements AutoCloseable {
      */
     public SubmitOptions(
         long timeoutMillis, boolean async, int resultPartitions, boolean anyOrder) {
+      this(timeoutMillis, async, resultPartitions, anyOrder, null);
+    }
+
+    private SubmitOptions(
+        long timeoutMillis,
+        boolean async,
+        int resultPartitions,
+        boolean anyOrder,
+        BooleanSupplier cancelled) {
       this.timeoutMillis = timeoutMillis;
       this.async = async;
       this.resultPartitions = resultPartitions;
       this.anyOrder = anyOrder;
+      this.cancelled = cancelled;
+    }
+
+    /**
+     * Returns these options with a check for a cancel: while the server is resuming, the submission
+     * stops waiting once the check says the statement was cancelled.
+     *
+     * @param cancelled whether the statement was cancelled
+     * @return the new options
+     */
+    public SubmitOptions cancelledWhen(BooleanSupplier cancelled) {
+      return new SubmitOptions(timeoutMillis, async, resultPartitions, anyOrder, cancelled);
     }
 
     /**
@@ -936,7 +974,8 @@ public final class ChargewireClient implements AutoCloseable {
   }
 
   /**
-   * Closes a prepared statement; one the server no longer has is already closed.
+   * Closes a prepared statement; one the server no longer has is already closed, and so is one on a
+   * server that is resuming (nothing survives a stop).
    *
    * @param sessionId the session
    * @param preparedId the prepared statement
@@ -948,10 +987,13 @@ public final class ChargewireClient implements AutoCloseable {
           () -> request(sessionUri(sessionId, "/prepared/" + preparedId)).DELETE(),
           handlerDiscard(),
           true,
-          true);
+          true,
+          ResumeLimit.NO_RETRY);
     } catch (SQLException e) {
       String code = ChargewireProblem.codeOf(e);
-      if (!"prepared_not_found".equals(code) && !"session_not_found".equals(code)) {
+      if (!"prepared_not_found".equals(code)
+          && !"session_not_found".equals(code)
+          && !SERVER_RESUMING.equals(code)) {
         throw e;
       }
     }
@@ -995,7 +1037,8 @@ public final class ChargewireClient implements AutoCloseable {
             },
             HttpResponse.BodyHandlers.ofInputStream(),
             true,
-            true);
+            true,
+            ResumeLimit.forStatement(options.timeoutMillis, options.cancelled));
     if (isArrow(response)) {
       return new Submission(
           null,
@@ -1037,7 +1080,7 @@ public final class ChargewireClient implements AutoCloseable {
               HttpRequest.Builder builder = request(target).GET();
               if (wait > 0) {
                 builder.header("Prefer", "wait=" + wait);
-                Duration timeout = requestTimeout;
+                Duration timeout = heldTimeout(requestTimeout);
                 if (timeout != null) {
                   builder.timeout(timeout.plusSeconds(wait));
                 }
@@ -1162,11 +1205,13 @@ public final class ChargewireClient implements AutoCloseable {
    */
   public void cancel(String sessionId, String statementId) throws SQLException {
     URI target = sessionUri(sessionId, "/statements/" + statementId + "/cancel");
+    // A statement does not survive a stop, so a cancel is not repeated while the server resumes.
     send(
         () -> request(target).POST(HttpRequest.BodyPublishers.noBody()),
         handlerDiscard(),
         true,
-        true);
+        true,
+        ResumeLimit.NO_RETRY);
   }
 
   /**
@@ -1182,7 +1227,8 @@ public final class ChargewireClient implements AutoCloseable {
         () -> request(target).POST(HttpRequest.BodyPublishers.noBody()),
         handlerDiscard(),
         true,
-        true);
+        true,
+        ResumeLimit.NO_RETRY);
   }
 
   /**
@@ -1200,10 +1246,13 @@ public final class ChargewireClient implements AutoCloseable {
           () -> request(sessionUri(sessionId, "/statements/" + statementId)).DELETE(),
           handlerDiscard(),
           true,
-          true);
+          true,
+          ResumeLimit.NO_RETRY);
     } catch (SQLException e) {
       String code = ChargewireProblem.codeOf(e);
-      if (!"statement_not_found".equals(code) && !"session_not_found".equals(code)) {
+      if (!"statement_not_found".equals(code)
+          && !"session_not_found".equals(code)
+          && !SERVER_RESUMING.equals(code)) {
         throw e;
       }
     }
@@ -1277,16 +1326,110 @@ public final class ChargewireClient implements AutoCloseable {
 
   // ---- HTTP plumbing ----
 
+  /**
+   * How long one request may keep repeating while the server answers {@code server_resuming}, on
+   * top of {@link ConnectionConfig#resumeTimeout()} (spec §11.2): a request with a time limit of
+   * its own (a connection probe, a statement with a query timeout) stops at that limit, a statement
+   * stops once it is cancelled, and a request whose target cannot outlive a stop (a cancel, freeing
+   * a result, ending a session) is not repeated at all.
+   */
+  static final class ResumeLimit {
+    /** Repeats until {@code resumeTimeout}. */
+    static final ResumeLimit UNLIMITED = new ResumeLimit(false, null, null, false);
+
+    /** Never repeats: the first {@code server_resuming} is the answer. */
+    static final ResumeLimit NO_RETRY = new ResumeLimit(true, null, null, false);
+
+    final boolean noRetry;
+    final Duration within;
+    final BooleanSupplier cancelled;
+    final boolean statement;
+
+    private ResumeLimit(
+        boolean noRetry, Duration within, BooleanSupplier cancelled, boolean statement) {
+      this.noRetry = noRetry;
+      this.within = within;
+      this.cancelled = cancelled;
+      this.statement = statement;
+    }
+
+    /** Repeats for at most {@code within}, counted from the request's start. */
+    static ResumeLimit within(Duration within) {
+      return new ResumeLimit(false, within, null, false);
+    }
+
+    /**
+     * A statement's limit: its query timeout, if any, and its cancel.
+     *
+     * @param timeoutMillis the query timeout, or 0 for none
+     * @param cancelled whether the statement was cancelled, or {@code null}
+     */
+    static ResumeLimit forStatement(long timeoutMillis, BooleanSupplier cancelled) {
+      if (timeoutMillis <= 0 && cancelled == null) {
+        return UNLIMITED;
+      }
+      return new ResumeLimit(
+          false, timeoutMillis > 0 ? Duration.ofMillis(timeoutMillis) : null, cancelled, true);
+    }
+
+    /** The error once the request's own limit has passed. */
+    SQLException expired(ChargewireProblem problem) {
+      if (statement) {
+        SQLTimeoutException error =
+            new SQLTimeoutException(
+                "The query timeout passed while the server was resuming: " + problem.message(),
+                "HYT00",
+                problem.status());
+        error.initCause(new ChargewireProblemException(problem));
+        return error;
+      }
+      return SqlErrors.toSqlException(
+          problem,
+          " (still resuming when the request's own time limit of "
+              + within.toMillis()
+              + " ms passed)");
+    }
+
+    void checkCancelled() throws SQLException {
+      if (cancelled != null && cancelled.getAsBoolean()) {
+        throw new SQLException(
+            "The statement was cancelled while the server was resuming", "57014");
+      }
+    }
+
+    /** Waits {@code pause}, in short steps when a cancel must end the wait early. */
+    void pause(ResumeClock clock, Duration pause) throws InterruptedException {
+      if (cancelled == null) {
+        clock.sleep(pause);
+        return;
+      }
+      clock.sleep(pause, cancelled, CANCEL_CHECK_INTERVAL);
+    }
+  }
+
   private <T> HttpResponse<T> send(
       Supplier<HttpRequest.Builder> builder,
       HttpResponse.BodyHandler<T> handler,
       boolean retryable,
       boolean authenticated)
       throws SQLException {
+    return send(builder, handler, retryable, authenticated, ResumeLimit.UNLIMITED);
+  }
+
+  private <T> HttpResponse<T> send(
+      Supplier<HttpRequest.Builder> builder,
+      HttpResponse.BodyHandler<T> handler,
+      boolean retryable,
+      boolean authenticated,
+      ResumeLimit limit)
+      throws SQLException {
     boolean renewed = false;
     // When the first server_resuming answer arrived, and so when the repeats stop.
     long resumeDeadline = 0;
     boolean resuming = false;
+    // The request's own limit on the repeats, counted from now.
+    ResumeClock limitClock = resumeClock;
+    long limitDeadline = limit.within == null ? 0 : limitClock.nanoTime() + limit.within.toNanos();
     for (int attempt = 1; ; attempt++) {
       HttpRequest.Builder request = builder.get();
       if (authenticated) {
@@ -1320,9 +1463,10 @@ public final class ChargewireClient implements AutoCloseable {
       ChargewireProblem problem = readProblem(response);
       if (status == 503 && SERVER_RESUMING.equals(problem.code())) {
         Duration resumeTimeout = config.resumeTimeout;
-        if (resumeTimeout.isZero() || resumeTimeout.isNegative()) {
+        if (resumeTimeout.isZero() || resumeTimeout.isNegative() || limit.noRetry) {
           throw SqlErrors.toSqlException(problem);
         }
+        limit.checkCancelled();
         ResumeClock clock = resumeClock;
         long now = clock.nanoTime();
         if (!resuming) {
@@ -1337,16 +1481,24 @@ public final class ChargewireClient implements AutoCloseable {
                   + resumeTimeout.toSeconds()
                   + " s of retries; resumeTimeout sets how long the driver waits)");
         }
+        if (limit.within != null) {
+          long ownRemaining = limitDeadline - now;
+          if (ownRemaining <= 0) {
+            throw limit.expired(problem);
+          }
+          remaining = Math.min(remaining, ownRemaining);
+        }
         Duration pause = resumeRetryAfter(response);
         if (pause.toNanos() > remaining) {
           pause = Duration.ofNanos(remaining);
         }
         try {
-          clock.sleep(pause);
+          limit.pause(clock, pause);
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           throw new SQLException("Interrupted while waiting for the server to resume", "HY008", e);
         }
+        limit.checkCancelled();
         // The server did not take the request: repeat it as it was, without spending an attempt.
         attempt--;
         continue;
@@ -1486,7 +1638,7 @@ public final class ChargewireClient implements AutoCloseable {
 
   private HttpRequest.Builder request(URI target) {
     HttpRequest.Builder builder = HttpRequest.newBuilder(target).header("User-Agent", userAgent);
-    Duration timeout = requestTimeout;
+    Duration timeout = heldTimeout(requestTimeout);
     if (timeout != null) {
       builder.timeout(timeout);
     }
@@ -1534,8 +1686,15 @@ public final class ChargewireClient implements AutoCloseable {
     return HttpResponse.BodyHandlers.ofByteArray();
   }
 
-  private static HttpResponse.BodyHandler<Void> handlerDiscard() {
-    return HttpResponse.BodyHandlers.discarding();
+  /**
+   * Discards a successful response's body but keeps an error's, so that the server's problem
+   * document (its code, SQLSTATE and detail, {@code server_resuming} among them) is read.
+   */
+  private static HttpResponse.BodyHandler<byte[]> handlerDiscard() {
+    return info ->
+        info.statusCode() >= 400
+            ? HttpResponse.BodySubscribers.ofByteArray()
+            : HttpResponse.BodySubscribers.replacing(new byte[0]);
   }
 
   private byte[] bytes(JsonNode node) throws SQLException {

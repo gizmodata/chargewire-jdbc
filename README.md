@@ -26,7 +26,7 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 2.1.0**, for Chargewire protocol 1.0 (Chargewire 2.1.0), on Maven Central. It works with
+**Status: 2.2.0**, for Chargewire protocol 1.0 (Chargewire 2.1.0), on Maven Central. It works with
 servers on either side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
@@ -46,14 +46,14 @@ Maven:
 <dependency>
   <groupId>com.gizmodata</groupId>
   <artifactId>chargewire-jdbc</artifactId>
-  <version>2.1.0</version>
+  <version>2.2.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.gizmodata:chargewire-jdbc:2.1.0'
+implementation 'com.gizmodata:chargewire-jdbc:2.2.0'
 ```
 
 The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
@@ -122,8 +122,8 @@ For a local server without TLS, add `useEncryption=false`.
 | `clientCertificate`, `clientKey` | | PEM certificate and key (PKCS#8, PKCS#1 RSA or SEC1 EC, unencrypted) for mutual TLS |
 | `disableCertificateVerification` | `false` | Accept any certificate and host name. **Development only.** |
 | `basePath` | `/chargewire` | Where the server mounts the protocol |
-| `connectTimeout` | `30000` | Milliseconds to connect, and to wait for answers while connecting (the login waits at least 30 s; see [A server that is resuming](#-a-server-that-is-resuming)); `0` waits forever |
-| `networkTimeout` | `0` | Milliseconds to wait for each response's headers (also `Connection.setNetworkTimeout`) |
+| `connectTimeout` | `30000` | Milliseconds to connect, and to wait for discovery's answer while connecting (other requests wait at least 30 s; see [A server that is resuming](#-a-server-that-is-resuming)); `0` waits forever |
+| `networkTimeout` | `0` | Milliseconds to wait for each response's headers, at least 30 s but for discovery (also `Connection.setNetworkTimeout`, whose value `getNetworkTimeout` returns unchanged) |
 | `resumeTimeout` | `600` | Seconds to keep repeating a request while the server answers `server_resuming` (a stopped server starting again); `0` reports the first such answer at once |
 | `async` | `false` | Submit with `respond-async`, long-poll, then fetch: no request stays open for a whole query |
 | `pollWait` | `10` | Seconds each status long-poll may wait on the server |
@@ -232,9 +232,17 @@ the server's message, SQLSTATE `08001` and code `server_resuming` (a `SQLTransie
 `resumeTimeout=0` turns the retries off. While the driver waits, `getConnection` (or the statement)
 does not return, so a pool's own connection timeout may need to allow for the resume.
 
-The login waits at least 30 s for its answer, whatever `connectTimeout` or `networkTimeout` say, so
-a held login is never cut short; `connectTimeout` still bounds the TCP and TLS connect. Other
-`503` answers, such as `server_draining`, are not retried.
+Such a server may hold any answer for up to 25 s before sending it, so every request but discovery
+waits at least 30 s for its answer, whatever `connectTimeout` or `networkTimeout` say, and a held
+answer is never cut short; `connectTimeout` still bounds the TCP and TLS connect and discovery.
+Other `503` answers, such as `server_draining`, are not retried.
+
+A request with a limit of its own stops repeating there: `isValid(timeout)` returns `false` once
+its timeout has passed, and a statement with a query timeout fails with SQLSTATE `HYT00`
+(`SQLTimeoutException`) when that has passed. `Statement.cancel()` ends a statement's wait within
+0.1 s, with SQLSTATE `57014`. Requests whose target cannot survive a stop are not repeated: closing
+a connection, a statement or a result returns at once (the server has no session left to end), and
+a cancel reports the `server_resuming` answer.
 
 ## 🔢 Types
 
@@ -373,7 +381,11 @@ Other servers run the same suite when told how they differ from `chargewire-duck
 
 `LegacyDialectIT` also runs against a reference server from before the rename, named by
 `CHARGEWIRE_JDBC_TEST_FORMER_SERVER_BINARY` (default: the sibling pre-rename checkout's build); its
-former-server tests are skipped when there is none.
+former-server tests fail, never skip, when there is none. For a former server other than
+`warp-duckdb`, `CHARGEWIRE_JDBC_TEST_FORMER_SERVER_NAME` (its product name),
+`CHARGEWIRE_JDBC_TEST_FORMER_SERVER_USERNAME_FLAG` and `CHARGEWIRE_JDBC_TEST_FORMER_SERVER_PASSWORD_ENV`
+describe it; CI uses `hardcharger-server` 2.2.0 (`Hardcharger`, `--admin-username`,
+`HARDCHARGER_ADMIN_PASSWORD`).
 
 For example, for Hardcharger:
 

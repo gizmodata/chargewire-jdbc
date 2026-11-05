@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
-/** The waits around a resuming server: {@code Retry-After}, and the login's own timeout. */
+/** The waits around a resuming server: {@code Retry-After}, and the requests' own timeout. */
 class ResumeRulesTest {
   @ParameterizedTest
   @CsvSource({"0, 1", "1, 1", "' 7 ', 7", "60, 60", "61, 60", "86400, 60"})
@@ -29,12 +29,12 @@ class ResumeRulesTest {
   }
 
   @Test
-  void theLoginWaitsAtLeastThirtySeconds() {
+  void everyRequestWaitsAtLeastThirtySeconds() {
     assertEquals(
-        Duration.ofSeconds(30), ChargewireClient.loginTimeout(/* requestTimeout= */ secs(10)));
-    assertEquals(Duration.ofSeconds(30), ChargewireClient.loginTimeout(secs(30)));
-    assertEquals(Duration.ofSeconds(90), ChargewireClient.loginTimeout(secs(90)));
-    assertNull(ChargewireClient.loginTimeout(null));
+        Duration.ofSeconds(30), ChargewireClient.heldTimeout(/* requestTimeout= */ secs(10)));
+    assertEquals(Duration.ofSeconds(30), ChargewireClient.heldTimeout(secs(30)));
+    assertEquals(Duration.ofSeconds(90), ChargewireClient.heldTimeout(secs(90)));
+    assertNull(ChargewireClient.heldTimeout(null));
   }
 
   private static Duration secs(long seconds) {
