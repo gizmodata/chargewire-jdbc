@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-11-05
+
+### Fixed
+
+- **A statement could still run again on its own in autocommit after a SQL `BEGIN`, against
+  servers up to Chargewire 2.2.0** (every Hardcharger through 2.7.0). Those servers answer a
+  statement without rows on the streamed path (the default) as soon as its outcome is known, and
+  copy the session's transaction state into the session document slightly after that, so a session
+  read right after `BEGIN` (`isValid()`, `getCatalog()`, `getSchema()` or `getTransactionState()`)
+  could still say `none`. The driver took it, and a statement that then found the session lost ran
+  again in the new session, committing on its own while the transaction's earlier statements had
+  been rolled back: what 2.1.0 was meant to rule out. The window is tiny on a laptop and real on a
+  busy CI runner. Chargewire 2.2.1 fixes the server; the driver now holds against servers already
+  deployed too. After a statement whose text may open a transaction or change how one opens
+  (`BEGIN`, `START`, `EXECUTE` of a prepared statement, anything naming autocommit), the
+  transaction counts as possibly open, and a session read saying `none` does not clear that
+  (`getTransactionState()` reports `UNKNOWN`), until a statement whose text may end one
+  (`COMMIT`, `ROLLBACK`, `END`, `ABORT`), a new session, or a change of autocommit. A read after
+  a statement that may end a transaction counts, because a stale read can only lag toward `open`,
+  the safe side. Text that may do both counts as opening. A statement's first word decides (after
+  `EXPLAIN` and `ANALYZE`), in each statement of the text, outside quotes and comments; a read
+  saying `open` or `aborted` always counts.
+
 ## [2.2.0] - 2026-11-05
 
 For GizmoData Cloud's auto-resume: a stopped server that starts again at the next sign-in

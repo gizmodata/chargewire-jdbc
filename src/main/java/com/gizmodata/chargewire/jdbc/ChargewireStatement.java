@@ -78,11 +78,12 @@ public class ChargewireStatement implements Statement {
   /**
    * Runs a statement and keeps its outcome: a result set, or an update count.
    *
+   * @param effect what the statement's text may do to the session's transaction
    * @param submitter how to submit it
    * @return {@code true} if it produced a result set
    * @throws SQLException with the statement's error if it failed
    */
-  final boolean run(Submitter submitter) throws SQLException {
+  final boolean run(TransactionText.Effect effect, Submitter submitter) throws SQLException {
     checkOpen();
     closeResultSet();
     updateCount = -1;
@@ -110,7 +111,7 @@ public class ChargewireStatement implements Statement {
               });
     } finally {
       if (sentTo[0] != null && sentTo[0].equals(connection.getSessionId())) {
-        connection.statementRan();
+        connection.statementRan(effect);
       }
     }
     String sessionId = runningSessionId;
@@ -259,7 +260,8 @@ public class ChargewireStatement implements Statement {
   public boolean execute(String sql) throws SQLException {
     checkOpen();
     ObjectNode body = body(connection.client(), sql);
-    return run((id, options) -> connection.client().submit(id, body, options));
+    return run(
+        TransactionText.of(sql), (id, options) -> connection.client().submit(id, body, options));
   }
 
   @Override

@@ -507,6 +507,176 @@ class ClientBehaviourTest {
     assertEquals(1, server.requests("POST", "/v1/sessions/s2/statements").size(), "run again");
   }
 
+  // ---- A session document read right after a statement may be stale ----
+
+  /**
+   * Answers the first {@code succeeded} statements in session s1, then {@code session_not_found}
+   * (the session was evicted, or the server restarted); statements in s2 succeed.
+   */
+  private void sessionLostAfter(int succeeded) {
+    AtomicInteger calls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          if (calls.incrementAndGet() <= succeeded) {
+            json(exchange, 200, updateDocument("q" + calls.get(), 0));
+          } else {
+            problem(exchange, 404, "session_not_found", "");
+          }
+        });
+    server.route(
+        "POST",
+        "/v1/sessions/s2/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("r1", 1)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "BEGIN",
+        "begin transaction",
+        "START TRANSACTION",
+        "-- a comment\n/* and another */ BEGIN",
+        "SELECT 1; BEGIN",
+        "COMMIT; BEGIN",
+        "EXECUTE begin_it",
+        "EXPLAIN ANALYZE EXECUTE p(1)",
+        "SET autocommit = false"
+      })
+  void aStaleNoneAfterTextThatMayBeginATransactionDoesNotLetAStatementRunAgain(String sql)
+      throws Exception {
+    // Servers up to Chargewire 2.2.0 answer a statement without rows before they copy its
+    // transaction into the session document, so a read right after BEGIN can still say none. The
+    // driver must not take that none, or it runs the next statement alone in autocommit on a new
+    // session after losing the one that held the transaction.
+    sessionLostAfter(1);
+    server.transaction = "none";
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      ChargewireConnection chargewire = connection.unwrap(ChargewireConnection.class);
+      statement.execute(sql);
+      assertTrue(connection.isValid(5), "reads the session: none, perhaps stale");
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("08007", error.getSQLState());
+      assertTrue(error.getMessage().contains("cannot tell"), error.getMessage());
+      assertEquals("s2", chargewire.getSessionId());
+      // The new session holds no transaction, and its document counts again.
+      assertEquals(ChargewireConnection.TransactionState.NONE, chargewire.getTransactionState());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @Test
+  void theTransactionStateIsUnknownWhileANoneAfterBeginMayBeStale() throws Exception {
+    server.transaction = "none";
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q1", 0)));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      ChargewireConnection chargewire = connection.unwrap(ChargewireConnection.class);
+      statement.execute("BEGIN");
+      assertEquals(ChargewireConnection.TransactionState.UNKNOWN, chargewire.getTransactionState());
+      statement.execute("SELECT 1");
+      assertEquals(ChargewireConnection.TransactionState.UNKNOWN, chargewire.getTransactionState());
+      server.transaction = "open";
+      assertEquals(ChargewireConnection.TransactionState.OPEN, chargewire.getTransactionState());
+      server.transaction = "none";
+      statement.execute("COMMIT");
+      assertEquals(ChargewireConnection.TransactionState.NONE, chargewire.getTransactionState());
+    }
+  }
+
+  @Test
+  void aStaleNoneAfterAPreparedBeginDoesNotLetAStatementRunAgain() throws Exception {
+    server.route(
+        "POST",
+        "/v1/sessions/s1/prepared",
+        (exchange, request, path) ->
+            json(exchange, 201, "{\"prepared_id\":\"p1\",\"result_schema\":null}"));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/prepared/p1/execute",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q1", 0)));
+    sessionLostAfter(0);
+    server.transaction = "none";
+    try (Connection connection = connect("");
+        PreparedStatement begin = connection.prepareStatement("BEGIN TRANSACTION");
+        Statement statement = connection.createStatement()) {
+      begin.execute();
+      assertTrue(connection.isValid(5), "reads the session: none, perhaps stale");
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("08007", error.getSQLState());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @Test
+  void aStatementThatCannotEndTheTransactionKeepsItPossiblyOpen() throws Exception {
+    sessionLostAfter(2);
+    server.transaction = "none";
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("BEGIN");
+      // CASE … END ends no transaction: only a statement's first word counts.
+      statement.executeUpdate("UPDATE t SET a = CASE WHEN a THEN 1 END");
+      assertTrue(connection.isValid(5), "reads the session: none, perhaps stale");
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("08007", error.getSQLState());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"COMMIT", "ROLLBACK", "end transaction", "ABORT"})
+  void aNoneAfterTextThatMayEndTheTransactionCounts(String end) throws Exception {
+    // A stale read after COMMIT can only lag toward open, the safe side: a none is the truth.
+    sessionLostAfter(2);
+    server.transaction = "none";
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("BEGIN");
+      statement.execute(end);
+      assertEquals(
+          ChargewireConnection.TransactionState.NONE,
+          connection.unwrap(ChargewireConnection.class).getTransactionState());
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+    }
+    assertEquals(1, server.requests("POST", "/v1/sessions/s2/statements").size(), "run again");
+  }
+
+  @Test
+  void anOpenReadAfterBeginStillCounts() throws Exception {
+    sessionLostAfter(1);
+    server.transaction = "open";
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("BEGIN");
+      assertEquals(
+          ChargewireConnection.TransactionState.OPEN,
+          connection.unwrap(ChargewireConnection.class).getTransactionState());
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("08007", error.getSQLState());
+      assertTrue(error.getMessage().contains("transaction open"), error.getMessage());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
   @Test
   void aSessionEndedForAnIdleTransactionIsReplacedAndTheStatementNotRunAgain() throws Exception {
     server.route(

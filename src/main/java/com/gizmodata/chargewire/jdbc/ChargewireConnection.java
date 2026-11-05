@@ -51,8 +51,10 @@ import org.apache.arrow.memory.RootAllocator;
  * commit or rollback; with autocommit on, when the session document read after the last statement
  * said {@code none} ({@link #getTransactionState()}, {@link #isValid(int)}, or {@link
  * #getCatalog()} and {@link #getSchema()} after a statement; a SQL {@code BEGIN} shows only there,
- * spec §5.2). Otherwise the statement fails with SQLSTATE {@code 08007} and is not run; the new
- * session is open for the next one.
+ * spec §5.2), and no statement whose text may open a transaction ran since the last one whose text
+ * may end it (servers up to Chargewire 2.2.0 can report {@code none} for a moment after a {@code
+ * BEGIN}; see {@link #statementRan(TransactionText.Effect)}). Otherwise the statement fails with
+ * SQLSTATE {@code 08007} and is not run; the new session is open for the next one.
  *
  * <p>A session the server ended ({@code session_ended}, spec §5.6) for a transaction left idle
  * ({@code idle_in_transaction}, §5.7) is replaced the same way, and the statement fails with
@@ -78,7 +80,8 @@ public final class ChargewireConnection implements Connection {
     ABORTED,
     /**
      * The server did not say, or said something this driver does not know (spec §12); inside the
-     * driver also: a statement ran since the session was last read.
+     * driver also: a statement ran since the session was last read, or the session said {@code
+     * none} while a statement may have opened a transaction (the read may be stale).
      */
     UNKNOWN;
 
@@ -119,6 +122,13 @@ public final class ChargewireConnection implements Connection {
   private volatile boolean autoCommit = true;
   private volatile boolean transactionDirty;
   private volatile TransactionState transaction = TransactionState.UNKNOWN;
+
+  /**
+   * With autocommit on: a statement whose text may open a transaction ran in this session since the
+   * last one whose text may end one, so a session document saying {@code none} may be stale and
+   * does not count (see {@link #statementRan(TransactionText.Effect)}).
+   */
+  private volatile boolean transactionMayBeOpen;
 
   /**
    * Counts statements run, so a session read that a statement on another thread overtook does not
@@ -192,6 +202,7 @@ public final class ChargewireConnection implements Connection {
     }
     sessionId = id;
     sessionGeneration++;
+    transactionMayBeOpen = false;
     transaction = TransactionState.of(session);
     try {
       applyOptions(session.path("options"), catalog, schema);
@@ -357,7 +368,8 @@ public final class ChargewireConnection implements Connection {
         throw new SQLTransientConnectionException(
             "The session was lost, and the driver cannot tell whether a transaction was open in it"
                 + " (a statement ran since the session was last read, and a SQL BEGIN shows only"
-                + " there); if one was, its uncommitted work is gone. Session "
+                + " there, or a statement that may begin one ran since the last that may end one);"
+                + " if one was, its uncommitted work is gone. Session "
                 + sessionId
                 + " is open, and this statement was not run, so that it cannot commit on its own:"
                 + " run it again, or the transaction if there was one",
@@ -385,14 +397,51 @@ public final class ChargewireConnection implements Connection {
    * may have changed and a transaction may be open: with autocommit off, the transaction has work;
    * with autocommit on, whether one is open is unknown until the session is read again (a SQL
    * {@code BEGIN}, spec §5.2).
+   *
+   * <p>With autocommit on, what the statement's text may do to the transaction also decides which
+   * later reads of the session count. Chargewire servers up to 2.2.0 (every Hardcharger through
+   * 2.7.0) answer a statement without rows on the streamed path as soon as its outcome is known,
+   * and copy the transaction state into the session document slightly after that, so a read right
+   * after a statement may show the state from before it ({@code none} right after {@code BEGIN},
+   * {@code open} right after {@code COMMIT}); so may a read while a statement's rows are still
+   * unread, on any server. The rule:
+   *
+   * <ul>
+   *   <li>Text that may open a transaction or change how one opens ({@code BEGIN}, {@code START},
+   *       anything naming autocommit, {@code EXECUTE} of a prepared statement): the transaction
+   *       counts as possibly open, and a read saying {@code none} does not clear that, because it
+   *       may be stale. It holds until a statement whose text may end a transaction runs, or the
+   *       session is replaced, or autocommit is switched.
+   *   <li>Text that may end one ({@code COMMIT}, {@code ROLLBACK}, {@code END}, {@code ABORT}): a
+   *       later read counts for {@code none}, because a stale read can only lag toward {@code
+   *       open}, the safe side.
+   *   <li>Text that may do both: the safe side, as for opening.
+   *   <li>Text that may do neither leaves the rule as it stands: a later read counts, unless an
+   *       earlier statement left the transaction possibly open.
+   * </ul>
+   *
+   * <p>A lost session's statement is run again only when the state the driver holds is {@code
+   * none}, so a stale {@code none} after a SQL {@code BEGIN} can no longer let a statement run on
+   * its own in autocommit on a new session.
+   *
+   * @param effect what the statement's text may do to the transaction ({@link TransactionText})
    */
-  void statementRan() {
-    statementsRun.incrementAndGet();
-    optionsStale = true;
-    if (autoCommit) {
-      transaction = TransactionState.UNKNOWN;
-    } else {
-      transactionDirty = true;
+  void statementRan(TransactionText.Effect effect) {
+    synchronized (sessionLock) {
+      if (autoCommit) {
+        if (effect.mayOpen()) {
+          transactionMayBeOpen = true;
+        } else if (effect.mayEnd()) {
+          transactionMayBeOpen = false;
+        }
+      }
+      statementsRun.incrementAndGet();
+      optionsStale = true;
+      if (autoCommit) {
+        transaction = TransactionState.UNKNOWN;
+      } else {
+        transactionDirty = true;
+      }
     }
   }
 
@@ -598,6 +647,7 @@ public final class ChargewireConnection implements Connection {
     setOption("autocommit", autoCommit);
     this.autoCommit = autoCommit;
     transactionDirty = false;
+    transactionMayBeOpen = false;
     // Off opens a transaction; on comes after the commit above (spec §5.1).
     transaction = autoCommit ? TransactionState.NONE : TransactionState.OPEN;
   }
@@ -729,12 +779,17 @@ public final class ChargewireConnection implements Connection {
 
   /**
    * Takes the transaction state from a session document, unless a statement ran after the read
-   * began (its effect may not show in it).
+   * began (its effect may not show in it), and except a {@code none} while a statement may have
+   * opened a transaction ({@link #statementRan(TransactionText.Effect)}: the read may be stale).
    */
   private void takeTransaction(JsonNode session, long statementsBefore) {
     synchronized (sessionLock) {
       if (statementsRun.get() == statementsBefore) {
-        transaction = TransactionState.of(session);
+        TransactionState read = TransactionState.of(session);
+        transaction =
+            read == TransactionState.NONE && autoCommit && transactionMayBeOpen
+                ? TransactionState.UNKNOWN
+                : read;
       } else if (autoCommit) {
         transaction = TransactionState.UNKNOWN;
       }
@@ -744,7 +799,11 @@ public final class ChargewireConnection implements Connection {
   /**
    * Returns where the session's transaction stands, as the server reports it (spec §5.2): a SQL
    * {@code BEGIN} shows here once its statement has ended, and so does a transaction the server
-   * aborted after a failed statement. With autocommit off a transaction is always open.
+   * aborted after a failed statement. With autocommit off a transaction is always open. After a
+   * statement whose text may open a transaction ({@code BEGIN}, {@code START}, {@code EXECUTE},
+   * anything naming autocommit), a {@code none} reads as {@link TransactionState#UNKNOWN} until one
+   * whose text may end it ({@code COMMIT}, {@code ROLLBACK}, {@code END}, {@code ABORT}): servers
+   * up to Chargewire 2.2.0 can report {@code none} for a moment after a {@code BEGIN}.
    *
    * @return the session's transaction
    * @throws SQLException if the session cannot be read
