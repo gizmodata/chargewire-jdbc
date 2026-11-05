@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-11-05
+
+### Fixed
+
+- **A host name with a final dot failed every TLS connection.** A fully qualified name such as
+  `jdbc:chargewire://db.example.com.` names the same host as `db.example.com`, but Java's TLS
+  stack refuses an SNI name with a trailing dot, so the connection failed with a raw
+  `IllegalArgumentException` ("Server name value of host_name cannot have the trailing dot")
+  instead of connecting. The driver now connects to the name without one final dot; the URI, SNI
+  and the certificate check all use that name. Node's fetch, Go's net/http and the Chargewire C++
+  client (2.2.2) accept the dotted form, and hardcharger-jdbc 2.4.0 sends GizmoData Cloud names
+  written that way to port 443.
+
 ## [2.2.2] - 2026-11-05
 
 ### Fixed

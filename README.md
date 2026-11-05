@@ -26,7 +26,7 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 2.2.2**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
+**Status: 2.2.3**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
 servers on either side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
@@ -46,14 +46,14 @@ Maven:
 <dependency>
   <groupId>com.gizmodata</groupId>
   <artifactId>chargewire-jdbc</artifactId>
-  <version>2.2.2</version>
+  <version>2.2.3</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.gizmodata:chargewire-jdbc:2.2.2'
+implementation 'com.gizmodata:chargewire-jdbc:2.2.3'
 ```
 
 The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
@@ -76,7 +76,8 @@ jdbc:chargewire://host[:port][/catalog][?key=value&...]
 ```
 
 The port defaults to 443 (TLS) or 80 (`useEncryption=false`): Chargewire is HTTP and works through
-ordinary reverse proxies. Options can also follow semicolons (`jdbc:chargewire://host:31337;user=joe`)
+ordinary reverse proxies. A fully qualified host name with a final dot (`db.example.com.`) is
+connected to without it, since Java's TLS stack refuses one in SNI. Options can also follow semicolons (`jdbc:chargewire://host:31337;user=joe`)
 or come in the `Properties`; keys are case-insensitive, and a value in the URL wins. Percent-encode
 `&`, `;`, `#` and `%` in URL values. URLs written for 1.0.0, before the protocol was renamed
 Chargewire, keep working unchanged.

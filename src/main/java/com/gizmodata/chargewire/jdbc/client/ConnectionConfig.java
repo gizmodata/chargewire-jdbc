@@ -54,10 +54,22 @@ public final class ConnectionConfig {
   final int resultPartitions;
   final boolean anyOrder;
 
+  /**
+   * Returns a host name without one final dot: {@code db.example.com.} (fully qualified) names the
+   * same host as {@code db.example.com}, but Java's TLS stack refuses an SNI name with a trailing
+   * dot ({@code IllegalArgumentException}), so the driver connects to the name without it, and the
+   * URI, SNI and the certificate check all use that name. Node's fetch, Go's net/http and the
+   * Chargewire C++ client (2.2.2) accept the dotted form.
+   */
+  static String withoutFinalDot(String host) {
+    return host.length() > 1 && host.endsWith(".") ? host.substring(0, host.length() - 1) : host;
+  }
+
   private ConnectionConfig(Builder builder) {
     String scheme = builder.useEncryption ? "https" : "http";
     int port = builder.port > 0 ? builder.port : builder.useEncryption ? 443 : 80;
-    String host = builder.host.contains(":") ? "[" + builder.host + "]" : builder.host;
+    String host =
+        builder.host.contains(":") ? "[" + builder.host + "]" : withoutFinalDot(builder.host);
     String basePath =
         builder.basePath.endsWith("/")
             ? builder.basePath.substring(0, builder.basePath.length() - 1)

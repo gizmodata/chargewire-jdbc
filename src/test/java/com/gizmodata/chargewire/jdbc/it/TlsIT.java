@@ -66,6 +66,19 @@ class TlsIT {
   }
 
   @Test
+  void aHostNameWithAFinalDotConnectsAsTheNameWithout() throws SQLException {
+    // A fully qualified name ("localhost.") names the same host, but Java's TLS stack refuses an
+    // SNI name with a trailing dot; the driver connects to the name without it, which SNI and the
+    // certificate check (a certificate for localhost) then use.
+    Properties properties = server.properties();
+    properties.setProperty("tlsRootCerts", cert("ca.pem"));
+    try (Connection connection =
+        DriverManager.getConnection("jdbc:chargewire://localhost.:" + server.port, properties)) {
+      assertQueries(connection);
+    }
+  }
+
+  @Test
   void trustsATrustStore() throws SQLException {
     Properties properties = server.properties();
     properties.setProperty("trustStore", cert("truststore.p12"));
