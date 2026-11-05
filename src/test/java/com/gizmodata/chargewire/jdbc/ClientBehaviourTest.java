@@ -22,6 +22,7 @@ import java.sql.SQLException;
 import java.sql.SQLInvalidAuthorizationSpecException;
 import java.sql.SQLNonTransientConnectionException;
 import java.sql.SQLTimeoutException;
+import java.sql.SQLTransactionRollbackException;
 import java.sql.SQLTransientConnectionException;
 import java.sql.Statement;
 import java.sql.Types;
@@ -395,6 +396,162 @@ class ClientBehaviourTest {
       assertEquals("08007", error.getSQLState());
     }
     assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @Test
+  void aLostSessionAfterAnUnreadSqlBeginIsNotRunAgain() throws Exception {
+    // The transaction was begun in SQL and the driver never read the session document: it can't
+    // know a transaction was open, so it must not run the statement in autocommit on a new
+    // session, where it would commit on its own.
+    AtomicInteger calls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          if (calls.incrementAndGet() <= 2) {
+            json(exchange, 200, updateDocument("q" + calls.get(), 0));
+          } else {
+            problem(exchange, 404, "session_not_found", "");
+          }
+        });
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("BEGIN");
+      statement.executeUpdate("INSERT INTO t VALUES (1)");
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (2)"));
+      assertEquals("08007", error.getSQLState());
+      assertTrue(error.getMessage().contains("cannot tell"), error.getMessage());
+      assertEquals("session_not_found", ChargewireProblem.codeOf(error));
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+      assertFalse(connection.isClosed());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @Test
+  void aLostSessionAfterAFailedStatementIsNotRunAgain() throws Exception {
+    // A statement that failed may still have changed the transaction (a script's BEGIN).
+    AtomicInteger calls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          if (calls.incrementAndGet() == 1) {
+            problem(exchange, 400, "sql_error", "");
+          } else {
+            problem(exchange, 404, "session_not_found", "");
+          }
+        });
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      assertThrows(SQLException.class, () -> statement.execute("BEGIN; SELECT nonsense"));
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (2)"));
+      assertEquals("08007", error.getSQLState());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @Test
+  void aLostSessionIsRunAgainOnceTheSessionWasReadAfterTheLastStatement() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          if (calls.incrementAndGet() == 1) {
+            json(exchange, 200, updateDocument("q1", 1));
+          } else {
+            problem(exchange, 404, "session_not_found", "");
+          }
+        });
+    server.route(
+        "POST",
+        "/v1/sessions/s2/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q2", 1)));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.executeUpdate("INSERT INTO t VALUES (1)");
+      assertTrue(connection.isValid(5), "reads the session: no transaction");
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (2)"));
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+    }
+    assertEquals(1, server.requests("POST", "/v1/sessions/s2/statements").size(), "run again");
+  }
+
+  @Test
+  void aSessionEndedForAnIdleTransactionIsReplacedAndTheStatementNotRunAgain() throws Exception {
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) ->
+            problem(exchange, 401, "session_ended", ",\"reason\":\"idle_in_transaction\""));
+    server.route(
+        "POST",
+        "/v1/sessions/s2/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q2", 1)));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      // Even with the session last read as having no transaction (the BEGIN came later, in SQL,
+      // where the driver can't see it), the reason says one was open and rolled back.
+      assertTrue(connection.isValid(5));
+      SQLTransactionRollbackException error =
+          assertThrows(
+              SQLTransactionRollbackException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("40000", error.getSQLState());
+      assertTrue(error.getMessage().contains("idle_in_transaction"), error.getMessage());
+      assertTrue(error.getMessage().contains("rolled the transaction back"), error.getMessage());
+      assertEquals("idle_in_transaction", ChargewireProblem.of(error).reason());
+      assertFalse(connection.isClosed(), "the session is replaced, not the connection closed");
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+      assertTrue(
+          connection.getWarnings().getMessage().contains("session_ended: idle_in_transaction"),
+          connection.getWarnings().getMessage());
+      assertEquals(
+          0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (2)"), "the next one runs");
+    }
+    assertEquals(1, server.tokens.get(), "the same token: no new sign-in (spec §5.6)");
+    assertEquals(2, server.sessions.get());
+    assertEquals(
+        "Bearer t1", server.requests("POST", "/v1/sessions").get(1).header("Authorization"));
+  }
+
+  @Test
+  void anIdleTransactionsPreparedStatementIsNotPreparedOrRunAgain() throws Exception {
+    server.route(
+        "PATCH",
+        "/v1/sessions/s1",
+        (exchange, request, path) ->
+            json(exchange, 200, "{\"options\":{\"autocommit\":false},\"errors\":{}}"));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/prepared",
+        (exchange, request, path) ->
+            json(exchange, 201, "{\"prepared_id\":\"p1\",\"result_schema\":null}"));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/prepared/p1/execute",
+        (exchange, request, path) ->
+            problem(exchange, 401, "session_ended", ",\"reason\":\"idle_in_transaction\""));
+    try (Connection connection = connect("");
+        PreparedStatement statement = connection.prepareStatement("DELETE FROM t")) {
+      connection.setAutoCommit(false);
+      SQLTransactionRollbackException error =
+          assertThrows(SQLTransactionRollbackException.class, statement::executeUpdate);
+      assertEquals("40000", error.getSQLState());
+      assertFalse(connection.getAutoCommit());
+    }
+    assertTrue(
+        server.requests("POST", "/v1/sessions").get(1).body().contains("\"autocommit\":false"),
+        "the new session has the connection's autocommit");
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/prepared").size(), "not prepared");
   }
 
   @Test

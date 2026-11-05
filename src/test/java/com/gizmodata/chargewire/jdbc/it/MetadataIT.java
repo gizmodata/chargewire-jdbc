@@ -110,6 +110,64 @@ class MetadataIT {
     }
   }
 
+  /**
+   * A nested schema (DuckDB 2.0's {@code CREATE SCHEMA a.b}) is named by its path, {@code a.b}, in
+   * every metadata call, and the path is what a schema argument takes (spec §10, Chargewire 2.1.0).
+   * A part containing a dot is quoted, so a top-level schema called {@code "a.b"} stays apart.
+   */
+  @Test
+  void nestedSchemasAreNamedByTheirPath() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("CREATE SCHEMA IF NOT EXISTS nest");
+      statement.execute("CREATE SCHEMA IF NOT EXISTS nest.inner_s");
+      statement.execute("CREATE SCHEMA IF NOT EXISTS \"nest.inner_s\"");
+      statement.execute(
+          "CREATE OR REPLACE TABLE nest.inner_s.leaf (id INTEGER PRIMARY KEY, label VARCHAR)");
+      statement.execute("CREATE OR REPLACE TABLE \"nest.inner_s\".decoy (other INTEGER)");
+      DatabaseMetaData metaData = connection.getMetaData();
+
+      List<String> schemas = column(metaData.getSchemas("memory", "%nest%"), "TABLE_SCHEM");
+      assertEquals(
+          List.of("\"nest.inner_s\"", "nest", "nest.inner_s"),
+          schemas.stream().sorted().collect(java.util.stream.Collectors.toList()),
+          "the nested schema by its path, the dotted top-level one quoted, each once");
+      assertEquals(
+          List.of("nest.inner_s"),
+          column(metaData.getSchemas("memory", "nest.inner_s"), "TABLE_SCHEM"),
+          "a path is a schema pattern as it is listed");
+
+      ResultSet tables = metaData.getTables(null, "nest.inner_s", null, null);
+      assertTrue(tables.next());
+      assertEquals("memory", tables.getString("TABLE_CAT"));
+      assertEquals("nest.inner_s", tables.getString("TABLE_SCHEM"));
+      assertEquals("leaf", tables.getString("TABLE_NAME"));
+      assertFalse(tables.next(), "only the nested schema's table, not the dotted schema's");
+      tables.close();
+      assertEquals(
+          List.of("decoy"),
+          column(metaData.getTables(null, "\"nest.inner_s\"", null, null), "TABLE_NAME"));
+
+      assertEquals(
+          List.of("id", "label"),
+          column(metaData.getColumns(null, "nest.inner_s", "leaf", "%"), "COLUMN_NAME"));
+      ResultSet keys = metaData.getPrimaryKeys(null, "nest.inner_s", "leaf");
+      assertTrue(keys.next());
+      assertEquals("nest.inner_s", keys.getString("TABLE_SCHEM"));
+      assertEquals("id", keys.getString("COLUMN_NAME"));
+      assertFalse(keys.next());
+      keys.close();
+
+      // The listed path, joined to the table name, is how SQL names the table.
+      String schema =
+          column(metaData.getTables(null, "nest.inner_s", "leaf", null), "TABLE_SCHEM").get(0);
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM " + schema + ".leaf")) {
+        assertTrue(rows.next());
+        assertEquals(0, rows.getInt(1));
+      }
+    }
+  }
+
   @Test
   void tableTypes() throws SQLException {
     try (Connection connection = SharedServer.connect()) {

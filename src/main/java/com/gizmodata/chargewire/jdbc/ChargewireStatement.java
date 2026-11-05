@@ -89,18 +89,29 @@ public class ChargewireStatement implements Statement {
     cancelRequested = false;
     ChargewireClient client = connection.client();
     ChargewireClient.SubmitOptions options = submitOptions();
-    ChargewireClient.Submission submission =
-        connection.withSession(
-            id -> {
-              runningSessionId = id;
-              submitting = true;
-              try {
-                return submitter.submit(id, options);
-              } finally {
-                submitting = false;
-              }
-            });
-    connection.statementRan();
+    // The session the statement was last sent to: a statement that failed may still have
+    // changed its transaction (spec §5.2), but one refused after its session was replaced never
+    // reached the new session.
+    String[] sentTo = new String[1];
+    ChargewireClient.Submission submission;
+    try {
+      submission =
+          connection.withSession(
+              id -> {
+                runningSessionId = id;
+                sentTo[0] = id;
+                submitting = true;
+                try {
+                  return submitter.submit(id, options);
+                } finally {
+                  submitting = false;
+                }
+              });
+    } finally {
+      if (sentTo[0] != null && sentTo[0].equals(connection.getSessionId())) {
+        connection.statementRan();
+      }
+    }
     String sessionId = runningSessionId;
     String statementId = submission.statementId();
     runningStatementId = statementId;

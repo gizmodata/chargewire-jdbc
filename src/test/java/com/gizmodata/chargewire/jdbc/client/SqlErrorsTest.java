@@ -134,6 +134,21 @@ class SqlErrorsTest {
   }
 
   @Test
+  void aSessionEndedForAnIdleTransactionIsATransactionRollback() {
+    SQLException idle =
+        SqlErrors.toSqlException(
+            new ChargewireProblem(
+                401, "session_ended", "Ended", null, null, null, "idle_in_transaction"));
+    assertEquals(java.sql.SQLTransactionRollbackException.class, idle.getClass());
+    assertEquals("40000", idle.getSQLState());
+    assertEquals("Ended [session_ended: idle_in_transaction]", idle.getMessage());
+    SQLException killed =
+        SqlErrors.toSqlException(
+            new ChargewireProblem(401, "session_ended", "Ended", null, null, null, "killed"));
+    assertEquals("08003", killed.getSQLState(), "other reasons stay connection errors");
+  }
+
+  @Test
   void messagesNameTheCodeAndRequest() {
     SQLException error =
         SqlErrors.toSqlException(

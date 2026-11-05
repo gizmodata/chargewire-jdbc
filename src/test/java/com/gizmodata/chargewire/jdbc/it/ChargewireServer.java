@@ -35,6 +35,9 @@ import java.util.concurrent.TimeUnit;
  * CHARGEWIRE_JDBC_TEST_SERVER_PASSWORD_ENV  (default CHARGEWIRE_DUCKDB_PASSWORD)
  * CHARGEWIRE_JDBC_TEST_SERVER_MTLS_FLAG     (default --tls-client-ca)
  * CHARGEWIRE_JDBC_TEST_SERVER_USERNAME_FLAG (default --username)
+ * CHARGEWIRE_JDBC_TEST_SERVER_IDLE_TIMEOUT_FLAG (default --session-idle-timeout-seconds)
+ * CHARGEWIRE_JDBC_TEST_SERVER_IDLE_IN_TRANSACTION_TIMEOUT_FLAG
+ *                                           (default --idle-in-transaction-timeout-seconds)
  * CHARGEWIRE_JDBC_TEST_SERVER_NAME          (default chargewire-duckdb)
  * </pre>
  */
@@ -52,6 +55,20 @@ final class ChargewireServer implements AutoCloseable {
   /** The flag that names the server's administrator. */
   private static final String USERNAME_FLAG =
       environment("CHARGEWIRE_JDBC_TEST_SERVER_USERNAME_FLAG", "--username");
+
+  /** The flag that sets how many seconds a session may go without requests before eviction. */
+  static final String IDLE_TIMEOUT_FLAG =
+      environment(
+          "CHARGEWIRE_JDBC_TEST_SERVER_IDLE_TIMEOUT_FLAG", "--session-idle-timeout-seconds");
+
+  /**
+   * The flag that sets how many seconds a session may hold a transaction open with nothing running
+   * before the server ends it ({@code session_ended}, reason {@code idle_in_transaction}).
+   */
+  static final String IDLE_IN_TRANSACTION_TIMEOUT_FLAG =
+      environment(
+          "CHARGEWIRE_JDBC_TEST_SERVER_IDLE_IN_TRANSACTION_TIMEOUT_FLAG",
+          "--idle-in-transaction-timeout-seconds");
 
   private static final String PASSWORD_VARIABLE =
       environment("CHARGEWIRE_JDBC_TEST_SERVER_PASSWORD_ENV", "CHARGEWIRE_DUCKDB_PASSWORD");

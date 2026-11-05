@@ -32,7 +32,8 @@ concurrency:
 env:
   # The server the integration tests run against: Hardcharger's main branch, which its CI
   # publishes on every green push (:main, and :sha-<short> for a fixed build). Pin a :sha- tag
-  # here to reproduce an old run.
+  # here to reproduce an old run. The tests need Hardcharger 2.7.0 or later (Chargewire 2.1.0: the
+  # idle-in-transaction limit, nested schema paths).
   HARDCHARGER_IMAGE: ghcr.io/gizmodata/hardcharger:main
 
 jobs:
@@ -104,6 +105,8 @@ jobs:
       CHARGEWIRE_JDBC_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
       CHARGEWIRE_JDBC_TEST_SERVER_USERNAME_FLAG: --admin-username
       CHARGEWIRE_JDBC_TEST_SERVER_NAME: Hardcharger
+      CHARGEWIRE_JDBC_TEST_SERVER_IDLE_TIMEOUT_FLAG: --session-idle-timeout
+      CHARGEWIRE_JDBC_TEST_SERVER_IDLE_IN_TRANSACTION_TIMEOUT_FLAG: --idle-in-transaction-session-timeout
       # Browser sign-in (BrowserSignInIT): Hardcharger's provider flags, a template the suite fills.
       CHARGEWIRE_JDBC_TEST_SERVER_OAUTH_ARGS: >-
         --token-allowed-issuer {issuer} --token-allowed-audience {client_id}
