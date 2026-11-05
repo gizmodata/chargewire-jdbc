@@ -53,8 +53,8 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
     implements PreparedStatement {
   private final String sql;
 
-  /** What the statement's text may do to the session's transaction. */
-  private final TransactionText.Effect transactionEffect;
+  /** What the statement's text may do to its session. */
+  private final StatementText.Reading text;
 
   private final boolean serverPrepared;
   private String preparedId;
@@ -71,7 +71,7 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
       throw new SQLException("The SQL must not be null", "HY009");
     }
     this.sql = sql;
-    this.transactionEffect = TransactionText.of(sql);
+    this.text = StatementText.read(sql);
     this.serverPrepared = connection.client().hasCapability("prepared_statements");
     if (serverPrepared) {
       connection.withSession(
@@ -133,10 +133,10 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
       for (ParameterEncoder.Value value : rows.get(0)) {
         values.addPOJO(ParameterEncoder.jsonValue(value.value()));
       }
-      return run(transactionEffect, (id, options) -> client.submit(id, body, options));
+      return run(text, (id, options) -> client.submit(id, body, options));
     }
     return run(
-        transactionEffect,
+        text,
         (id, options) -> {
           ensurePrepared(id);
           try {

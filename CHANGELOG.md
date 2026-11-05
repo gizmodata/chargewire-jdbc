@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-11-05
+
+### Fixed
+
+- **A lost session's statement ran again on the new session after the old one had run `USE`,
+  `SET`, `RESET` or `PRAGMA`, so it could run in another catalog or schema, or with other
+  settings.** The new session opens with the catalog and schema the driver last knew, and a
+  `USE` run since was not among them unless the session had been read back; on servers up to
+  Chargewire 2.2.0 even a read right after the `USE` could still show the old ones. Settings made
+  in SQL are never carried over. Now the statement fails with SQLSTATE `08007` without running,
+  and the message says the old session's settings or `USE` are gone: after `SET`, `RESET` or
+  `PRAGMA` (the driver does not restore settings), and after `USE` until the driver has read the
+  session after a later statement's answer. Such a read is fresh on every server, because the
+  server records what a statement did before the next one starts; the new session then opens with
+  the catalog and schema it read, and the statement runs again as before. Only a statement's first
+  word counts (`UPDATE … SET` does not). `isValid()` now takes the catalog and schema from the
+  session it reads, as `getCatalog()` and `getSchema()` do.
+
 ## [2.2.1] - 2026-11-05
 
 ### Fixed

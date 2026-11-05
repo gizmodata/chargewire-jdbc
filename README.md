@@ -26,7 +26,7 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 2.2.1**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
+**Status: 2.2.2**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
 servers on either side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
@@ -46,14 +46,14 @@ Maven:
 <dependency>
   <groupId>com.gizmodata</groupId>
   <artifactId>chargewire-jdbc</artifactId>
-  <version>2.2.1</version>
+  <version>2.2.2</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.gizmodata:chargewire-jdbc:2.2.1'
+implementation 'com.gizmodata:chargewire-jdbc:2.2.2'
 ```
 
 The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
@@ -200,7 +200,10 @@ For a local server without TLS, add `useEncryption=false`.
   `OPEN`, `ABORTED`, or `UNKNOWN`) read it. Servers up to Chargewire 2.2.0 can still say `none` for
   a moment after a `BEGIN`, so after a statement whose text may open a transaction (`BEGIN`,
   `START`, `EXECUTE`, anything naming autocommit) a `none` doesn't count (it reads as `UNKNOWN`)
-  until one whose text may end it (`COMMIT`, `ROLLBACK`, `END`, `ABORT`). Otherwise the statement fails with SQLSTATE `08007`
+  until one whose text may end it (`COMMIT`, `ROLLBACK`, `END`, `ABORT`). Nor does it run again
+  after the old session ran `SET`, `RESET` or `PRAGMA` (the new session doesn't have those
+  settings), or `USE` before the driver read the session back after a later statement (only that
+  read is sure to show the new catalog and schema, which the new session then opens with). Otherwise the statement fails with SQLSTATE `08007`
   without running, so it can never commit on its own, and the next statement runs in the new
   session. A connection pool that checks connections with `isValid()` gets `false` for such a
   connection and replaces it.

@@ -53,8 +53,14 @@ import org.apache.arrow.memory.RootAllocator;
  * #getCatalog()} and {@link #getSchema()} after a statement; a SQL {@code BEGIN} shows only there,
  * spec §5.2), and no statement whose text may open a transaction ran since the last one whose text
  * may end it (servers up to Chargewire 2.2.0 can report {@code none} for a moment after a {@code
- * BEGIN}; see {@link #statementRan(TransactionText.Effect)}). Otherwise the statement fails with
+ * BEGIN}; see {@link #statementRan(StatementText.Reading)}). Otherwise the statement fails with
  * SQLSTATE {@code 08007} and is not run; the new session is open for the next one.
+ *
+ * <p>Nor is it run again after the old session ran SQL that changed where or how statements run,
+ * unless the driver restores that itself from what it knows to be fresh: after {@code SET}, {@code
+ * RESET} or {@code PRAGMA} (settings, which the new session does not have), and after {@code USE}
+ * until the session has been read after a later statement's answer (the new session opens with the
+ * catalog and schema read then). It fails with SQLSTATE {@code 08007} too, and is not run.
  *
  * <p>A session the server ended ({@code session_ended}, spec §5.6) for a transaction left idle
  * ({@code idle_in_transaction}, §5.7) is replaced the same way, and the statement fails with
@@ -126,9 +132,25 @@ public final class ChargewireConnection implements Connection {
   /**
    * With autocommit on: a statement whose text may open a transaction ran in this session since the
    * last one whose text may end one, so a session document saying {@code none} may be stale and
-   * does not count (see {@link #statementRan(TransactionText.Effect)}).
+   * does not count (see {@link #statementRan(StatementText.Reading)}).
    */
   private volatile boolean transactionMayBeOpen;
+
+  /**
+   * The number ({@link #statementsRun}) of the last statement in this session whose text starts
+   * with {@code USE}, until a session read taken after a later statement's answer brought its
+   * catalog and schema back; 0 when there is none. A read right after the {@code USE} itself may be
+   * stale on servers up to Chargewire 2.2.0, but one taken after the next statement's answer is
+   * not: the server runs a session's statements one after another, and records what one did before
+   * the next starts.
+   */
+  private long placeChangedBy;
+
+  /**
+   * A statement whose text starts with {@code SET}, {@code RESET} or {@code PRAGMA} ran in this
+   * session: settings the driver does not restore in a new session may differ.
+   */
+  private boolean settingsChanged;
 
   /**
    * Counts statements run, so a session read that a statement on another thread overtook does not
@@ -203,6 +225,8 @@ public final class ChargewireConnection implements Connection {
     sessionId = id;
     sessionGeneration++;
     transactionMayBeOpen = false;
+    placeChangedBy = 0;
+    settingsChanged = false;
     transaction = TransactionState.of(session);
     try {
       applyOptions(session.path("options"), catalog, schema);
@@ -329,6 +353,10 @@ public final class ChargewireConnection implements Connection {
                   ? before == TransactionState.OPEN || before == TransactionState.ABORTED
                   : transactionDirty);
       boolean unknownTransaction = !openTransaction && before != TransactionState.NONE;
+      // What SQL changed in the old session that the new one won't have: settings (never
+      // restored), or a USE whose catalog and schema the driver has not read back fresh.
+      boolean lostSettings = settingsChanged;
+      boolean lostPlace = placeChangedBy != 0;
       transactionDirty = false;
       openSession();
       addWarning(
@@ -373,6 +401,29 @@ public final class ChargewireConnection implements Connection {
                 + sessionId
                 + " is open, and this statement was not run, so that it cannot commit on its own:"
                 + " run it again, or the transaction if there was one",
+            "08007",
+            cause);
+      }
+      if (lostSettings || lostPlace) {
+        throw new SQLTransientConnectionException(
+            "The session was lost after it ran "
+                + (lostSettings && lostPlace
+                    ? "SET, RESET or PRAGMA, and USE"
+                    : lostSettings ? "SET, RESET or PRAGMA" : "USE")
+                + ", and what that changed is gone with it: "
+                + (lostSettings
+                    ? "settings made in SQL are not restored in a new session"
+                    : "the driver had not read the session back since, so it can't tell which"
+                        + " catalog and schema it used")
+                + ". Session "
+                + sessionId
+                + " is open (catalog "
+                + catalog
+                + ", schema "
+                + schema
+                + "), and this statement was not run there, where it could have run differently: "
+                + (lostSettings ? "run the settings again" : "run the USE again")
+                + ", then the statement",
             "08007",
             cause);
       }
@@ -424,9 +475,14 @@ public final class ChargewireConnection implements Connection {
    * none}, so a stale {@code none} after a SQL {@code BEGIN} can no longer let a statement run on
    * its own in autocommit on a new session.
    *
-   * @param effect what the statement's text may do to the transaction ({@link TransactionText})
+   * <p>Text that changes where or how statements run marks what a new session would lack: {@code
+   * SET}, {@code RESET} and {@code PRAGMA} for the rest of the session (the driver does not restore
+   * settings), {@code USE} until a session read after a later statement's answer.
+   *
+   * @param text what the statement's text may do to its session ({@link StatementText})
    */
-  void statementRan(TransactionText.Effect effect) {
+  void statementRan(StatementText.Reading text) {
+    StatementText.Effect effect = text.transaction();
     synchronized (sessionLock) {
       if (autoCommit) {
         if (effect.mayOpen()) {
@@ -435,7 +491,13 @@ public final class ChargewireConnection implements Connection {
           transactionMayBeOpen = false;
         }
       }
-      statementsRun.incrementAndGet();
+      long number = statementsRun.incrementAndGet();
+      if (text.changesPlace()) {
+        placeChangedBy = number;
+      }
+      if (text.changesSettings()) {
+        settingsChanged = true;
+      }
       optionsStale = true;
       if (autoCommit) {
         transaction = TransactionState.UNKNOWN;
@@ -769,18 +831,30 @@ public final class ChargewireConnection implements Connection {
   private void readSession() throws SQLException {
     long statements = statementsRun.get();
     JsonNode session = withSession(client::getSession, false);
+    takeSession(session, statements);
+  }
+
+  /**
+   * Takes the options and the transaction from a session document whose read began when {@code
+   * statementsBefore} statements had run. The catalog and schema of a {@code USE} count as read
+   * back only from a read that began after a later statement's answer ({@link #placeChangedBy}).
+   */
+  private void takeSession(JsonNode session, long statementsBefore) {
     synchronized (sessionLock) {
       catalog = session.path("options").path("catalog").asText(null);
       schema = session.path("options").path("schema").asText(null);
       optionsStale = false;
-      takeTransaction(session, statements);
+      if (placeChangedBy != 0 && statementsBefore > placeChangedBy) {
+        placeChangedBy = 0;
+      }
+      takeTransaction(session, statementsBefore);
     }
   }
 
   /**
    * Takes the transaction state from a session document, unless a statement ran after the read
    * began (its effect may not show in it), and except a {@code none} while a statement may have
-   * opened a transaction ({@link #statementRan(TransactionText.Effect)}: the read may be stale).
+   * opened a transaction ({@link #statementRan(StatementText.Reading)}: the read may be stale).
    */
   private void takeTransaction(JsonNode session, long statementsBefore) {
     synchronized (sessionLock) {
@@ -883,7 +957,7 @@ public final class ChargewireConnection implements Connection {
     try {
       long statements = statementsRun.get();
       JsonNode session = withSession(id -> client.getSession(id, wait), false);
-      takeTransaction(session, statements);
+      takeSession(session, statements);
       return true;
     } catch (SQLException e) {
       return false;

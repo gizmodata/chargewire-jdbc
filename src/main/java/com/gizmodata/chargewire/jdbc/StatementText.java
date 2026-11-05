@@ -3,8 +3,9 @@ package com.gizmodata.chargewire.jdbc;
 import java.util.Locale;
 
 /**
- * What a statement's SQL text may do to the session's transaction, judged from the text alone: it
- * may open one (or change how one opens), it may end one, both, or neither.
+ * What a statement's SQL text may do to its session, judged from the text alone: to the transaction
+ * (open one or change how one opens, end one, both, or neither), and to where or how later
+ * statements run ({@code USE}, {@code SET}, {@code RESET}, {@code PRAGMA}).
  *
  * <p>The driver needs this because a session document read right after a statement may not show
  * what the statement did yet: Chargewire servers up to 2.2.0 (every Hardcharger through 2.7.0)
@@ -16,16 +17,23 @@ import java.util.Locale;
  * statementRan}); a stale read after a statement that may end one can only lag toward {@code open},
  * which errs on the safe side.
  *
+ * <p>A lost session's statement must also not run again on a new session that differs from the old
+ * one in what SQL changed: {@code USE} (the catalog and schema, which the driver restores only from
+ * a session read it knows is fresh) and {@code SET}, {@code RESET} and {@code PRAGMA} (settings,
+ * which the driver does not restore). See {@link Reading}.
+ *
  * <p>Each statement of the text (split at semicolons outside quotes and comments) counts by its
  * first word, after any {@code EXPLAIN} or {@code ANALYZE}: {@code BEGIN}, {@code START} and {@code
  * EXECUTE} (a prepared statement may be any of these) may open a transaction; {@code COMMIT},
- * {@code ROLLBACK}, {@code END} and {@code ABORT} may end one. The word {@code autocommit} anywhere
- * in the text, quoted or not, counts as may-open. Quotes ({@code '…'}, {@code E'…'}, {@code "…"},
- * {@code $tag$…$tag$}) and comments ({@code --}, and block comments, which may nest) are skipped.
- * When in doubt the answer leans toward may-open, the safe side.
+ * {@code ROLLBACK}, {@code END} and {@code ABORT} may end one; {@code USE} changes the catalog or
+ * schema; {@code SET}, {@code RESET} and {@code PRAGMA} change settings ({@code UPDATE … SET} does
+ * not count: only first words do). The word {@code autocommit} anywhere in the text, quoted or not,
+ * counts as may-open. Quotes ({@code '…'}, {@code E'…'}, {@code "…"}, {@code $tag$…$tag$}) and
+ * comments ({@code --}, and block comments, which may nest) are skipped. When in doubt the answer
+ * leans toward may-open, the safe side.
  */
-final class TransactionText {
-  private TransactionText() {}
+final class StatementText {
+  private StatementText() {}
 
   /** What a statement's text may do to the session's transaction. */
   enum Effect {
@@ -64,18 +72,66 @@ final class TransactionText {
     }
   }
 
+  /** What a statement's text may do to its session. */
+  static final class Reading {
+    static final Reading NOTHING = new Reading(Effect.NEITHER, false, false);
+
+    private final Effect transaction;
+    private final boolean changesPlace;
+    private final boolean changesSettings;
+
+    Reading(Effect transaction, boolean changesPlace, boolean changesSettings) {
+      this.transaction = transaction;
+      this.changesPlace = changesPlace;
+      this.changesSettings = changesSettings;
+    }
+
+    /** What the text may do to the session's transaction. */
+    Effect transaction() {
+      return transaction;
+    }
+
+    /**
+     * Whether a statement of the text starts with {@code USE}: it changes the catalog or schema,
+     * which the driver restores in a new session only from a session read it knows is fresh.
+     */
+    boolean changesPlace() {
+      return changesPlace;
+    }
+
+    /**
+     * Whether a statement of the text starts with {@code SET}, {@code RESET} or {@code PRAGMA}: it
+     * may change settings, which the driver does not restore in a new session.
+     */
+    boolean changesSettings() {
+      return changesSettings;
+    }
+  }
+
   /**
-   * Reads a statement's text.
+   * Reads what a statement's text may do to the session's transaction.
    *
    * @param sql the SQL text, one statement or several
    * @return what it may do to the session's transaction
    */
   static Effect of(String sql) {
+    return read(sql).transaction();
+  }
+
+  /**
+   * Reads a statement's text.
+   *
+   * @param sql the SQL text, one statement or several
+   * @return what it may do to its session
+   */
+  static Reading read(String sql) {
     if (sql == null) {
-      return Effect.NEITHER;
+      return Reading.NOTHING;
     }
     boolean mayOpen = sql.toLowerCase(Locale.ROOT).contains("autocommit");
     boolean mayEnd = false;
+    boolean changesPlace = false;
+    boolean changesSettings = false;
     // Whether the current statement's first word (after EXPLAIN or ANALYZE) has been read.
     boolean statementStarted = false;
     int length = sql.length();
@@ -132,6 +188,16 @@ final class TransactionText {
               mayEnd = true;
               statementStarted = true;
               break;
+            case "USE":
+              changesPlace = true;
+              statementStarted = true;
+              break;
+            case "SET":
+            case "RESET":
+            case "PRAGMA":
+              changesSettings = true;
+              statementStarted = true;
+              break;
             default:
               statementStarted = true;
           }
@@ -144,7 +210,7 @@ final class TransactionText {
         i++;
       }
     }
-    return Effect.of(mayOpen, mayEnd);
+    return new Reading(Effect.of(mayOpen, mayEnd), changesPlace, changesSettings);
   }
 
   private static boolean isWordPart(char c) {

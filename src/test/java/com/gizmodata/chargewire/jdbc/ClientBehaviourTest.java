@@ -677,6 +677,118 @@ class ClientBehaviourTest {
     assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
   }
 
+  // ---- SQL that changes where or how statements run (USE, SET, RESET, PRAGMA) ----
+
+  @Test
+  void aLostSessionAfterUseIsNotRunAgainUntilTheSessionIsReadBackFresh() throws Exception {
+    // The read right after USE may be stale on servers up to Chargewire 2.2.0, so the driver
+    // can't know the catalog and schema the statement would have run in: the new session would
+    // run it in the old ones.
+    sessionLostAfter(1);
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("USE other.analytics");
+      assertTrue(connection.isValid(5), "reads the session right after USE: perhaps stale");
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("08007", error.getSQLState());
+      assertTrue(error.getMessage().contains("after it ran USE"), error.getMessage());
+      assertTrue(error.getMessage().contains("was not run"), error.getMessage());
+      assertEquals("session_not_found", ChargewireProblem.codeOf(error));
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+      assertEquals(
+          0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (2)"), "the next one runs");
+    }
+  }
+
+  @Test
+  void aLostSessionWithoutUseIsRunAgain() throws Exception {
+    // The twin of the test above, without the USE.
+    sessionLostAfter(1);
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("SELECT 1");
+      assertTrue(connection.isValid(5));
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+    }
+    assertEquals(1, server.requests("POST", "/v1/sessions/s2/statements").size(), "run again");
+  }
+
+  @Test
+  void aUseReadBackAfterALaterStatementIsRestoredAndTheStatementRunAgain() throws Exception {
+    // A read taken after the next statement's answer is fresh even on old servers (the server
+    // records what a statement did before the next one starts): the new session opens in the
+    // catalog and schema read then, and the statement runs there.
+    server.route(
+        "GET",
+        "/v1/sessions/s1",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                "{\"session_id\":\"s1\",\"options\":{\"catalog\":\"other\",\"schema\":"
+                    + "\"analytics\"},\"transaction\":\"none\"}"));
+    sessionLostAfter(2);
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute("USE other.analytics");
+      statement.execute("SELECT 1");
+      assertTrue(connection.isValid(5), "reads the session after a later statement: fresh");
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+    }
+    assertEquals(1, server.requests("POST", "/v1/sessions/s2/statements").size(), "run again");
+    String reopened = server.requests("POST", "/v1/sessions").get(1).body();
+    assertTrue(reopened.contains("\"catalog\":\"other\""), reopened);
+    assertTrue(reopened.contains("\"schema\":\"analytics\""), reopened);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "SET threads = 4",
+        "set TimeZone = 'UTC'",
+        "RESET threads",
+        "PRAGMA enable_profiling",
+        "/* a comment */ SET search_path = 'other'",
+        "SELECT 1; SET threads = 4"
+      })
+  void aLostSessionAfterASettingIsNotRunAgainEvenAfterAFreshRead(String sql) throws Exception {
+    // The driver doesn't restore settings made in SQL, so the statement would run differently in
+    // the new session however fresh the driver's last read.
+    sessionLostAfter(2);
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.execute(sql);
+      statement.execute("SELECT 1");
+      assertTrue(connection.isValid(5));
+      SQLTransientConnectionException error =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("08007", error.getSQLState());
+      assertTrue(error.getMessage().contains("SET, RESET or PRAGMA"), error.getMessage());
+      assertTrue(error.getMessage().contains("not restored"), error.getMessage());
+    }
+    assertEquals(0, server.requests("POST", "/v1/sessions/s2/statements").size(), "not run again");
+  }
+
+  @Test
+  void anUpdateWithSetChangesNoSetting() throws Exception {
+    sessionLostAfter(1);
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      statement.executeUpdate("UPDATE t SET a = 1");
+      assertTrue(connection.isValid(5));
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (1)"));
+    }
+    assertEquals(1, server.requests("POST", "/v1/sessions/s2/statements").size(), "run again");
+  }
+
   @Test
   void aSessionEndedForAnIdleTransactionIsReplacedAndTheStatementNotRunAgain() throws Exception {
     server.route(

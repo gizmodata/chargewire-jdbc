@@ -156,4 +156,65 @@ class IdleSessionsIT {
       assertEquals(List.of("known 1", "tx 3", "unread 3"), rows(server, "evicted"));
     }
   }
+
+  @Test
+  void anEvictedSessionsStatementDoesNotRunAgainWhereUseOrSetWouldNotHoldAnyMore()
+      throws Exception {
+    try (ChargewireServer server = ChargewireServer.start(ChargewireServer.IDLE_TIMEOUT_FLAG, "1");
+        Connection setup = connect(server);
+        Connection used = connect(server);
+        Connection readBack = connect(server);
+        Connection set = connect(server);
+        Statement admin = setup.createStatement();
+        Statement afterUse = used.createStatement();
+        Statement afterRead = readBack.createStatement();
+        Statement afterSet = set.createStatement()) {
+      // The same table name in two schemas: on a new session opened in the old schema, the
+      // unqualified insert would land in the wrong one.
+      admin.execute("CREATE SCHEMA moved");
+      admin.execute("CREATE TABLE main.placed (who VARCHAR, v INTEGER)");
+      admin.execute("CREATE TABLE moved.placed (who VARCHAR, v INTEGER)");
+
+      afterUse.execute("USE moved");
+      // Read right after the USE: on servers up to Chargewire 2.2.0 it may not show it yet, so it
+      // doesn't count, whatever it shows.
+      assertTrue(used.isValid(5));
+      afterRead.execute("USE moved");
+      afterRead.execute("SELECT 1");
+      // Read after a later statement's answer: it shows the USE on every server.
+      assertTrue(readBack.isValid(5));
+      assertEquals("moved", readBack.getSchema());
+      afterSet.execute("SET threads = 2");
+      afterSet.execute("SELECT 1");
+      assertTrue(set.isValid(5));
+
+      Thread.sleep(PAST_THE_LIMIT_MS);
+
+      SQLTransientConnectionException lostUse =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> afterUse.execute("INSERT INTO placed VALUES ('use', 1)"));
+      assertEquals("08007", lostUse.getSQLState());
+      assertEquals("session_not_found", ChargewireProblem.codeOf(lostUse));
+      assertTrue(lostUse.getMessage().contains("after it ran USE"), lostUse.getMessage());
+
+      SQLTransientConnectionException lostSet =
+          assertThrows(
+              SQLTransientConnectionException.class,
+              () -> afterSet.execute("INSERT INTO placed VALUES ('set', 1)"));
+      assertEquals("08007", lostSet.getSQLState());
+      assertTrue(lostSet.getMessage().contains("SET, RESET or PRAGMA"), lostSet.getMessage());
+
+      String before = sessionOf(readBack);
+      afterRead.execute("INSERT INTO placed VALUES ('read back', 1)");
+      assertNotEquals(before, sessionOf(readBack), "run again on a new session");
+      assertEquals("moved", readBack.getSchema(), "opened in the schema read back");
+
+      assertEquals(List.of(), rows(server, "main.placed"), "nothing landed in the old schema");
+      assertEquals(
+          List.of("read back 1"),
+          rows(server, "moved.placed"),
+          "only the statement whose USE was read back ran again");
+    }
+  }
 }
