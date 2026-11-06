@@ -53,6 +53,11 @@ import javax.net.ssl.SSLException;
  * stops repeating at that limit, and one whose target cannot outlive a stop (a cancel, freeing a
  * result, ending a session) is not repeated at all (see {@link ResumeLimit}).
  *
+ * <p>A close or a cancel never signs in: it goes with the token the client holds, even one due for
+ * renewal, and is not repeated with a new token after {@code invalid_token}. A sign-in is a new
+ * connection to the server, and one that fronts a stopped server starts it for that (spec §11.2); a
+ * session whose token no longer works is gone anyway, so such a close is done.
+ *
  * <p>Internal API.
  */
 public final class ChargewireClient implements AutoCloseable {
@@ -645,6 +650,11 @@ public final class ChargewireClient implements AutoCloseable {
     if (renew) {
       renewToken();
     }
+    return heldToken();
+  }
+
+  /** The token the client holds, renewed or not: for a close or a cancel, which never signs in. */
+  private String heldToken() {
     synchronized (tokenLock) {
       return accessToken;
     }
@@ -725,22 +735,17 @@ public final class ChargewireClient implements AutoCloseable {
 
   /**
    * Ends a session; a session the server no longer has is already ended, and so is one on a server
-   * that is resuming: no session survives a stop (spec §11.2), so the request is not repeated.
+   * that is resuming: no session survives a stop (spec §11.2), so the request is not repeated. It
+   * never signs in: a session whose token no longer works is ended too.
    *
    * @param sessionId the session
    * @throws SQLException on any other error
    */
   public void deleteSession(String sessionId) throws SQLException {
     try {
-      send(
-          () -> request(sessionUri(sessionId, "")).DELETE(),
-          handlerDiscard(),
-          true,
-          true,
-          ResumeLimit.NO_RETRY);
+      sendCleanup(() -> request(sessionUri(sessionId, "")).DELETE());
     } catch (SQLException e) {
-      String code = ChargewireProblem.codeOf(e);
-      if (!"session_not_found".equals(code) && !SERVER_RESUMING.equals(code)) {
+      if (!nothingLeftToClose(e, "session_not_found")) {
         throw e;
       }
     }
@@ -975,7 +980,7 @@ public final class ChargewireClient implements AutoCloseable {
 
   /**
    * Closes a prepared statement; one the server no longer has is already closed, and so is one on a
-   * server that is resuming (nothing survives a stop).
+   * server that is resuming (nothing survives a stop) or in a session whose token no longer works.
    *
    * @param sessionId the session
    * @param preparedId the prepared statement
@@ -983,17 +988,9 @@ public final class ChargewireClient implements AutoCloseable {
    */
   public void closePrepared(String sessionId, String preparedId) throws SQLException {
     try {
-      send(
-          () -> request(sessionUri(sessionId, "/prepared/" + preparedId)).DELETE(),
-          handlerDiscard(),
-          true,
-          true,
-          ResumeLimit.NO_RETRY);
+      sendCleanup(() -> request(sessionUri(sessionId, "/prepared/" + preparedId)).DELETE());
     } catch (SQLException e) {
-      String code = ChargewireProblem.codeOf(e);
-      if (!"prepared_not_found".equals(code)
-          && !"session_not_found".equals(code)
-          && !SERVER_RESUMING.equals(code)) {
+      if (!nothingLeftToClose(e, "prepared_not_found")) {
         throw e;
       }
     }
@@ -1206,12 +1203,7 @@ public final class ChargewireClient implements AutoCloseable {
   public void cancel(String sessionId, String statementId) throws SQLException {
     URI target = sessionUri(sessionId, "/statements/" + statementId + "/cancel");
     // A statement does not survive a stop, so a cancel is not repeated while the server resumes.
-    send(
-        () -> request(target).POST(HttpRequest.BodyPublishers.noBody()),
-        handlerDiscard(),
-        true,
-        true,
-        ResumeLimit.NO_RETRY);
+    sendCleanup(() -> request(target).POST(HttpRequest.BodyPublishers.noBody()));
   }
 
   /**
@@ -1223,18 +1215,13 @@ public final class ChargewireClient implements AutoCloseable {
    */
   public void cancelSession(String sessionId) throws SQLException {
     URI target = sessionUri(sessionId, "/cancel");
-    send(
-        () -> request(target).POST(HttpRequest.BodyPublishers.noBody()),
-        handlerDiscard(),
-        true,
-        true,
-        ResumeLimit.NO_RETRY);
+    sendCleanup(() -> request(target).POST(HttpRequest.BodyPublishers.noBody()));
   }
 
   /**
    * Tells the server the client is done with a statement (spec §6.8): its result is freed, a query
    * still running is cancelled, and a write runs to its end. One the server no longer has is
-   * already done.
+   * already done, and so is one in a session whose token no longer works.
    *
    * @param sessionId the session
    * @param statementId the statement
@@ -1242,17 +1229,9 @@ public final class ChargewireClient implements AutoCloseable {
    */
   public void deleteStatement(String sessionId, String statementId) throws SQLException {
     try {
-      send(
-          () -> request(sessionUri(sessionId, "/statements/" + statementId)).DELETE(),
-          handlerDiscard(),
-          true,
-          true,
-          ResumeLimit.NO_RETRY);
+      sendCleanup(() -> request(sessionUri(sessionId, "/statements/" + statementId)).DELETE());
     } catch (SQLException e) {
-      String code = ChargewireProblem.codeOf(e);
-      if (!"statement_not_found".equals(code)
-          && !"session_not_found".equals(code)
-          && !SERVER_RESUMING.equals(code)) {
+      if (!nothingLeftToClose(e, "statement_not_found")) {
         throw e;
       }
     }
@@ -1423,6 +1402,44 @@ public final class ChargewireClient implements AutoCloseable {
       boolean authenticated,
       ResumeLimit limit)
       throws SQLException {
+    return send(builder, handler, retryable, authenticated, limit, true);
+  }
+
+  /**
+   * Sends a close or a cancel: with the token the client holds, never signing in before it or after
+   * an {@code invalid_token}, and not repeated while the server resumes. A sign-in to close
+   * something would be indistinguishable from a new connection, and would start a stopped server
+   * for nobody (spec §11.2).
+   */
+  private void sendCleanup(Supplier<HttpRequest.Builder> builder) throws SQLException {
+    send(builder, handlerDiscard(), true, true, ResumeLimit.NO_RETRY, false);
+  }
+
+  /**
+   * Whether a close's error means there is nothing left to close: the server no longer has the
+   * target ({@code notFoundCode}) or its session, is resuming (nothing survives a stop), or refuses
+   * the token (a session whose token no longer works is gone).
+   */
+  private static boolean nothingLeftToClose(SQLException e, String notFoundCode) {
+    String code = ChargewireProblem.codeOf(e);
+    return notFoundCode.equals(code)
+        || "session_not_found".equals(code)
+        || SERVER_RESUMING.equals(code)
+        || "invalid_token".equals(code);
+  }
+
+  /**
+   * Sends a request; {@code mayRenew} says whether it may sign in again for a token due for renewal
+   * or refused with {@code invalid_token} (false for closes and cancels).
+   */
+  private <T> HttpResponse<T> send(
+      Supplier<HttpRequest.Builder> builder,
+      HttpResponse.BodyHandler<T> handler,
+      boolean retryable,
+      boolean authenticated,
+      ResumeLimit limit,
+      boolean mayRenew)
+      throws SQLException {
     boolean renewed = false;
     // When the first server_resuming answer arrived, and so when the repeats stop.
     long resumeDeadline = 0;
@@ -1433,7 +1450,7 @@ public final class ChargewireClient implements AutoCloseable {
     for (int attempt = 1; ; attempt++) {
       HttpRequest.Builder request = builder.get();
       if (authenticated) {
-        request.header("Authorization", "Bearer " + currentToken());
+        request.header("Authorization", "Bearer " + (mayRenew ? currentToken() : heldToken()));
       }
       HttpResponse<T> response;
       try {
@@ -1505,6 +1522,7 @@ public final class ChargewireClient implements AutoCloseable {
       }
       if (status == 401
           && authenticated
+          && mayRenew
           && !renewed
           && "invalid_token".equals(problem.code())
           && mayRenewAfter(problem.reason())

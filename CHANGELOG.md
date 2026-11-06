@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Closing a connection, statement or result near the end of its token's life signed in again
+  first.** The driver renews its access token with the saved credentials shortly before it
+  expires, on whatever request comes next, and that included ending a session, closing a prepared
+  statement, freeing a result and cancelling. A sign-in is indistinguishable from a new
+  connection, so a server that is stopped behind a resume holder (GizmoData Cloud auto-resume)
+  started for an application that was only closing, which could also undo a deliberate stop. A
+  close or a cancel now goes with the token the driver holds and never signs in, neither before
+  the request nor after an `invalid_token` answer; a close the server refuses with
+  `invalid_token` is done (the session is gone with its token), as one answered
+  `session_not_found` already was. Statements, metadata and new sessions renew as before.
+
 ## [2.2.3] - 2026-11-05
 
 ### Fixed
