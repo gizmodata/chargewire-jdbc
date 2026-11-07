@@ -602,7 +602,13 @@ public final class ChargewireClient implements AutoCloseable {
     return Math.max(1, Duration.ofNanos(deadlineNanos - System.nanoTime()).toMillis() + 1);
   }
 
-  private boolean canRenewToken() {
+  /**
+   * Returns whether the client can get a new access token on its own, with the connection's
+   * password, subject token or client certificate.
+   *
+   * @return {@code false} for a token given as a property or from a browser sign-in
+   */
+  public boolean canRenewToken() {
     ConnectionConfig.Credential credential = config.credential();
     return credential == ConnectionConfig.Credential.PASSWORD
         || credential == ConnectionConfig.Credential.SUBJECT_TOKEN
@@ -695,6 +701,26 @@ public final class ChargewireClient implements AutoCloseable {
    * @throws SQLException on any error, {@code session_not_found} included
    */
   public JsonNode getSession(String sessionId, Duration timeout) throws SQLException {
+    return readSession(sessionId, timeout, true);
+  }
+
+  /**
+   * Reads a session document only to see whether the session is still there, as a connection pool's
+   * check does: with the token the client holds, never signing in, before the request or after
+   * {@code invalid_token}. A sign-in is a new connection to the server, and one that fronts a
+   * stopped server starts it for that (spec §11.2); the check must not start one for nobody.
+   *
+   * @param sessionId the session
+   * @param timeout how long to wait, or {@code null} for the connection's request timeout
+   * @return the session document
+   * @throws SQLException on any error, {@code session_not_found} and {@code invalid_token} included
+   */
+  public JsonNode probeSession(String sessionId, Duration timeout) throws SQLException {
+    return readSession(sessionId, timeout, false);
+  }
+
+  private JsonNode readSession(String sessionId, Duration timeout, boolean mayRenew)
+      throws SQLException {
     return json(
         send(
             () -> {
@@ -707,7 +733,8 @@ public final class ChargewireClient implements AutoCloseable {
             handlerBytes(),
             true,
             true,
-            timeout == null ? ResumeLimit.UNLIMITED : ResumeLimit.within(timeout)),
+            timeout == null ? ResumeLimit.UNLIMITED : ResumeLimit.within(timeout),
+            mayRenew),
         "session");
   }
 

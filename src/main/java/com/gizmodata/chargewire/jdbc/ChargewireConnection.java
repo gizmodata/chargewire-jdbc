@@ -942,8 +942,17 @@ public final class ChargewireConnection implements Connection {
   /**
    * {@inheritDoc}
    *
-   * <p>Probes the session with {@code GET /chargewire/v1/sessions/{id}}, opening a new session if
-   * the server no longer has it.
+   * <p>Reads the session with {@code GET /chargewire/v1/sessions/{id}} and the token the connection
+   * holds. It never signs in and never opens a session: a connection pool calls it on idle
+   * connections, and a sign-in or a new session would start a server that is stopped behind a
+   * resume holder (spec §11.2) with nobody using it. When the server no longer has the session
+   * ({@code session_not_found}), ended it because its token expired, or refuses an expired token,
+   * the connection is still valid if the next statement could run on a new session (the driver
+   * knows no transaction was open, and no {@code SET}, {@code RESET}, {@code PRAGMA} or unread
+   * {@code USE} would be lost): that statement opens the session, signing in first if it must. A
+   * connection whose transaction may have been lost, whose token was withdrawn ({@code
+   * token_revoked}, {@code credentials_changed}, {@code principal_dropped}), or that has no way to
+   * get a new token is not valid.
    */
   @Override
   public boolean isValid(int timeout) throws SQLException {
@@ -956,11 +965,47 @@ public final class ChargewireConnection implements Connection {
     Duration wait = timeout > 0 ? Duration.ofSeconds(timeout) : null;
     try {
       long statements = statementsRun.get();
-      JsonNode session = withSession(id -> client.getSession(id, wait), false);
+      JsonNode session = client.probeSession(sessionId, wait);
       takeSession(session, statements);
       return true;
     } catch (SQLException e) {
+      return nextStatementCanReplaceSession(e);
+    }
+  }
+
+  /**
+   * Whether a session check's error leaves the connection usable without losing anything: the next
+   * statement would open a new session (signing in first if the token is the problem) and run
+   * there, by the same rule as {@link #recover(int, SQLException)}.
+   */
+  private boolean nextStatementCanReplaceSession(SQLException error) {
+    ChargewireProblem problem = ChargewireProblem.of(error);
+    if (problem == null) {
+      // No answer from the server: not valid, as before.
       return false;
+    }
+    String code = problem.code();
+    String reason = problem.reason();
+    boolean replaceable;
+    if ("session_not_found".equals(code)) {
+      replaceable = true;
+    } else if ("session_ended".equals(code)) {
+      // idle_in_transaction: a transaction was open and is gone; any other reason but an expired
+      // token ends the connection (recover()).
+      replaceable = "token_expired".equals(reason) && client.canRenewToken();
+    } else if ("invalid_token".equals(code)) {
+      replaceable = ChargewireClient.mayRenewAfter(reason) && client.canRenewToken();
+    } else {
+      replaceable = false;
+    }
+    if (!replaceable) {
+      return false;
+    }
+    synchronized (sessionLock) {
+      // As recover() decides: with autocommit on, the session read after the last statement said
+      // none; with it off, no statement ran since the last commit or rollback.
+      boolean noTransaction = autoCommit ? transaction == TransactionState.NONE : !transactionDirty;
+      return noTransaction && !settingsChanged && placeChangedBy == 0;
     }
   }
 
