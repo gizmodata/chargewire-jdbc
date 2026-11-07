@@ -26,7 +26,7 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 2.2.3**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
+**Status: 2.2.4**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
 servers on either side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
@@ -46,14 +46,14 @@ Maven:
 <dependency>
   <groupId>com.gizmodata</groupId>
   <artifactId>chargewire-jdbc</artifactId>
-  <version>2.2.3</version>
+  <version>2.2.4</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.gizmodata:chargewire-jdbc:2.2.3'
+implementation 'com.gizmodata:chargewire-jdbc:2.2.4'
 ```
 
 The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
