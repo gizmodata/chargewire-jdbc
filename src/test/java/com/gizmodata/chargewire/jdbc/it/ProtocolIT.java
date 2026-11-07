@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -723,10 +724,21 @@ class ProtocolIT {
   }
 
   @Test
-  void isValidReopensALostSession() throws Exception {
-    try (Connection connection = SharedServer.connect()) {
+  void isValidLeavesALostSessionToTheNextStatement() throws Exception {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      String before = sessionOf(connection);
       endSessionBehindTheDriversBack(connection);
+      // A pool's check opens no session (it would start a stopped server for nobody): with no
+      // transaction open, the next statement replaces it.
       assertTrue(connection.isValid(5));
+      assertEquals(before, sessionOf(connection), "no session opened by isValid");
+      assertNull(connection.getWarnings());
+      try (ResultSet rows = statement.executeQuery("SELECT 42")) {
+        assertTrue(rows.next());
+        assertEquals(42, rows.getInt(1));
+      }
+      assertNotEquals(before, sessionOf(connection));
       assertNotNull(connection.getWarnings());
     }
   }

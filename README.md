@@ -207,7 +207,8 @@ For a local server without TLS, add `useEncryption=false`.
   read is sure to show the new catalog and schema, which the new session then opens with). Otherwise the statement fails with SQLSTATE `08007`
   without running, so it can never commit on its own, and the next statement runs in the new
   session. A connection pool that checks connections with `isValid()` gets `false` for such a
-  connection and replaces it.
+  connection and replaces it; `isValid()` itself never opens a session (see
+  [A server that is resuming](#-a-server-that-is-resuming)).
 - **Ended sessions.** A session the server ended because its transaction sat idle too long
   (`session_ended`, reason `idle_in_transaction`; Hardcharger's
   `--idle-in-transaction-session-timeout`) had its transaction rolled back: the driver opens a new
@@ -250,6 +251,19 @@ its timeout has passed, and a statement with a query timeout fails with SQLSTATE
 0.1 s, with SQLSTATE `57014`. Requests whose target cannot survive a stop are not repeated: closing
 a connection, a statement or a result returns at once (the server has no session left to end), and
 a cancel reports the `server_resuming` answer.
+
+A pool's check of an idle connection never starts a stopped server. `isValid()`, which HikariCP's
+`keepaliveTime` and DBeaver's keep-alive call, reads the session with the token the connection has:
+it never signs in and never opens a session. When the server no longer has the session (a stopped
+GizmoData Cloud cluster answers `session_not_found`) or the token has expired, it returns `true` if
+the next statement can run on a new session: no transaction may have been open, and no `SET`,
+`RESET`, `PRAGMA` or unread `USE` would be lost. That statement signs in if it must and opens the
+session, so the server starts when the application uses the connection. A connection whose
+transaction may have been lost, or whose token was withdrawn (`token_revoked`, `credentials_changed`,
+`principal_dropped`), gets `false`. GizmoData Cloud revokes the tokens of a cluster someone
+stopped. A pool replaces a connection that fails its check, and opening the replacement signs in,
+which starts the server again: a pool that keeps a minimum of idle connections (HikariCP's
+`minimumIdle`) does that after such a failure, and a minimum of 0 does not.
 
 ## 🔢 Types
 

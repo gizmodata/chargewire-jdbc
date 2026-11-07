@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A connection pool's check of an idle connection could start a stopped server.** `isValid()`,
+  which pools call on idle connections (HikariCP's `keepaliveTime`, DBeaver's keep-alive), renewed
+  a token due for renewal (a password sign-in), and when the server no longer had the session it
+  opened a new one. Either looks like a new connection to a resume holder, so a cluster stopped
+  with auto-resume (GizmoData Cloud) started with nobody using it. `isValid()` now reads the session
+  with the token it has and never signs in or opens a session. When the session is gone
+  (`session_not_found`, or an expired token), it returns `true` if the next statement can run on a
+  new session (no transaction may have been open, and no `SET`, `RESET`, `PRAGMA` or unread `USE`
+  would be lost). That statement then replaces the session, signing in first if it must. It returns
+  `false` when a transaction may have been lost, or when the token was withdrawn (`token_revoked`,
+  `credentials_changed`, `principal_dropped`) or can't be renewed. A transport failure is `false`,
+  as before.
+
 ## [2.2.4] - 2026-11-06
 
 ### Fixed

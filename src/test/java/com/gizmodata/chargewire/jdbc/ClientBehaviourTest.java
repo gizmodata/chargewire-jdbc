@@ -272,6 +272,128 @@ class ClientBehaviourTest {
     assertEquals(1, server.requests("POST", "/v1/sessions/s1/.*cancel").size());
   }
 
+  // ---- A pool's check (isValid) never signs in and never opens a session ----
+
+  @Test
+  void isValidWithATokenDueForRenewalDoesNotSignInButTheNextStatementDoes() throws Exception {
+    server.expiresIn = 1;
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q1", 0)));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      int signIns = server.tokens.get();
+      assertTrue(connection.isValid(5));
+      // A sign-in would start a stopped server behind a resume holder for nobody.
+      assertEquals(signIns, server.tokens.get(), "no sign-in for a pool's check");
+      assertEquals(
+          "Bearer t" + signIns,
+          server.requests("GET", "/v1/sessions/s1").get(0).header("Authorization"));
+      statement.execute("SELECT 1");
+      assertEquals(signIns + 1, server.tokens.get(), "a statement still renews first");
+    }
+  }
+
+  @Test
+  void isValidOnALostSessionWithNoTransactionIsTrueAndTheNextStatementReplacesIt()
+      throws Exception {
+    server.route(
+        "GET",
+        "/v1/sessions/s1",
+        (exchange, request, path) -> problem(exchange, 404, "session_not_found", ""));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> problem(exchange, 404, "session_not_found", ""));
+    server.route(
+        "POST",
+        "/v1/sessions/s2/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q2", 1)));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      assertTrue(connection.isValid(5), "the next statement can run on a new session");
+      assertEquals(1, server.requests("POST", "/v1/sessions").size(), "no session opened");
+      assertEquals("s1", connection.unwrap(ChargewireConnection.class).getSessionId());
+      assertNull(connection.getWarnings());
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      assertEquals("s2", connection.unwrap(ChargewireConnection.class).getSessionId());
+      assertNotNull(connection.getWarnings());
+    }
+    assertEquals(1, server.tokens.get());
+    assertEquals(1, server.requests("POST", "/v1/sessions/s2/statements").size());
+  }
+
+  @Test
+  void isValidOnALostSessionThatMayHaveHeldATransactionIsFalse() throws Exception {
+    server.route(
+        "PATCH",
+        "/v1/sessions/s1",
+        (exchange, request, path) ->
+            json(exchange, 200, "{\"options\":{\"autocommit\":false},\"errors\":{}}"));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q1", 1)));
+    server.route(
+        "GET",
+        "/v1/sessions/s1",
+        (exchange, request, path) -> problem(exchange, 404, "session_not_found", ""));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      connection.setAutoCommit(false);
+      assertTrue(connection.isValid(5), "autocommit off, nothing run since: no transaction");
+      assertEquals(1, server.requests("POST", "/v1/sessions").size(), "no session opened");
+      statement.executeUpdate("INSERT INTO t VALUES (1)");
+      assertFalse(connection.isValid(5), "the transaction's work is gone");
+      assertEquals(1, server.requests("POST", "/v1/sessions").size(), "no session opened");
+    }
+  }
+
+  @Test
+  void isValidWithARevokedTokenIsFalseWithoutASignIn() throws Exception {
+    server.expiresIn = 1;
+    server.route(
+        "GET",
+        "/v1/sessions/s1",
+        (exchange, request, path) ->
+            problem(exchange, 401, "invalid_token", ",\"reason\":\"token_revoked\""));
+    try (Connection connection = connect("")) {
+      int signIns = server.tokens.get();
+      assertFalse(connection.isValid(5), "a withdrawn token ends the connection");
+      assertEquals(signIns, server.tokens.get(), "no sign-in for a pool's check");
+      assertEquals(1, server.requests("POST", "/v1/sessions").size(), "no session opened");
+    }
+  }
+
+  @Test
+  void isValidWithAnExpiredTokenIsTrueAndTheNextStatementSignsIn() throws Exception {
+    server.route(
+        "GET",
+        "/v1/sessions/s1",
+        (exchange, request, path) ->
+            problem(exchange, 401, "invalid_token", ",\"reason\":\"token_expired\""));
+    AtomicInteger calls = new AtomicInteger();
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> {
+          if (calls.incrementAndGet() == 1) {
+            problem(exchange, 401, "invalid_token", ",\"reason\":\"token_expired\"");
+          } else {
+            json(exchange, 200, updateDocument("q1", 1));
+          }
+        });
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      assertTrue(connection.isValid(5), "the next statement can sign in again");
+      assertEquals(1, server.tokens.get(), "but the check does not");
+      assertEquals(1, server.requests("GET", "/v1/sessions/s1").size(), "and is not repeated");
+      assertEquals(1, statement.executeUpdate("UPDATE t SET a = 1"));
+      assertEquals(2, server.tokens.get());
+    }
+  }
+
   @Test
   void aPreIssuedTokenCannotBeRenewed() throws Exception {
     server.route(
