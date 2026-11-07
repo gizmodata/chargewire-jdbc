@@ -42,6 +42,15 @@ import org.apache.arrow.memory.RootAllocator;
 /**
  * A Chargewire session (spec §5) as a JDBC connection.
  *
+ * <p>A connection to a server whose discovery document says {@code "state": "stopped"} (a stand-in
+ * such as GizmoData Cloud's resume holder answers for a stopped server; spec §3.1, §11.2) is made
+ * without signing in or opening a session, since either would start the server, and a connection
+ * pool opens connections that may never be used. The first call that does work (a statement, a
+ * prepare, metadata, server information) signs in and opens the session, and waits while the server
+ * resumes. Until then {@link #isValid(int)} and {@link #close()} send nothing, the catalog, schema
+ * and autocommit set are sent with the session, and a commit or rollback has nothing to end. A
+ * refused credential fails at that first call.
+ *
  * <p>If the server no longer has the session (evicted for idleness, or the server restarted), the
  * connection opens a new one, replays its catalog, schema and autocommit setting, and reports the
  * loss of temporary state as a {@link SQLWarning} on {@link #getWarnings()}. A statement that found
@@ -121,6 +130,14 @@ public final class ChargewireConnection implements Connection {
   private final Object sessionLock = new Object();
 
   private volatile String sessionId;
+
+  /**
+   * Connected to a stopped server without signing in or opening a session (spec §3.1, §11.2): the
+   * first call that does work signs in and opens it ({@link #startSessionIfPending()}); until then
+   * a check, a close and the session options set send nothing.
+   */
+  private volatile boolean sessionPending;
+
   private volatile int sessionGeneration;
   private String catalog;
   private String schema;
@@ -197,7 +214,13 @@ public final class ChargewireConnection implements Connection {
     try {
       connection.catalog = ChargewireProperty.CATALOG.get(properties);
       connection.schema = ChargewireProperty.SCHEMA.get(properties);
-      connection.openSession();
+      if (client.signInPending()) {
+        // A stopped server: a sign-in or a session would start it, so the first work does that.
+        connection.sessionPending = true;
+        connection.transaction = TransactionState.NONE;
+      } else {
+        connection.openSession();
+      }
       client.setRequestTimeout(networkTimeout > 0 ? Duration.ofMillis(networkTimeout) : null);
       return connection;
     } catch (SQLException | RuntimeException e) {
@@ -235,6 +258,24 @@ public final class ChargewireConnection implements Connection {
       sessionId = null;
       client.deleteSession(failed);
       throw e;
+    }
+  }
+
+  /**
+   * On a connection made to a stopped server, signs in and opens the session: the first work does
+   * this, and the sign-in starts the server (waiting while it resumes). A refused credential fails
+   * here, with the error the connect would have given; the next call tries again.
+   */
+  private void startSessionIfPending() throws SQLException {
+    if (!sessionPending) {
+      return;
+    }
+    synchronized (sessionLock) {
+      if (sessionPending) {
+        client.signInIfPending();
+        openSession();
+        sessionPending = false;
+      }
     }
   }
 
@@ -295,6 +336,7 @@ public final class ChargewireConnection implements Connection {
    */
   <T> T withSession(SessionCall<T> call, boolean needsEngine) throws SQLException {
     checkOpen();
+    startSessionIfPending();
     if (needsEngine) {
       for (ResultStream stream : unreadStreams) {
         stream.buffer(resultBufferSize);
@@ -527,7 +569,8 @@ public final class ChargewireConnection implements Connection {
   /**
    * Returns the id of the connection's current session.
    *
-   * @return the session id; it changes if the connection had to open a new session
+   * @return the session id; it changes if the connection had to open a new session, and is {@code
+   *     null} on a connection to a stopped server that has not done any work yet
    */
   public String getSessionId() {
     return sessionId;
@@ -736,6 +779,11 @@ public final class ChargewireConnection implements Connection {
       throw new SQLException(
           "Cannot " + (commit ? "commit" : "roll back") + " in autocommit mode", "25000");
     }
+    if (sessionPending) {
+      // No session yet, so nothing ran: there is no transaction to end.
+      transactionDirty = false;
+      return;
+    }
     withSession(
         id -> {
           client.endTransaction(id, commit);
@@ -799,6 +847,17 @@ public final class ChargewireConnection implements Connection {
   // ---- Session options (spec §5.3) ----
 
   private void setOption(String name, Object value) throws SQLException {
+    synchronized (sessionLock) {
+      if (sessionPending) {
+        // The session opens with the catalog, schema and autocommit the connection has then.
+        if ("catalog".equals(name)) {
+          catalog = (String) value;
+        } else if ("schema".equals(name)) {
+          schema = (String) value;
+        }
+        return;
+      }
+    }
     ObjectNode options = client.newObject();
     if (value instanceof Boolean) {
       options.put(name, (Boolean) value);
@@ -829,6 +888,10 @@ public final class ChargewireConnection implements Connection {
 
   /** Reads the session document: its options and its transaction. */
   private void readSession() throws SQLException {
+    if (sessionPending) {
+      // Nothing to read before the first work: the options are the ones the session will open with.
+      return;
+    }
     long statements = statementsRun.get();
     JsonNode session = withSession(client::getSession, false);
     takeSession(session, statements);
@@ -952,7 +1015,8 @@ public final class ChargewireConnection implements Connection {
    * {@code USE} would be lost): that statement opens the session, signing in first if it must. A
    * connection whose transaction may have been lost, whose token was withdrawn ({@code
    * token_revoked}, {@code credentials_changed}, {@code principal_dropped}), or that has no way to
-   * get a new token is not valid.
+   * get a new token is not valid. A connection made to a stopped server that has not done any work
+   * yet is valid, and nothing is sent.
    */
   @Override
   public boolean isValid(int timeout) throws SQLException {
@@ -961,6 +1025,10 @@ public final class ChargewireConnection implements Connection {
     }
     if (closed) {
       return false;
+    }
+    if (sessionPending) {
+      // Connected to a stopped server and not used yet: alive, and nothing to ask.
+      return true;
     }
     Duration wait = timeout > 0 ? Duration.ofSeconds(timeout) : null;
     try {
