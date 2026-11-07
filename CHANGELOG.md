@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A connection pool's new connections started a stopped server.** Every new connection signed in
+  at connect, and a pool opens connections on its own: to fill its minimum of idle connections,
+  and to replace each one at its maximum lifetime (HikariCP: every 30 minutes by default). So a
+  pooled application started a GizmoData Cloud cluster that had stopped for idleness about every
+  30 minutes, and refilled right after someone clicked Stop. When the discovery document says
+  `"state": "stopped"` (GizmoData Cloud's resume holder sends it for a stopped cluster),
+  `getConnection` now connects without signing in or opening a session. The first call that does
+  work (a statement, a prepare, a `DatabaseMetaData` call that asks the server) signs in, opens the session and waits while
+  the server resumes. Until then `isValid()` is `true` and sends nothing, `close()` sends nothing,
+  `setAutoCommit`, `setCatalog` and `setSchema` are sent with the session, and `commit()` or
+  `rollback()` has nothing to end. A wrong password fails at that first call. A server without
+  `state` is signed in at connect, as before.
+
 ## [2.2.5] - 2026-11-07
 
 ### Fixed

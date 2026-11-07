@@ -161,6 +161,14 @@
       <artifactId>junit-platform-launcher</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- A real connection pool, to prove a pool's refills and checks send nothing to a stopped
+         server (ServerResumingTest). -->
+    <dependency>
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <version>7.1.0</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

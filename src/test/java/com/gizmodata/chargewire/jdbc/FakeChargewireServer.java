@@ -99,6 +99,12 @@ final class FakeChargewireServer implements AutoCloseable {
   /** The {@code transaction} the session document reports (spec §5.1), or {@code null} for none. */
   volatile String transaction = "none";
 
+  /**
+   * Discovery's {@code state}, as a stand-in for a stopped server sends it ({@code "stopped"}), or
+   * {@code null} for none (a serving server).
+   */
+  volatile String state;
+
   /** How long discovery ({@code GET /chargewire}) takes to answer, as on a far link. */
   volatile int discoveryDelayMillis;
 
@@ -160,7 +166,9 @@ final class FakeChargewireServer implements AutoCloseable {
                   + ",\"auth\":{\"grant_types\":[\"password\",\"token_exchange\","
                   + "\"client_certificate\"]"
                   + authExtra
-                  + "}}");
+                  + "}"
+                  + (state == null ? "" : ",\"state\":\"" + state + "\"")
+                  + "}");
         });
     route(
         "POST",

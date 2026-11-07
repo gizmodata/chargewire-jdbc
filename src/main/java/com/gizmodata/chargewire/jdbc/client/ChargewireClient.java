@@ -125,6 +125,14 @@ public final class ChargewireClient implements AutoCloseable {
   private String serverName;
   private String serverVersion;
   private String browserProvider;
+
+  /** Discovery said {@code "state": "stopped"} (spec §3.1, §11.2). */
+  private volatile boolean serverStopped;
+
+  /** Connected without signing in, to a stopped server: the first work signs in. */
+  private volatile boolean signInPending;
+
+  private final Object signInLock = new Object();
   private Duration roundTrip = Duration.ZERO;
   private String resultCompression;
 
@@ -158,12 +166,16 @@ public final class ChargewireClient implements AutoCloseable {
   }
 
   /**
-   * Connects: reads the server's discovery document and signs in.
+   * Connects: reads the server's discovery document and signs in, unless discovery says the server
+   * is stopped ({@code "state": "stopped"}, which a stand-in such as a resume holder sends for it):
+   * then the client signs in at the first request that does work ({@link #signInIfPending()}),
+   * since a sign-in is what starts a stopped server, and a connection pool opens connections that
+   * may never be used.
    *
    * @param config where and how to connect
    * @param userAgent the {@code User-Agent} to send
    * @param requestTimeout how long to wait for each response's headers, or {@code null}
-   * @return a signed-in client
+   * @return a signed-in client, or one that signs in later for a stopped server
    * @throws SQLException if the server cannot be reached, does not speak Chargewire v1, or refuses
    *     the credential
    */
@@ -176,7 +188,11 @@ public final class ChargewireClient implements AutoCloseable {
             config, userAgent, requestTimeout != null ? requestTimeout : config.connectTimeout);
     try {
       client.discover();
-      client.signIn();
+      if (client.serverStopped) {
+        client.signInPending = true;
+      } else {
+        client.signIn();
+      }
       return client;
     } catch (SQLException | RuntimeException e) {
       client.close();
@@ -295,6 +311,8 @@ public final class ChargewireClient implements AutoCloseable {
     serverName = doc.path("server").path("name").asText(null);
     serverVersion = doc.path("server").path("version").asText(null);
     browserProvider = doc.path("auth").path("oauth_browser").path("provider").asText(null);
+    // An open value: only "stopped" changes anything, and a server that is serving sends none.
+    serverStopped = "stopped".equals(doc.path("state").asText(null));
     roundTrip = Duration.ofNanos(times[1] - times[0]);
     if (IpcCompression.AUTO.equals(config.ipcCompression)
         && roundTrip.compareTo(IpcCompression.FAR_LINK) >= 0) {
@@ -385,6 +403,35 @@ public final class ChargewireClient implements AutoCloseable {
    */
   public Duration discoveryRoundTrip() {
     return roundTrip;
+  }
+
+  /**
+   * Returns whether the client connected without signing in because discovery said the server was
+   * stopped, and has not signed in since.
+   *
+   * @return {@code true} until the first sign-in on such a connection
+   */
+  public boolean signInPending() {
+    return signInPending;
+  }
+
+  /**
+   * Signs in now if the client connected to a stopped server without signing in; otherwise does
+   * nothing. The sign-in starts the server, and waits for it as any request does ({@code
+   * server_resuming}); a refused credential fails here as it would have at connect.
+   *
+   * @throws SQLException if the sign-in fails
+   */
+  public void signInIfPending() throws SQLException {
+    if (!signInPending) {
+      return;
+    }
+    synchronized (signInLock) {
+      if (signInPending) {
+        signIn();
+        signInPending = false;
+      }
+    }
   }
 
   private void signIn() throws SQLException {
@@ -1474,6 +1521,14 @@ public final class ChargewireClient implements AutoCloseable {
     // The request's own limit on the repeats, counted from now.
     ResumeClock limitClock = resumeClock;
     long limitDeadline = limit.within == null ? 0 : limitClock.nanoTime() + limit.within.toNanos();
+    if (authenticated && signInPending) {
+      if (!mayRenew) {
+        throw new SQLException(
+            "Not signed in yet: the connection has not done any work on the stopped server",
+            "08003");
+      }
+      signInIfPending();
+    }
     for (int attempt = 1; ; attempt++) {
       HttpRequest.Builder request = builder.get();
       if (authenticated) {

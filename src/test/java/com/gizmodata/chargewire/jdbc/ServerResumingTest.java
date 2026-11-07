@@ -6,6 +6,7 @@ import static com.gizmodata.chargewire.jdbc.FakeChargewireServer.problem;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,14 +14,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.gizmodata.chargewire.jdbc.client.ChargewireClient;
 import com.gizmodata.chargewire.jdbc.client.ResumeClock;
 import com.sun.net.httpserver.HttpExchange;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLInvalidAuthorizationSpecException;
 import java.sql.SQLTimeoutException;
 import java.sql.SQLTransientConnectionException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -103,6 +108,180 @@ class ServerResumingTest {
           }
         });
     return calls;
+  }
+
+  // ---- A stopped server (discovery "state": "stopped"): connect without signing in ----
+
+  /** Every request the driver sent but discovery ({@code GET /chargewire}). */
+  private List<String> beyondDiscovery() {
+    List<String> sent = new ArrayList<>();
+    synchronized (server.requests) {
+      for (FakeChargewireServer.Request request : server.requests) {
+        if (!(request.method.equals("GET") && request.path.equals("/chargewire"))) {
+          sent.add(request.method + " " + request.path);
+        }
+      }
+    }
+    return sent;
+  }
+
+  /** Takes session options (PATCH), answering with the ones asked for. */
+  private void acceptOptions() {
+    server.route(
+        "PATCH",
+        "/v1/sessions/([^/]+)",
+        (exchange, request, path) -> {
+          String body = request.body();
+          String options = body.substring(body.indexOf('{', 1), body.lastIndexOf('}'));
+          json(exchange, 200, "{\"options\":" + options + ",\"errors\":{}}");
+        });
+  }
+
+  @Test
+  void connectingToAStoppedServerSendsOnlyDiscovery() throws Exception {
+    server.state = "stopped";
+    try (Connection connection = connect("")) {
+      // A sign-in or a session would start the server, and a pool opens connections nobody uses.
+      assertEquals(List.of(), beyondDiscovery());
+      assertNull(((ChargewireConnection) connection).getSessionId());
+      assertEquals(1, server.requests("GET", "").size());
+    }
+    assertEquals(List.of(), beyondDiscovery(), "and closing sent nothing either");
+  }
+
+  @Test
+  void checksAndClosesOnAnUnusedConnectionToAStoppedServerSendNothing() throws Exception {
+    server.state = "stopped";
+    acceptOptions();
+    Connection connection = connect("");
+    assertTrue(connection.isValid(5), "alive, without asking");
+    assertEquals(List.of(), beyondDiscovery(), "the check sent nothing");
+    assertTrue(connection.getAutoCommit());
+    connection.setAutoCommit(false);
+    connection.setCatalog("cat");
+    connection.setSchema("lazy");
+    assertEquals("lazy", connection.getSchema());
+    connection.rollback();
+    assertTrue(connection.isValid(5));
+    connection.close();
+    assertTrue(connection.isClosed());
+    assertEquals(List.of(), beyondDiscovery());
+    assertEquals(0, server.tokens.get());
+  }
+
+  @Test
+  void theFirstStatementOnAStoppedServerSignsInOpensTheSessionAndRuns() throws Exception {
+    server.state = "stopped";
+    acceptOptions();
+    AtomicInteger logins = resumingLogins(2, "5");
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                document("q1", "succeeded", "{\"kind\":\"update\",\"rows_affected\":1}")));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      connection.setAutoCommit(false);
+      connection.setSchema("lazy");
+      assertEquals(0, logins.get(), "connected without signing in");
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (1)"));
+      // The sign-in started the server, and waited while it resumed.
+      assertEquals(3, logins.get());
+      assertEquals(List.of(secs(5), secs(5)), clock.pauses);
+      assertEquals("s1", ((ChargewireConnection) connection).getSessionId());
+      String options = server.requests("POST", "/v1/sessions").get(0).body();
+      assertTrue(options.contains("\"schema\":\"lazy\""), options);
+      assertTrue(options.contains("\"autocommit\":false"), options);
+      assertEquals(
+          "Bearer t1",
+          server.requests("POST", "/v1/sessions/s1/statements").get(0).header("Authorization"));
+      assertFalse(connection.getAutoCommit());
+    }
+  }
+
+  @Test
+  void aWrongPasswordForAStoppedServerFailsAtTheFirstStatement() throws Exception {
+    server.state = "stopped";
+    try (Connection connection =
+            DriverManager.getConnection(server.url("").replace("password=pw", "password=wrong"));
+        Statement statement = connection.createStatement()) {
+      assertEquals(List.of(), beyondDiscovery(), "connected without trying the password");
+      SQLException error =
+          assertThrows(
+              SQLInvalidAuthorizationSpecException.class, () -> statement.execute("SELECT 1"));
+      // The error the connect would have given.
+      assertEquals("invalid_credentials", ChargewireProblem.codeOf(error));
+      assertEquals(0, server.requests("POST", "/v1/sessions").size());
+      // The next call tries again, and fails the same way.
+      assertEquals(
+          "invalid_credentials",
+          ChargewireProblem.codeOf(
+              assertThrows(SQLException.class, () -> statement.execute("SELECT 1"))));
+    }
+  }
+
+  @Test
+  void aServingServerIsSignedInAtConnectAndAStoppedOneIsNot() throws Exception {
+    try (Connection serving = connect("")) {
+      assertEquals(1, server.tokens.get(), "no state: signed in at connect, as before");
+      assertEquals(1, server.requests("POST", "/v1/sessions").size());
+      assertEquals("s1", ((ChargewireConnection) serving).getSessionId());
+    }
+    server.state = "stopped";
+    try (Connection stopped = connect("")) {
+      assertEquals(1, server.tokens.get(), "stopped: no sign-in");
+      assertEquals(1, server.requests("POST", "/v1/sessions").size());
+    }
+    server.state = "serving_or_unknown";
+    try (Connection other = connect("")) {
+      assertEquals(2, server.tokens.get(), "a state the driver doesn't know: signed in");
+    }
+  }
+
+  @Test
+  void aPoolsRefillsAndChecksSendNothingToAStoppedServer() throws Exception {
+    server.state = "stopped";
+    acceptOptions();
+    HikariConfig config = new HikariConfig();
+    config.setJdbcUrl(server.url(""));
+    config.setMinimumIdle(5);
+    config.setMaximumPoolSize(5);
+    // Settings the pool applies to each new connection: recorded, sent with the first session.
+    config.setAutoCommit(false);
+    config.setCatalog("cat");
+    config.setSchema("main");
+    config.setInitializationFailTimeout(1);
+    try (HikariDataSource pool = new HikariDataSource(config)) {
+      awaitTotal(pool, 5);
+      // Past HikariCP's 500 ms alive-bypass window, so each borrow runs the pool's check.
+      Thread.sleep(700);
+      List<Connection> borrowed = new ArrayList<>();
+      for (int i = 0; i < 5; i++) {
+        borrowed.add(pool.getConnection());
+      }
+      for (Connection connection : borrowed) {
+        assertTrue(connection.isValid(1));
+        connection.close();
+      }
+      // A refill, as at maxLifetime: every connection is replaced by a new one.
+      pool.getHikariPoolMXBean().softEvictConnections();
+      Thread.sleep(500);
+      awaitTotal(pool, 5);
+    }
+    assertEquals(0, server.tokens.get(), "no sign-in");
+    assertEquals(List.of(), beyondDiscovery());
+    assertTrue(server.requests("GET", "").size() >= 10, "each connection read discovery");
+  }
+
+  private static void awaitTotal(HikariDataSource pool, int connections) throws Exception {
+    long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+    while (pool.getHikariPoolMXBean().getTotalConnections() < connections) {
+      assertTrue(System.nanoTime() < deadline, "the pool did not fill");
+      Thread.sleep(50);
+    }
   }
 
   private static void assertResumingError(SQLException error) {

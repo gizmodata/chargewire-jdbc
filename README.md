@@ -261,9 +261,25 @@ the next statement can run on a new session: no transaction may have been open, 
 session, so the server starts when the application uses the connection. A connection whose
 transaction may have been lost, or whose token was withdrawn (`token_revoked`, `credentials_changed`,
 `principal_dropped`), gets `false`. GizmoData Cloud revokes the tokens of a cluster someone
-stopped. A pool replaces a connection that fails its check, and opening the replacement signs in,
-which starts the server again: a pool that keeps a minimum of idle connections (HikariCP's
-`minimumIdle`) does that after such a failure, and a minimum of 0 does not.
+stopped. A pool replaces a connection that fails its check; while the server is stopped, the
+replacement connects without signing in (below), so that doesn't start it either.
+
+A connection to a stopped server is made without signing in. A stand-in that answers for a stopped
+server (GizmoData Cloud's resume holder) says so in the discovery document, `"state": "stopped"`.
+Then `getConnection` reads discovery only, and returns a connection that hasn't signed in or opened
+a session, since either would start the server. The first call that does work signs in and opens
+the session: a statement, a prepare, or a `DatabaseMetaData` call that asks the server. That sign-in starts the server, and
+the call waits while it resumes, as above. Until then:
+
+- `isValid()` returns `true`, and closing the connection sends nothing.
+- `setAutoCommit`, `setCatalog` and `setSchema` are kept, and sent when the session opens.
+- `commit()` and `rollback()` have nothing to end.
+
+So a pool's connections, its refills (HikariCP replaces each connection at `maxLifetime`) and its
+checks never start a stopped server, whatever the pool's minimum of idle connections. A wrong
+password, or a catalog or schema the server refuses, fails at that first call with the error the
+connect would have given. A server that is serving sends no `state`, and then the driver signs in
+at connect as before.
 
 ## 🔢 Types
 
