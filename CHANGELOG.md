@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.5] - 2026-11-07
+
 ### Fixed
 
 - **A connection pool's check of an idle connection could start a stopped server.** `isValid()`,
