@@ -284,6 +284,91 @@ class ServerResumingTest {
     }
   }
 
+  // ---- After a person's Stop: old tokens are revoked, a new connection signs in again ----
+
+  private void statementsSucceed() {
+    server.route(
+        "POST",
+        "/v1/sessions/([^/]+)/statements",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                document("q1", "succeeded", "{\"kind\":\"update\",\"rows_affected\":1}")));
+  }
+
+  /** A person stops the cluster: the tokens issued so far are revoked, and discovery says so. */
+  private void stopRevoking(String... tokens) {
+    server.revokedTokens.addAll(List.of(tokens));
+    server.state = "stopped";
+  }
+
+  private static void assertRevoked(SQLException error) {
+    assertInstanceOf(SQLInvalidAuthorizationSpecException.class, error);
+    assertEquals("invalid_token", ChargewireProblem.codeOf(error));
+    assertEquals("token_revoked", ChargewireProblem.of(error).reason());
+    assertTrue(
+        error.getMessage().contains(FakeChargewireServer.STOPPED_DETAIL), error.getMessage());
+  }
+
+  private void assertNewConnectionSignsInAgainAndOldOneIsRefused(String url, String tokenField)
+      throws Exception {
+    statementsSucceed();
+    try (Connection old = DriverManager.getConnection(url);
+        Statement before = old.createStatement()) {
+      assertEquals(1, before.executeUpdate("INSERT INTO t VALUES (1)"));
+      stopRevoking("t1");
+      try (Connection fresh = DriverManager.getConnection(url);
+          Statement after = fresh.createStatement()) {
+        // Its first statement signs in (that starts the cluster) and runs with the new token.
+        assertEquals(1, after.executeUpdate("INSERT INTO t VALUES (2)"));
+        List<FakeChargewireServer.Request> submits =
+            server.requests("POST", "/v1/sessions/[^/]+/statements");
+        assertEquals("Bearer t2", submits.get(submits.size() - 1).header("Authorization"));
+      }
+      // The connection opened before the Stop is refused, and does not sign in again.
+      assertRevoked(
+          assertThrows(SQLException.class, () -> before.executeUpdate("INSERT INTO t VALUES (3)")));
+    }
+    assertEquals(2, server.tokens.get(), "one sign-in per connection");
+    List<FakeChargewireServer.Request> signIns = server.requests("POST", "/v1/auth/token");
+    assertEquals(2, signIns.size());
+    for (FakeChargewireServer.Request signIn : signIns) {
+      assertTrue(signIn.body().contains(tokenField), signIn.body());
+    }
+  }
+
+  @Test
+  void afterAStopANewPasswordConnectionSignsInAgainAndAnOldOneIsRefused() throws Exception {
+    assertNewConnectionSignsInAgainAndOldOneIsRefused(server.url(""), "\"password\":\"pw\"");
+  }
+
+  @Test
+  void afterAStopANewTokenExchangeConnectionSignsInAgainAndAnOldOneIsRefused() throws Exception {
+    assertNewConnectionSignsInAgainAndOldOneIsRefused(
+        "jdbc:chargewire://127.0.0.1:"
+            + server.port()
+            + "?useEncryption=false&subjectToken=idp-token",
+        "\"subject_token\":\"idp-token\"");
+  }
+
+  @Test
+  void aTokenGivenBeforeAStopKeepsFailingAndSaysWhy() throws Exception {
+    statementsSucceed();
+    stopRevoking("issued-before-the-stop");
+    try (Connection connection = connect("token=issued-before-the-stop");
+        Statement statement = connection.createStatement()) {
+      // The driver has no way to get a new token: the error says the cluster was stopped since.
+      assertRevoked(
+          assertThrows(
+              SQLException.class, () -> statement.executeUpdate("INSERT INTO t VALUES (1)")));
+      assertRevoked(
+          assertThrows(
+              SQLException.class, () -> statement.executeUpdate("INSERT INTO t VALUES (1)")));
+    }
+    assertEquals(0, server.tokens.get(), "no sign-in");
+  }
+
   private static void assertResumingError(SQLException error) {
     assertInstanceOf(SQLTransientConnectionException.class, error);
     assertEquals("08001", error.getSQLState());
