@@ -105,6 +105,17 @@ final class FakeChargewireServer implements AutoCloseable {
    */
   volatile String state;
 
+  /**
+   * Bearer tokens the server refuses on every request with {@code 401 invalid_token}, reason {@code
+   * token_revoked}, as GizmoData Cloud does with the tokens issued before a person stopped a
+   * cluster.
+   */
+  final java.util.Set<String> revokedTokens = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+  /** The {@code detail} of a {@code token_revoked} refusal: GizmoData Cloud's text. */
+  static final String STOPPED_DETAIL =
+      "The cluster was stopped in GizmoData Cloud after this session signed in.";
+
   /** How long discovery ({@code GET /chargewire}) takes to answer, as on a far link. */
   volatile int discoveryDelayMillis;
 
@@ -262,6 +273,22 @@ final class FakeChargewireServer implements AutoCloseable {
   private void handle(HttpExchange exchange) throws IOException {
     Request request = new Request(exchange, exchange.getRequestBody().readAllBytes());
     requests.add(request);
+    String authorization = request.header("Authorization");
+    if (authorization != null
+        && authorization.startsWith("Bearer ")
+        && revokedTokens.contains(authorization.substring("Bearer ".length()))) {
+      send(
+          exchange,
+          401,
+          "application/problem+json",
+          ("{\"type\":\"urn:chargewire:error:invalid_token\",\"title\":\"Invalid token\","
+                  + "\"status\":401,\"code\":\"invalid_token\",\"reason\":\"token_revoked\","
+                  + "\"detail\":\""
+                  + STOPPED_DETAIL
+                  + "\"}")
+              .getBytes(StandardCharsets.UTF_8));
+      return;
+    }
     String key = request.method + " " + request.path;
     Map<Pattern, Route> snapshot;
     synchronized (this) {

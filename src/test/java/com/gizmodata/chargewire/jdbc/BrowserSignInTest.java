@@ -18,6 +18,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLInvalidAuthorizationSpecException;
 import java.sql.SQLTimeoutException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -140,6 +141,42 @@ class BrowserSignInTest {
     String messages = stderr.toString(StandardCharsets.UTF_8);
     assertTrue(messages.contains("fake with Test IdP"), messages);
     assertFalse(messages.contains(SECRET) || messages.contains(TOKEN), messages);
+  }
+
+  @Test
+  void afterAStopANewConnectionSignsInInTheBrowserAgainAndAnOldOneIsRefused() throws Exception {
+    server.route(
+        "POST",
+        "/v1/sessions/([^/]+)/statements",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                FakeChargewireServer.document(
+                    "q1", "succeeded", "{\"kind\":\"update\",\"rows_affected\":1}")));
+    String url = url("authType=oauth_browser&oauthBrowser=none");
+    try (Connection old = DriverManager.getConnection(url);
+        Statement before = old.createStatement()) {
+      assertEquals(1, before.executeUpdate("INSERT INTO t VALUES (1)"));
+      // A person stops the cluster: the token from the first sign-in is revoked.
+      server.revokedTokens.add(TOKEN);
+      server.state = "stopped";
+      polls.set(0);
+      outcome = outcome.replace(TOKEN, "browser-token-92");
+      try (Connection fresh = DriverManager.getConnection(url);
+          Statement after = fresh.createStatement()) {
+        // A new connection signs in again (a single sign-on, usually), not with the old token.
+        assertEquals(1, after.executeUpdate("INSERT INTO t VALUES (2)"));
+      }
+      SQLException refused =
+          assertThrows(SQLException.class, () -> before.executeUpdate("INSERT INTO t VALUES (3)"));
+      assertEquals("token_revoked", ChargewireProblem.of(refused).reason());
+    }
+    assertEquals(2, server.requests("POST", "/v1/auth/oauth/flows").size(), "a flow each");
+    List<FakeChargewireServer.Request> submits =
+        server.requests("POST", "/v1/sessions/[^/]+/statements");
+    assertEquals("Bearer browser-token-92", submits.get(1).header("Authorization"));
+    assertEquals(3, submits.size());
   }
 
   @Test
