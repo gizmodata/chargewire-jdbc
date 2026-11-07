@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.6] - 2026-11-07
+
 ### Fixed
 
 - **A connection pool's new connections started a stopped server.** Every new connection signed in
