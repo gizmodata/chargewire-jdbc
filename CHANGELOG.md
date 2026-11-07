@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-11-06
+
 ### Fixed
 
 - **Closing a connection, statement or result near the end of its token's life signed in again
