@@ -2,6 +2,7 @@ package com.gizmodata.chargewire.jdbc;
 
 import static com.gizmodata.chargewire.jdbc.FakeChargewireServer.arrow;
 import static com.gizmodata.chargewire.jdbc.FakeChargewireServer.document;
+import static com.gizmodata.chargewire.jdbc.FakeChargewireServer.empty;
 import static com.gizmodata.chargewire.jdbc.FakeChargewireServer.json;
 import static com.gizmodata.chargewire.jdbc.FakeChargewireServer.problem;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -13,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.gizmodata.chargewire.jdbc.arrow.TestStreams;
+import com.gizmodata.chargewire.jdbc.client.ChargewireClient;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -192,6 +194,82 @@ class ClientBehaviourTest {
       statement.execute("SELECT 1");
     }
     assertTrue(server.tokens.get() >= 2, "renewed within 30 s of expiry: " + server.tokens.get());
+  }
+
+  @Test
+  void aStatementWithATokenDueForRenewalRenewsItFirst() throws Exception {
+    server.expiresIn = 1;
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) -> json(exchange, 200, updateDocument("q1", 0)));
+    try (Connection connection = connect("");
+        Statement statement = connection.createStatement()) {
+      int before = server.tokens.get();
+      statement.execute("SELECT 1");
+      assertEquals(before + 1, server.tokens.get(), "a statement still renews first");
+      assertEquals(
+          "Bearer t" + (before + 1),
+          server.requests("POST", "/v1/sessions/s1/statements").get(0).header("Authorization"));
+    }
+  }
+
+  @Test
+  void closesAndCancelsNeverSignInEvenWithATokenDueForRenewal() throws Exception {
+    // Within 30 s of expiry from the start: every request that does work signs in again first.
+    server.expiresIn = 1;
+    server.route("DELETE", "/v1/sessions/s1/.+", (exchange, request, path) -> empty(exchange, 204));
+    server.route(
+        "POST", "/v1/sessions/s1/.*cancel", (exchange, request, path) -> empty(exchange, 204));
+    Connection connection = connect("");
+    ChargewireClient client = ((ChargewireConnection) connection).client();
+    int signIns = server.tokens.get();
+    String held = "Bearer t" + signIns;
+    client.cancel("s1", "q1");
+    client.cancelSession("s1");
+    client.deleteStatement("s1", "q1");
+    client.closePrepared("s1", "p1");
+    connection.close();
+    // A sign-in to close something would start a stopped server behind a resume holder for nobody.
+    assertEquals(signIns, server.tokens.get(), "no sign-in to close or cancel");
+    assertEquals(signIns, server.requests("POST", "/v1/auth/token").size());
+    List<FakeChargewireServer.Request> cleanups = new ArrayList<>();
+    cleanups.addAll(server.requests("POST", "/v1/sessions/s1/.*cancel"));
+    cleanups.addAll(server.requests("DELETE", "/v1/sessions/s1(/.+)?"));
+    assertEquals(5, cleanups.size());
+    for (FakeChargewireServer.Request cleanup : cleanups) {
+      assertEquals(held, cleanup.header("Authorization"), cleanup.method + " " + cleanup.path);
+    }
+  }
+
+  @Test
+  void aCloseWhoseTokenIsRefusedIsDoneWithoutASignIn() throws Exception {
+    server.route(
+        "DELETE",
+        "/v1/sessions/s1(/.+)?",
+        (exchange, request, path) ->
+            problem(exchange, 401, "invalid_token", ",\"reason\":\"token_expired\""));
+    server.route(
+        "POST",
+        "/v1/sessions/s1/.*cancel",
+        (exchange, request, path) ->
+            problem(exchange, 401, "invalid_token", ",\"reason\":\"token_expired\""));
+    Connection connection = connect("");
+    ChargewireClient client = ((ChargewireConnection) connection).client();
+    // The session is gone with its token: there is nothing left to close.
+    client.deleteStatement("s1", "q1");
+    client.closePrepared("s1", "p1");
+    client.deleteSession("s1");
+    // A cancel reports the refusal (its callers ignore it), but does not sign in to repeat itself.
+    assertEquals(
+        "invalid_token",
+        ChargewireProblem.codeOf(
+            assertThrows(SQLException.class, () -> client.cancel("s1", "q1"))));
+    connection.close();
+    assertTrue(connection.isClosed());
+    assertEquals(1, server.tokens.get(), "only the connection's own sign-in");
+    assertEquals(4, server.requests("DELETE", "/v1/sessions/s1(/.+)?").size());
+    assertEquals(1, server.requests("POST", "/v1/sessions/s1/.*cancel").size());
   }
 
   @Test

@@ -21,11 +21,13 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * Sessions the server ends on its own while a transaction is open (spec §5.6, §5.7): the idle sweep
- * ({@code session_not_found}) and the idle-in-transaction limit ({@code session_ended}, reason
- * {@code idle_in_transaction}). The transaction's work is rolled back, so the statement that finds
- * the session gone must never run again on a new session in autocommit, where it would commit on
- * its own. Each test runs its own server with a one-second limit.
+ * Sessions the server ends on its own (spec §5.6, §5.7): the idle sweep and the idle-in-transaction
+ * limit. A session that held a transaction open ends with {@code session_ended}, reason {@code
+ * idle_in_transaction}, either way; one evicted without a transaction is gone ({@code
+ * session_not_found}), and the driver can't always tell whether it had one. The transaction's work
+ * is rolled back, so the statement that finds the session gone must never run again on a new
+ * session in autocommit, where it would commit on its own. Each test runs its own server with a
+ * one-second limit.
  */
 class IdleSessionsIT {
   /** A one-second limit, the server's sweep (every few seconds), and room to spare. */
@@ -125,21 +127,27 @@ class IdleSessionsIT {
 
       Thread.sleep(PAST_THE_LIMIT_MS);
 
-      SQLTransientConnectionException lost =
+      // The BEGIN came in SQL after the session was last read, so only the server knows a
+      // transaction was open: an evicted session that held one ends with idle_in_transaction
+      // (spec §5.7), and the statement is refused, not run alone on the new session.
+      SQLTransactionRollbackException lost =
           assertThrows(
-              SQLTransientConnectionException.class,
+              SQLTransactionRollbackException.class,
               () -> begun.execute("INSERT INTO evicted VALUES ('tx', 2)"));
-      assertEquals("08007", lost.getSQLState());
-      assertEquals("session_not_found", ChargewireProblem.codeOf(lost));
-      // The BEGIN came in SQL after the session was last read, so the driver can't tell a
-      // transaction was open; either way the statement is refused.
-      assertTrue(lost.getMessage().contains("was not run"), lost.getMessage());
+      assertEquals("40000", lost.getSQLState());
+      assertEquals("session_ended", ChargewireProblem.codeOf(lost));
+      assertEquals("idle_in_transaction", ChargewireProblem.of(lost).reason());
+      assertFalse(inTransaction.isClosed(), "the session is replaced, the connection stays open");
+
+      // No transaction was open here, so the server says only session_not_found; the driver
+      // can't tell whether one was, and refuses too.
 
       SQLTransientConnectionException unknown =
           assertThrows(
               SQLTransientConnectionException.class,
               () -> other.execute("INSERT INTO evicted VALUES ('unread', 1)"));
       assertEquals("08007", unknown.getSQLState());
+      assertEquals("session_not_found", ChargewireProblem.codeOf(unknown));
       assertTrue(unknown.getMessage().contains("cannot tell"), unknown.getMessage());
 
       String before = sessionOf(known);
