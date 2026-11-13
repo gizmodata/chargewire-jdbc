@@ -14,11 +14,16 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLInvalidAuthorizationSpecException;
 import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLWarning;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.logging.Logger;
 
 /**
@@ -80,9 +85,91 @@ public final class ChargewireDriver implements Driver {
       return null;
     }
     ChargewireUrl parsed = ChargewireUrl.parse(url);
+    List<String> foreign = unknownKeys(parsed, info);
     Map<String, String> properties = merge(parsed, info);
     ConnectionConfig config = config(parsed, properties);
-    return ChargewireConnection.open(config, url, properties);
+    ChargewireConnection connection = ChargewireConnection.open(config, url, properties);
+    for (String key : foreign) {
+      connection.addWarning(
+          new SQLWarning(
+              "The connection property '"
+                  + key
+                  + "' is not one of this driver's and was ignored (ChargewireProperty lists"
+                  + " them)",
+              "01S00"));
+    }
+    return connection;
+  }
+
+  /**
+   * Refuses keys the driver has no property for, so that a misspelled setting is never silently not
+   * applied: every such key in the URL, and in the {@code Properties} those that resemble one of
+   * the driver's or name TLS or signing in. Values are never part of the message: a misspelled
+   * {@code password} key holds a password.
+   *
+   * @return the other unknown keys of the {@code Properties}, which frameworks put there for
+   *     themselves: tolerated, and reported as warnings on the connection
+   * @throws SQLException (SQLSTATE 08001) for a refused key
+   */
+  static List<String> unknownKeys(ChargewireUrl url, Properties info) throws SQLException {
+    for (String lowerCaseKey : url.options.keySet()) {
+      if (ChargewireProperty.of(lowerCaseKey) == null) {
+        String key = url.writtenKeys.getOrDefault(lowerCaseKey, lowerCaseKey);
+        ChargewireProperty meant = ChargewireProperty.resembling(key);
+        throw unknown(
+            key,
+            "the URL",
+            meant != null
+                ? "did you mean '" + meant.key() + "'?"
+                : "the driver's properties are " + keys(List.of(ChargewireProperty.values())));
+      }
+    }
+    List<String> foreign = new ArrayList<>();
+    if (info != null) {
+      Set<String> keys = new TreeSet<>(info.stringPropertyNames());
+      for (Object key : info.keySet()) {
+        if (key != null) {
+          keys.add(key.toString());
+        }
+      }
+      for (String key : keys) {
+        if (ChargewireProperty.of(key) != null) {
+          continue;
+        }
+        ChargewireProperty meant = ChargewireProperty.resembling(key);
+        if (meant != null) {
+          throw unknown(
+              key,
+              "the connection's Properties",
+              "did you mean '"
+                  + meant.key()
+                  + "'? A key that resembles one of the driver's is refused rather than ignored");
+        }
+        if (ChargewireProperty.namesSecurity(key)) {
+          throw unknown(
+              key,
+              "the connection's Properties",
+              "it names TLS or signing in, so it is refused rather than ignored; the driver's"
+                  + " properties for those are "
+                  + keys(ChargewireProperty.SECURITY));
+        }
+        foreign.add(key);
+      }
+    }
+    return foreign;
+  }
+
+  private static String keys(List<ChargewireProperty> properties) {
+    StringBuilder keys = new StringBuilder();
+    for (ChargewireProperty property : properties) {
+      keys.append(keys.length() == 0 ? "" : ", ").append(property.key());
+    }
+    return keys.toString();
+  }
+
+  private static SQLException unknown(String key, String where, String hint) {
+    return new SQLNonTransientConnectionException(
+        "Unknown connection property '" + key + "' in " + where + ": " + hint, "08001");
   }
 
   @Override

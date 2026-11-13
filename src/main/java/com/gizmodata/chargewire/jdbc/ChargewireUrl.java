@@ -9,6 +9,8 @@ import java.sql.SQLNonTransientConnectionException;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * A parsed {@code jdbc:chargewire://host[:port][/catalog][?key=value&...][;key=value;...]} URL.
@@ -25,11 +27,20 @@ final class ChargewireUrl {
   final String catalog;
   final Map<String, String> options;
 
-  private ChargewireUrl(String host, int port, String catalog, Map<String, String> options) {
+  /** The option keys as they were written, by their lower-case form, for messages. */
+  final Map<String, String> writtenKeys;
+
+  private ChargewireUrl(
+      String host,
+      int port,
+      String catalog,
+      Map<String, String> options,
+      Map<String, String> writtenKeys) {
     this.host = host;
     this.port = port;
     this.catalog = catalog;
     this.options = options;
+    this.writtenKeys = writtenKeys;
   }
 
   static boolean accepts(String url) {
@@ -46,9 +57,10 @@ final class ChargewireUrl {
       throw invalid(url, "it must start with " + PREFIX + "//");
     }
     Map<String, String> options = new LinkedHashMap<>();
+    Map<String, String> writtenKeys = new LinkedHashMap<>();
     int semicolon = rest.indexOf(';');
     if (semicolon >= 0) {
-      parseOptions(url, rest.substring(semicolon + 1), ';', options);
+      parseOptions(url, rest.substring(semicolon + 1), ';', options, writtenKeys);
       rest = rest.substring(0, semicolon);
     }
     URI uri;
@@ -62,7 +74,7 @@ final class ChargewireUrl {
       throw invalid(url, "it has no host");
     }
     if (uri.getRawQuery() != null) {
-      parseOptions(url, uri.getRawQuery(), '&', options);
+      parseOptions(url, uri.getRawQuery(), '&', options, writtenKeys);
     }
     if (uri.getRawFragment() != null) {
       throw invalid(url, "it has a fragment ('#'); percent-encode '#' in option values");
@@ -81,11 +93,16 @@ final class ChargewireUrl {
     if (host.startsWith("[") && host.endsWith("]")) {
       host = host.substring(1, host.length() - 1);
     }
-    return new ChargewireUrl(host, uri.getPort(), catalog, options);
+    return new ChargewireUrl(host, uri.getPort(), catalog, options, writtenKeys);
   }
 
   private static void parseOptions(
-      String url, String text, char separator, Map<String, String> options) throws SQLException {
+      String url,
+      String text,
+      char separator,
+      Map<String, String> options,
+      Map<String, String> writtenKeys)
+      throws SQLException {
     for (String pair : text.split(separator == '&' ? "[&;]" : ";")) {
       if (pair.isEmpty()) {
         continue;
@@ -94,8 +111,10 @@ final class ChargewireUrl {
       if (equals <= 0) {
         throw invalid(url, "option '" + pair + "' is not key=value");
       }
-      String key = decode(pair.substring(0, equals)).toLowerCase(Locale.ROOT);
+      String written = decode(pair.substring(0, equals));
+      String key = written.toLowerCase(Locale.ROOT);
       options.put(key, decode(pair.substring(equals + 1)));
+      writtenKeys.put(key, written);
     }
   }
 
@@ -108,12 +127,32 @@ final class ChargewireUrl {
         "Invalid Chargewire URL '" + redact(url) + "': " + why, "08001");
   }
 
-  /** Hides password and token values, so a URL can appear in messages and logs. */
+  private static final Pattern OPTION = Pattern.compile("([?&;])([^=&;#]*)=([^&;#]*)");
+
+  /**
+   * Hides option values that may be secrets, so a URL can appear in messages and logs: passwords
+   * and tokens, and the value of every key the driver does not know (a misspelled {@code password}
+   * key holds a password all the same).
+   */
   static String redact(String url) {
     if (url == null) {
       return null;
     }
-    return url.replaceAll(
-        "(?i)((?:password|token|subjecttoken|truststorepassword)=)[^&;]*", "$1***");
+    Matcher option = OPTION.matcher(url);
+    StringBuilder redacted = new StringBuilder();
+    while (option.find()) {
+      String key = option.group(2);
+      try {
+        key = decode(key);
+      } catch (IllegalArgumentException e) {
+        // Not percent-encoding: no known key, so its value is hidden.
+      }
+      ChargewireProperty property = ChargewireProperty.of(key);
+      String value = property == null || property.secret() ? "***" : option.group(3);
+      option.appendReplacement(
+          redacted, Matcher.quoteReplacement(option.group(1) + option.group(2) + "=" + value));
+    }
+    option.appendTail(redacted);
+    return redacted.toString();
   }
 }

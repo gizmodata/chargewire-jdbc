@@ -136,6 +136,26 @@ For a local server without TLS, add `useEncryption=false`.
 
 `ChargewireDataSource` takes the same URL and properties.
 
+**A key the driver does not know is never ignored silently**, so a misspelled setting (a TLS one
+above all) can't quietly not apply:
+
+- In the URL, any unknown key fails the connection (`SQLNonTransientConnectionException`, SQLSTATE
+  `08001`), naming the key and the property it resembles: `Unknown connection property
+  'tlsRootCert' in the URL: did you mean 'tlsRootCerts'?`.
+- In the `Properties`, a key fails the connection the same way when it resembles one of the
+  driver's (other separators or case as in `tls_root_certs`, one or two letters off, a shortened
+  or lengthened form such as `clientCert` or `connectTimeoutMs`), or when it names TLS or signing
+  in in another driver's words (`sslmode`, `useSSL`, `trustServerCertificate`, `authMechanism`):
+  such a key was written to protect the connection, and this driver has its own properties for
+  that.
+- Any other unknown key in the `Properties` is left alone, because frameworks put keys of their
+  own there (Spark passes its read options such as `dbtable` and `fetchsize`, Hibernate its
+  `hibernate.connection.*` settings). The connection reports each as a warning
+  (`Connection.getWarnings()`, SQLSTATE `01S00`).
+
+Messages name keys, never values, and a URL in a message shows `***` for passwords, tokens and
+the value of every unknown key.
+
 ## 🧠 How statements run
 
 - **Streamed (the default).** One `POST` runs the statement and streams its result; statements

@@ -7,17 +7,21 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
 import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLWarning;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.ServiceLoader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** The driver's registration and URL handling (ported from {@code ArrowFlightJdbcDriverTest}). */
@@ -213,6 +217,173 @@ class ChargewireDriverTest {
             () -> new ChargewireDriver().connect("jdbc:chargewire://127.0.0.1:1?" + option, null));
     assertEquals("08001", error.getSQLState());
     assertTrue(error.getMessage().startsWith("Invalid value"), error.getMessage());
+  }
+
+  // ---- Keys the driver has no property for ----
+
+  /** Nothing listens on port 1, so an error other than the refusal would be a connect failure. */
+  private static SQLException connectError(String urlOptions, Properties info) {
+    return assertThrows(
+        SQLException.class,
+        () -> new ChargewireDriver().connect("jdbc:chargewire://127.0.0.1:1" + urlOptions, info));
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "?useEncrypton=false, useEncrypton, did you mean 'useEncryption'?",
+    "?useEncryption=false&tlsRootCert=/ca.pem, tlsRootCert, did you mean 'tlsRootCerts'?",
+    ";disableCertificateVerificaton=false, disableCertificateVerificaton,"
+        + " did you mean 'disableCertificateVerification'?",
+    "?use_system_trust_store=false, use_system_trust_store, did you mean 'useSystemTrustStore'?",
+    "?clientCert=/c.pem, clientCert, did you mean 'clientCertificate'?",
+    "?pasword=s3cr3t-value, pasword, did you mean 'password'?",
+    "?sslmode=verify-full, sslmode, the driver's properties are authType",
+    "/lake?applicationName=etl-s3cr3t-value, applicationName, the driver's properties are authType",
+  })
+  void anUnknownKeyInTheUrlFailsTheConnection(String options, String key, String hint) {
+    SQLException error = connectError(options, null);
+    assertInstanceOf(SQLNonTransientConnectionException.class, error);
+    assertEquals("08001", error.getSQLState());
+    assertTrue(
+        error
+            .getMessage()
+            .startsWith("Unknown connection property '" + key + "' in the URL: " + hint),
+        error.getMessage());
+    assertFalse(error.getMessage().contains("s3cr3t"), "no value in the message");
+    assertFalse(error.getMessage().contains("verify-full"), "no value in the message");
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "tlsRootCert, tlsRootCerts",
+    "TLS_ROOT_CERTS, tlsRootCerts",
+    "tls-root-certs, tlsRootCerts",
+    "useEncrypton, useEncryption",
+    "use.encryption, useEncryption",
+    "disableCertificateVerif, disableCertificateVerification",
+    "useSystemTruststore2, useSystemTrustStore",
+    "clientCert, clientCertificate",
+    "trustStorePass, trustStorePassword",
+    "passwd, password",
+    "pasword, password",
+    "usr, user",
+    "subject_token, subjectToken",
+    "connectTimeoutMs, connectTimeout",
+    "catalogName, catalog",
+    "authtyp, authType",
+  })
+  void aMisspelledKeyInThePropertiesFailsTheConnection(String key, String meant) {
+    Properties info = new Properties();
+    info.setProperty("user", "joe");
+    info.setProperty(key, "s3cr3t-value");
+    SQLException error = connectError("?useEncryption=false", info);
+    assertInstanceOf(SQLNonTransientConnectionException.class, error);
+    assertEquals("08001", error.getSQLState());
+    assertEquals(
+        "Unknown connection property '"
+            + key
+            + "' in the connection's Properties: did you mean '"
+            + meant
+            + "'? A key that resembles one of the driver's is refused rather than ignored",
+        error.getMessage());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "sslmode",
+        "ssl",
+        "useSSL",
+        "sslrootcert",
+        "trustServerCertificate",
+        "encrypt",
+        "verifyServerCertificate",
+        "authMechanism",
+        "javax.net.ssl.trustStore",
+        "accessToken",
+        "client_secret"
+      })
+  void anotherDriversSecurityKeyInThePropertiesFailsTheConnection(String key) {
+    Properties info = new Properties();
+    info.put(key, "s3cr3t-value");
+    SQLException error = connectError("?useEncryption=false", info);
+    assertEquals("08001", error.getSQLState());
+    assertEquals(
+        "Unknown connection property '"
+            + key
+            + "' in the connection's Properties: it names TLS or signing in, so it is refused"
+            + " rather than ignored; the driver's properties for those are authType, user,"
+            + " password, token, subjectToken, useEncryption, disableCertificateVerification,"
+            + " useSystemTrustStore, tlsRootCerts, trustStore, trustStorePassword,"
+            + " clientCertificate, clientKey",
+        error.getMessage());
+  }
+
+  /** What Spark, Hibernate and tools put in the Properties for themselves is left alone. */
+  @Test
+  void foreignKeysInThePropertiesAreToleratedAndReported() throws Exception {
+    List<String> foreign =
+        List.of(
+            "ApplicationName",
+            "dbtable",
+            "driver",
+            "fetchsize",
+            "isolationLevel",
+            "keytab",
+            "numPartitions",
+            "partitionColumn",
+            "pool_size",
+            "principal",
+            "pushDownPredicate",
+            "queryTimeout",
+            "sessionInitStatement",
+            "url",
+            "username");
+    Properties info = new Properties();
+    for (String key : foreign) {
+      info.setProperty(key, "x");
+    }
+    info.put("customSchema", 5);
+    info.setProperty("USER", "joe");
+    info.setProperty("resultpartitions", "4");
+    List<String> expected = new java.util.ArrayList<>(foreign);
+    expected.add("customSchema");
+    java.util.Collections.sort(expected);
+    assertEquals(
+        expected,
+        ChargewireDriver.unknownKeys(ChargewireUrl.parse("jdbc:chargewire://h:1/lake"), info));
+    try (FakeChargewireServer server = new FakeChargewireServer();
+        Connection connection = DriverManager.getConnection(server.url(""), info)) {
+      List<String> warned = new java.util.ArrayList<>();
+      for (SQLWarning warning = connection.getWarnings();
+          warning != null;
+          warning = warning.getNextWarning()) {
+        assertEquals("01S00", warning.getSQLState());
+        assertTrue(warning.getMessage().endsWith("was ignored (ChargewireProperty lists them)"));
+        warned.add(warning.getMessage().split("'")[1]);
+      }
+      assertEquals(expected, warned);
+    }
+    // And none for a connection that gave only the driver's own.
+    Properties own = new Properties();
+    own.setProperty("connectTimeout", "5000");
+    try (FakeChargewireServer server = new FakeChargewireServer();
+        Connection connection = DriverManager.getConnection(server.url("async=true"), own)) {
+      assertNull(connection.getWarnings());
+    }
+  }
+
+  @Test
+  void redactionHidesTheValuesOfUnknownKeys() {
+    assertEquals(
+        "jdbc:chargewire://h:1/lake?pasword=***&useEncryption=false;sslmode=***;user=joe",
+        ChargewireUrl.redact(
+            "jdbc:chargewire://h:1/lake?pasword=s3cr3t&useEncryption=false;sslmode=x;user=joe"));
+    SQLException error =
+        assertThrows(
+            SQLException.class,
+            () -> ChargewireUrl.parse("jdbc:chargewire://h:1?pasword=s3cr3t#fragment"));
+    assertFalse(error.getMessage().contains("s3cr3t"), error.getMessage());
   }
 
   @Test

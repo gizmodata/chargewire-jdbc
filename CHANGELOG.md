@@ -46,7 +46,27 @@ All notable changes to this project are documented here. The format follows
   server was not affected (it takes the server's answer after each setting), and the session
   that replaces a lost one opens where the lost one was, for either order.
 
+- **A connection property the driver does not know was ignored without a word**, in the URL and
+  in the `Properties`, so a misspelled setting silently did not apply: `tlsRootCert=…`,
+  `useSystemTruststore=false` or `clientCert=…` left the connection with the defaults its author
+  meant to change. Now (README, "Properties"):
+  - an unknown key in the URL fails the connection (`SQLNonTransientConnectionException`, SQLSTATE
+    `08001`), naming the key and the property it resembles;
+  - an unknown key in the `Properties` fails the connection the same way when it resembles one of
+    the driver's (`tls_root_certs`, `tlsRootCert`, `clientCert`, `connectTimeoutMs`) or names TLS
+    or signing in in another driver's words (`sslmode`, `useSSL`, `trustServerCertificate`);
+  - any other unknown key in the `Properties` still connects, since frameworks put their own keys
+    there (Spark's `dbtable`, `fetchsize`; Hibernate's `hibernate.connection.*`), and is reported
+    as a warning on the connection (SQLSTATE `01S00`).
+
+  Messages name keys, never values. A URL shown in an error now hides the value of every unknown
+  key as well as passwords and tokens (a misspelled `pasword=` holds a password).
+
 ### Changed
+
+- **Connection strings that connected before and now fail** (see the fix above): a URL with a
+  key that is not a driver property (it was ignored), and `Properties` with a key that resembles
+  a driver property or names TLS or signing in. Remove the key, or spell it as the error says.
 
 What an application can see of the first fix above, beyond the corrected instant, when a
 parameter is typed `TIMESTAMP WITH TIME ZONE`:

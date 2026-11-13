@@ -238,6 +238,62 @@ class ConnectionIT {
   }
 
   /**
+   * A key the driver has no property for is never silently ignored: refused in the URL, and in the
+   * Properties when it resembles one of the driver's or names TLS or signing in; anything else in
+   * the Properties (frameworks put their own there) connects, with a warning.
+   */
+  @Test
+  void unknownConnectionPropertiesAreRefusedOrReported() throws SQLException {
+    ChargewireServer server = SharedServer.get();
+    SQLException inUrl =
+        assertThrows(SQLException.class, () -> SharedServer.connect("resultPartition=4"));
+    assertEquals("08001", inUrl.getSQLState());
+    assertEquals(
+        "Unknown connection property 'resultPartition' in the URL: did you mean"
+            + " 'resultPartitions'?",
+        inUrl.getMessage());
+
+    Properties misspelled = new Properties();
+    misspelled.setProperty("tlsRootCert", "/etc/ssl/ca.pem");
+    SQLException inProperties =
+        assertThrows(SQLException.class, () -> SharedServer.connect(misspelled));
+    assertEquals("08001", inProperties.getSQLState());
+    assertTrue(
+        inProperties.getMessage().contains("did you mean 'tlsRootCerts'?"),
+        inProperties.getMessage());
+    assertTrue(!inProperties.getMessage().contains("/etc/ssl"), "no value in the message");
+
+    Properties anotherDrivers = new Properties();
+    anotherDrivers.setProperty("sslmode", "verify-full");
+    SQLException security =
+        assertThrows(SQLException.class, () -> SharedServer.connect(anotherDrivers));
+    assertEquals("08001", security.getSQLState());
+    assertTrue(security.getMessage().contains("it names TLS or signing in"), security.getMessage());
+
+    Properties foreign = new Properties();
+    foreign.setProperty("ApplicationName", "etl");
+    foreign.setProperty("fetchsize", "1000");
+    try (Connection connection = SharedServer.connect(foreign);
+        Statement statement = connection.createStatement();
+        ResultSet rows = statement.executeQuery("SELECT 42")) {
+      assertTrue(rows.next());
+      java.sql.SQLWarning warning = connection.getWarnings();
+      assertNotNull(warning);
+      assertEquals("01S00", warning.getSQLState());
+      assertEquals(
+          "The connection property 'ApplicationName' is not one of this driver's and was ignored"
+              + " (ChargewireProperty lists them)",
+          warning.getMessage());
+      assertTrue(warning.getNextWarning().getMessage().contains("'fetchsize'"));
+      assertNull(warning.getNextWarning().getNextWarning());
+    }
+    try (Connection connection =
+        DriverManager.getConnection(server.url("resultPartitions=4"), server.properties())) {
+      assertNull(connection.getWarnings(), "the driver's own properties raise none");
+    }
+  }
+
+  /**
    * A catalog and a schema given together must both land: the schema is one of that catalog, so the
    * catalog has to be applied first. Whether it is must not depend on the order the options were
    * written in, nor on chance (the Go driver applied them in a map's random order, and failed about
