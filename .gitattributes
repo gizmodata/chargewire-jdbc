@@ -1,0 +1,4 @@
+# Third-party licence texts go into the jar byte for byte as their components distribute them
+# (SLF4J's has CRLF line endings), and ThirdPartyNoticesTest compares them with the components'
+# jars: git must not convert their line endings.
+src/main/resources/META-INF/licenses/** -text

@@ -139,6 +139,13 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       UPLOAD: ${{ needs.preflight.outputs.upload }}
       AUTO_PUBLISH: ${{ needs.preflight.outputs.auto_publish }}
+      # dev/check-central-bundle.sh: the licence texts the jar must carry for what it bundles
+      # (JarLicensesIT checks them against the jar's contents; this is the uploaded copy).
+      CENTRAL_BUNDLE_LICENSES: >-
+        META-INF/THIRD-PARTY-NOTICES.txt
+        META-INF/licenses/slf4j/LICENSE.txt
+        META-INF/licenses/zstd-jni/LICENSE
+        META-INF/licenses/zstd/LICENSE
     steps:
       - uses: actions/checkout@v7
         with:

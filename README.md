@@ -596,6 +596,18 @@ USER_MANAGED (`-Dcentral.autoPublish=true` publishes as soon as it validates), a
 
 [Apache License 2.0](LICENSE).
 
+The jar is standalone, so it carries the licences of what it contains: `META-INF/LICENSE` (the
+Apache License 2.0, this driver's and that of Arrow, Jackson, Commons and FlatBuffers),
+`META-INF/NOTICE` (this driver's notice, then each component's own, word for word),
+`META-INF/THIRD-PARTY-NOTICES.txt` (every component with its version and licence) and
+`META-INF/licenses/` (SLF4J's MIT licence, zstd-jni's BSD-2-Clause and Zstandard's BSD-3-Clause).
+The build keeps them true: `ThirdPartyNoticesTest` compares them with the jars Maven resolves (the
+version listed, each component's notice, each licence text), `JarLicensesIT` checks that the list
+names exactly the components in the built jar, and the release checks the uploaded jar has the
+files. After changing a dependency, update
+[`THIRD-PARTY-NOTICES.txt`](src/main/resources/META-INF/THIRD-PARTY-NOTICES.txt) and
+[`src/main/legal/NOTICE`](src/main/legal/NOTICE) as those tests say.
+
 ---
 
 <p align="center">

@@ -81,6 +81,17 @@ All notable changes to this project are documented here. The format follows
   parameter stored the text's bytes as bits (`'10101'` became 40 bits) without an error. Each now
   takes what `getObject` returns for it, and stores it exactly.
 
+- **The jar lacked licence texts for what it bundles.** It had no Apache License 2.0 text at all
+  (its own licence, and that of Arrow, Jackson, Commons and FlatBuffers inside it), none for
+  SLF4J (MIT) or for zstd-jni and the Zstandard library in it (BSD-2-Clause and BSD-3-Clause),
+  which those licences require of a binary redistribution, and its NOTICE was a machine merge of
+  the components' notices, headed "in this case for" no product and without this driver's own. The
+  jar now has `META-INF/LICENSE`, a `META-INF/NOTICE` that is this driver's notice followed by each
+  component's own, `META-INF/THIRD-PARTY-NOTICES.txt` listing every component with its version and
+  licence, and the other licence texts under `META-INF/licenses/`, for the exact versions bundled:
+  the build fails when the list, a notice or a licence text no longer matches the jars it
+  resolves, or the list no longer matches the built jar.
+
 ### Added
 
 - **`arrowLosslessConversion`** (default `true`): on a DuckDB server (Hardcharger,
