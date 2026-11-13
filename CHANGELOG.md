@@ -64,6 +64,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **`Connection.setReadOnly(true)` says that it enforces nothing.** It was, and is, a hint: the
+  driver keeps the value and the session still runs any statement its user may run, because
+  Chargewire has no read-only session to switch to. The first `setReadOnly(true)` on a connection
+  now adds a warning (`getWarnings()`, SQLSTATE `01000`) that says so and names what does refuse
+  writes (a read-only user, a server started read-only, `BEGIN TRANSACTION READ ONLY`), and the
+  README has a section on it. Nothing else changes: no request is sent, and no statement is
+  refused.
 - **Connection strings that connected before and now fail** (see the fix above): a URL with a
   key that is not a driver property (it was ignored), and `Properties` with a key that resembles
   a driver property or names TLS or signing in. Remove the key, or spell it as the error says.

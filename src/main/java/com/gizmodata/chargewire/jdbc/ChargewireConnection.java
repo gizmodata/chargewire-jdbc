@@ -180,6 +180,10 @@ public final class ChargewireConnection implements Connection {
   private volatile boolean released;
   private volatile boolean ended;
   private boolean readOnly;
+
+  /** Whether this connection has said, in a warning, that {@link #setReadOnly} enforces nothing. */
+  private boolean readOnlyWarned;
+
   private int transactionIsolation = TRANSACTION_READ_COMMITTED;
   private int holdability = ResultSet.HOLD_CURSORS_OVER_COMMIT;
   private Map<String, Class<?>> typeMap = new HashMap<>();
@@ -986,11 +990,34 @@ public final class ChargewireConnection implements Connection {
     return schema;
   }
 
-  /** {@inheritDoc} A hint only: read-only is the server's and the principal's to decide. */
+  /**
+   * {@inheritDoc}
+   *
+   * <p>A hint only, which JDBC allows it to be: the driver keeps the value for {@link
+   * #isReadOnly()} and sends nothing, and the session still runs any statement its user may run.
+   * Chargewire has no read-only session to switch to (spec §5.3 has no such option), and the driver
+   * cannot build one from what servers have: a DuckDB server refuses writes inside {@code BEGIN
+   * TRANSACTION READ ONLY}, but the server begins a session's transactions itself, with autocommit
+   * on and off. The first {@code setReadOnly(true)} on a connection says so in a warning ({@link
+   * #getWarnings()}), so the hint is not mistaken for protection. What does refuse writes: a user
+   * the server gives read-only access, a server started read-only, or SQL run between {@code BEGIN
+   * TRANSACTION READ ONLY} and {@code COMMIT}.
+   */
   @Override
   public void setReadOnly(boolean readOnly) throws SQLException {
     checkOpen();
     this.readOnly = readOnly;
+    if (readOnly && !readOnlyWarned) {
+      readOnlyWarned = true;
+      addWarning(
+          new SQLWarning(
+              "setReadOnly(true) is a hint this driver cannot enforce: Chargewire has no"
+                  + " read-only session, so this connection still runs any statement its user"
+                  + " may run. To have writes refused, connect as a user with read-only access,"
+                  + " use a server started read-only, or run the statements between BEGIN"
+                  + " TRANSACTION READ ONLY and COMMIT",
+              "01000"));
+    }
   }
 
   @Override

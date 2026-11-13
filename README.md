@@ -397,6 +397,24 @@ application only after `resumeTimeout` (see [A server that is resuming](#-a-serv
 
 No JVM options are needed. Keep DBeaver's default of a separate connection for metadata reads.
 
+## 🔒 Read-only connections
+
+`Connection.setReadOnly(true)` is a hint, as JDBC allows: the driver keeps the value for
+`isReadOnly()` and sends nothing, and the session still runs any statement its user may run. The
+first `setReadOnly(true)` on a connection adds a warning (`getWarnings()`, SQLSTATE `01000`) that
+says so. The protocol has no read-only session for the driver to switch to (a session's options
+are its catalog, schema and autocommit), and the driver cannot make one: a DuckDB server refuses
+writes inside `BEGIN TRANSACTION READ ONLY`, but the server begins a session's transactions
+itself, with autocommit on and with it off, so there is no transaction for the driver to mark.
+
+To have writes refused, use one of the things a server does enforce:
+
+- a user or token the server gives read-only access (on Hardcharger, the `readonly` role);
+- a server started read-only (Hardcharger: `--read-only`), which
+  `DatabaseMetaData.isReadOnly()` then reports;
+- on a DuckDB server, SQL between `BEGIN TRANSACTION READ ONLY` and `COMMIT`: a write inside it
+  fails with `Cannot write to database … transaction is launched in read-only mode`.
+
 ## 🚫 Not supported
 
 Generated keys (use `INSERT ... RETURNING`), savepoints, stored procedure calls, scrollable or

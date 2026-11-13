@@ -1,6 +1,7 @@
 package com.gizmodata.chargewire.jdbc.it;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -450,6 +451,59 @@ class ConnectionIT {
       assertEquals("tests", connection.getClientInfo().getProperty("ApplicationName"));
       connection.setReadOnly(true);
       assertTrue(connection.isReadOnly());
+    }
+  }
+
+  /**
+   * {@code setReadOnly(true)} is a hint: the session still writes, and the connection says so in a
+   * warning, once. What the server does enforce is a read-only transaction begun in SQL. If a later
+   * server offers a read-only session and the driver uses it, this test is the one to change.
+   */
+  @Test
+  void setReadOnlyIsAHintAndSaysSo() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      assertFalse(connection.isReadOnly());
+      assertNull(connection.getWarnings());
+      connection.setReadOnly(true);
+      assertTrue(connection.isReadOnly());
+      java.sql.SQLWarning warning = connection.getWarnings();
+      assertNotNull(warning);
+      assertEquals("01000", warning.getSQLState());
+      assertEquals(
+          "setReadOnly(true) is a hint this driver cannot enforce: Chargewire has no read-only"
+              + " session, so this connection still runs any statement its user may run. To have"
+              + " writes refused, connect as a user with read-only access, use a server started"
+              + " read-only, or run the statements between BEGIN TRANSACTION READ ONLY and COMMIT",
+          warning.getMessage());
+      // Not enforced: a write goes through.
+      statement.execute("CREATE OR REPLACE TABLE read_only_hint (i INTEGER)");
+      assertEquals(1, statement.executeUpdate("INSERT INTO read_only_hint VALUES (1)"));
+      // Said once per connection, however often a pool sets it.
+      connection.setReadOnly(false);
+      assertFalse(connection.isReadOnly());
+      connection.setReadOnly(true);
+      connection.setReadOnly(true);
+      assertNull(connection.getWarnings().getNextWarning());
+      // What the server enforces: a read-only transaction begun in SQL.
+      statement.execute("BEGIN TRANSACTION READ ONLY");
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_hint")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+      }
+      SQLException refused =
+          assertThrows(
+              SQLException.class,
+              () -> statement.executeUpdate("INSERT INTO read_only_hint VALUES (2)"));
+      assertTrue(
+          refused.getMessage().contains("transaction is launched in read-only mode"),
+          refused.getMessage());
+      statement.execute("ROLLBACK");
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_hint")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1), "the refused write left nothing");
+      }
+      statement.execute("DROP TABLE read_only_hint");
     }
   }
 
