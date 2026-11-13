@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-13
+
+**This release changes behaviour that an application written for 2.2.6 can depend on.** Each
+item is under "Changed" below, with what it was and what it is:
+
+- **Exact DuckDB types are on by default.** `getObject` and all three kinds of metadata change
+  for UUID, TIME WITH TIME ZONE, HUGEINT, UHUGEINT, BIT, BIGNUM, VARIANT and JSON.
+  `arrowLosslessConversion=false` keeps what 2.2.6 returned, except for BIGNUM and VARIANT.
+- **Connection strings that connected can now fail:** a URL with a key the driver does not know
+  or with `user:password@` before the host, and `Properties` with a key that resembles one of the
+  driver's or names TLS or signing in.
+- **Parameters typed `TIMESTAMP WITH TIME ZONE`** take a value without a zone as the session
+  reads the same literal (the fix), which also changes `setDate` without a `Calendar` and
+  `setObject` with a target type.
+- **A parameter is the value it had when its setter was called**, and **a batch may take more
+  than one request**; a failed batch reports the entries applied before the failing request.
+- **Text:** a nested `TIMESTAMP WITH TIME ZONE` in `getString` of a list, struct or map, and
+  three connection error messages, which no longer quote values.
+- **`setReadOnly(true)` adds a warning** that it enforces nothing.
+
 ### Fixed
 
 - **A value without a time zone bound to a `TIMESTAMP WITH TIME ZONE` parameter was read in the
@@ -227,6 +247,10 @@ Everything here is something an application written for 2.2.6 can notice.
   struct or map shows it as `"2026-01-15 17:30:00+05:30"` (the session's wall clock and offset)
   where it showed `"2026-01-15 07:00:00.0"` (the JVM zone's wall clock). A timestamp without a zone
   inside a list keeps its text (`"2026-01-15 12:00:00.0"`).
+- **A parameter is the value it had when its setter was called** (see the fix above). Code that
+  set a parameter from a `Timestamp`, `Date`, `Calendar`, array or `List`, changed that object and
+  then executed had the changed value sent; it now has the value as it was set, and must call the
+  setter again to send another.
 - **A batch may take more than one request** (see the fix above): for a parameter the server
   gives no type, a `TIMESTAMP WITH TIME ZONE` or a time of day, when the rows differ in form (an
   `Instant` in one row and a `LocalDateTime` in the next; an `Integer` and a `String` for an
