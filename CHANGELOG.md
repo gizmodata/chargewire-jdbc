@@ -103,6 +103,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+Everything here is something an application written for 2.2.6 can notice.
+
 - **What `getObject` and the metadata return for some DuckDB types, now that the driver asks for
   the exact types.** Before and after, for a connection that set nothing (set
   `arrowLosslessConversion=false` to keep the "before" column, except for BIGNUM and VARIANT,
@@ -132,25 +134,28 @@ All notable changes to this project are documented here. The format follows
   key that is not a driver property (it was ignored), and `Properties` with a key that resembles
   a driver property or names TLS or signing in. Remove the key, or spell it as the error says.
 
-What an application can see of the first fix above, beyond the corrected instant, when a
-parameter is typed `TIMESTAMP WITH TIME ZONE`:
+- **Parameters typed `TIMESTAMP WITH TIME ZONE`**: what an application can see of the first fix
+  above, beyond the corrected instant:
 
-- `setDate(index, date)` without a `Calendar` is that calendar date at midnight in the session's
-  zone, as `DATE '…'` is (before: midnight in the JVM's zone). With a `Calendar` it is still
-  midnight in the `Calendar`'s zone.
-- `setObject(index, value, Types.TIMESTAMP)` with an `Instant`, `OffsetDateTime`, `ZonedDateTime`
-  or `Calendar` stores that instant (before: the value's own wall clock, read in the JVM's zone).
-- `setObject(index, value, Types.TIMESTAMP_WITH_TIMEZONE)` with a `LocalDateTime`, a `LocalDate`,
-  a `java.sql.Date` or text without an offset keeps the value without a zone (before: an instant
-  made with the JVM's zone). For a parameter whose type the server does not know, the value is
-  therefore sent as a `TIMESTAMP` or `DATE` (before: a `TIMESTAMP WITH TIME ZONE`), and a
-  `TIMESTAMP` parameter stores the wall clock as given (before: shifted by the JVM's offset).
-- Text without an offset is read by the server, so every form it reads in a literal works
-  (`2026-01-15`, `2026-01-15 12:00:00+05`, `2026-01-15 12:00:00 America/New_York`), and text it
-  cannot read fails with the server's conversion error (before: only ISO date-times, and SQLSTATE
-  `22018` from the driver).
-- `setTime` and a `java.sql.Time` are refused with SQLSTATE `22018`, as a `LocalTime` already was
-  (before: stored as that time of day on 1970-01-01 in the JVM's zone).
+  - `setDate(index, date)` without a `Calendar` is that calendar date at midnight in the session's
+    zone, as `DATE '…'` is (before: midnight in the JVM's zone). With a `Calendar` it is still
+    midnight in the `Calendar`'s zone.
+  - `setObject(index, value, Types.TIMESTAMP)` with an `Instant`, `OffsetDateTime`, `ZonedDateTime`
+    or `Calendar` stores that instant (before: the value's own wall clock, read in the JVM's zone).
+  - `setObject(index, value, Types.TIMESTAMP_WITH_TIMEZONE)` with a `LocalDateTime`, a `LocalDate`,
+    a `java.sql.Date` or text without an offset keeps the value without a zone (before: an instant
+    made with the JVM's zone). For a parameter whose type the server does not know, the value is
+    therefore sent as a `TIMESTAMP` or `DATE` (before: a `TIMESTAMP WITH TIME ZONE`), and a
+    `TIMESTAMP` parameter stores the wall clock as given (before: shifted by the JVM's offset).
+  - Text without an offset is read by the server, so every form it reads in a literal works
+    (`2026-01-15`, `2026-01-15 12:00:00+05`, `2026-01-15 12:00:00 America/New_York`), and text it
+    cannot read fails with the server's conversion error (before: only ISO date-times, and SQLSTATE
+    `22018` from the driver).
+  - `setTime` and a `java.sql.Time` are refused with SQLSTATE `22018`, as a `LocalTime` already was
+    (before: stored as that time of day on 1970-01-01 in the JVM's zone).
+- **A `TIMESTAMP WITH TIME ZONE` in a zone the JVM cannot resolve** (a name only a newer time zone
+  database has) refuses `LocalDateTime`, `LocalDate` and `LocalTime` with SQLSTATE `22009`
+  (before: UTC's wall clock). Its instant reads as before.
 
 ## [2.2.6] - 2026-11-07
 
