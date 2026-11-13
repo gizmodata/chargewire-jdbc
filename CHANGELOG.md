@@ -6,6 +6,46 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A value without a time zone bound to a `TIMESTAMP WITH TIME ZONE` parameter was read in the
+  JVM's default time zone instead of the session's, so filters matched the wrong rows without an
+  error.** `setObject` with a `LocalDateTime` or a `LocalDate`, `setDate`, and `setString` with
+  text that has no offset were converted to an instant inside the driver, with the JVM's zone. On
+  a connection whose session `TimeZone` differs from the JVM's (a server in another zone, or
+  `SET TimeZone`), `ts = ?` then meant another instant than `ts = TIMESTAMP '2026-01-01 00:00:00'`
+  in the same session: with the JVM at UTC and the session in `Asia/Kolkata`, five and a half hours
+  off. Such a value now travels without a zone (as a timestamp without a zone, a date, or text),
+  and the server converts it in the session's time zone when the statement runs, exactly as it
+  converts the literal, daylight-saving gaps and overlaps included; the JVM's zone plays no part.
+  Values that are points in time (`Instant`, `OffsetDateTime`, `ZonedDateTime`,
+  `java.sql.Timestamp` with or without a `Calendar`, `java.util.Date`, `Calendar`, text with an
+  offset) are stored as that instant, as before. Reading was already right: `LocalDateTime`,
+  `OffsetDateTime`, `ZonedDateTime` and `getString` show a `TIMESTAMP WITH TIME ZONE` in the
+  session's zone, and `getTimestamp` and `Instant` give the instant. See README, "Time zones".
+
+### Changed
+
+What an application can see of the fix above, beyond the corrected instant, when a parameter is
+typed `TIMESTAMP WITH TIME ZONE`:
+
+- `setDate(index, date)` without a `Calendar` is that calendar date at midnight in the session's
+  zone, as `DATE '…'` is (before: midnight in the JVM's zone). With a `Calendar` it is still
+  midnight in the `Calendar`'s zone.
+- `setObject(index, value, Types.TIMESTAMP)` with an `Instant`, `OffsetDateTime`, `ZonedDateTime`
+  or `Calendar` stores that instant (before: the value's own wall clock, read in the JVM's zone).
+- `setObject(index, value, Types.TIMESTAMP_WITH_TIMEZONE)` with a `LocalDateTime`, a `LocalDate`,
+  a `java.sql.Date` or text without an offset keeps the value without a zone (before: an instant
+  made with the JVM's zone). For a parameter whose type the server does not know, the value is
+  therefore sent as a `TIMESTAMP` or `DATE` (before: a `TIMESTAMP WITH TIME ZONE`), and a
+  `TIMESTAMP` parameter stores the wall clock as given (before: shifted by the JVM's offset).
+- Text without an offset is read by the server, so every form it reads in a literal works
+  (`2026-01-15`, `2026-01-15 12:00:00+05`, `2026-01-15 12:00:00 America/New_York`), and text it
+  cannot read fails with the server's conversion error (before: only ISO date-times, and SQLSTATE
+  `22018` from the driver).
+- `setTime` and a `java.sql.Time` are refused with SQLSTATE `22018`, as a `LocalTime` already was
+  (before: stored as that time of day on 1970-01-01 in the JVM's zone).
+
 ## [2.2.6] - 2026-11-07
 
 ### Fixed

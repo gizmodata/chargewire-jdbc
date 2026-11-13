@@ -330,13 +330,18 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
   // ---- Parameters ----
 
   private void set(int index, Object value, int sqlType, Calendar calendar) throws SQLException {
+    set(index, value, sqlType, calendar, value);
+  }
+
+  private void set(int index, Object value, int sqlType, Calendar calendar, Object source)
+      throws SQLException {
     checkOpen();
     if (index < 1 || index > parameters.length) {
       throw new SQLException(
           "Parameter " + index + " does not exist; the statement has " + parameters.length,
           "07009");
     }
-    parameters[index - 1] = new ParameterEncoder.Value(value, sqlType, calendar);
+    parameters[index - 1] = new ParameterEncoder.Value(value, sqlType, calendar, source);
   }
 
   private void set(int index, Object value) throws SQLException {
@@ -458,7 +463,7 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
   public void setObject(int index, Object x, int targetSqlType, int scaleOrLength)
       throws SQLException {
     Object value = x == null ? null : ParameterEncoder.coerce(x, targetSqlType, scaleOrLength);
-    set(index, value, targetSqlType, null);
+    set(index, value, targetSqlType, null, x);
   }
 
   @Override

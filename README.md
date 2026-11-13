@@ -310,6 +310,32 @@ zone), `BigInteger` and `UUID`. A timestamp without a time zone is a wall-clock 
 a `Calendar` never shifts it. Numbers that do not fit the requested type raise SQLSTATE `22003`
 rather than wrap around, and text that does not parse raises `22018`.
 
+### Time zones
+
+A `TIMESTAMP WITH TIME ZONE` is an instant. Reading one, `getTimestamp` (with or without a
+`Calendar`), `getObject(column, Instant.class)` and `getObject(column)` give that instant;
+`OffsetDateTime`, `ZonedDateTime`, `LocalDateTime` and `getString` show it in the session's time
+zone (the server's `TimeZone` setting, which it sends with the column), never the JVM's.
+
+A parameter the server types `TIMESTAMP WITH TIME ZONE` takes two kinds of value:
+
+| Value | Stored |
+|---|---|
+| `Instant`, `OffsetDateTime`, `ZonedDateTime`, `java.sql.Timestamp` (with or without a `Calendar`), `java.util.Date`, `Calendar`, text with an offset (`2026-01-02 03:04:05+01:00`) | That instant, whatever the session's or the JVM's zone |
+| `LocalDateTime`, `LocalDate`, `java.sql.Date`, text without an offset | What the same literal means in that session: the server reads it in the session's `TimeZone` when the statement runs, exactly as it reads `TIMESTAMP '2026-01-02 03:04:05'` or `DATE '2026-01-02'` in SQL text |
+| `java.sql.Date` with a `Calendar` | Midnight of that date in the `Calendar`'s zone |
+| `java.sql.Time`, `LocalTime` | Refused with SQLSTATE `22018`: a time of day has no date |
+
+A value without a zone is not converted in the driver: it travels as a timestamp without a zone, a
+date, or text, and the server converts it as it converts the literal, daylight-saving gaps and
+overlaps included. So `ts = ?` with a `LocalDateTime` finds the rows `ts = TIMESTAMP '…'` finds,
+whatever the JVM's default zone is. The target type of `setObject(index, value, type)` does not
+change this: `setObject(localDateTime, Types.TIMESTAMP_WITH_TIMEZONE)` still has no zone, and
+`setObject(offsetDateTime, Types.TIMESTAMP)` is still that instant for such a parameter. In a batch
+whose rows mix both kinds, each row keeps its own meaning. A `java.sql.Timestamp` is a point in
+time, as `new Timestamp(millis)` makes one and as `getTimestamp` returns one: to bind a wall clock,
+use `LocalDateTime` (`timestamp.toLocalDateTime()`).
+
 ## ⚠️ Errors
 
 Server errors are RFC 9457 problem documents. The driver raises the `SQLException` subclass that

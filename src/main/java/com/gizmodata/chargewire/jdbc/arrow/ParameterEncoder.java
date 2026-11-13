@@ -80,6 +80,14 @@ import org.apache.arrow.vector.types.pojo.Schema;
  * server declared no type (Arrow's null type), the type follows from the Java values, widened
  * across the rows of a batch, or from the {@link Types} hint of a {@code setNull}.
  *
+ * <p>A {@code TIMESTAMP WITH TIME ZONE} parameter takes a value that is a point in time ({@link
+ * Instant}, {@link OffsetDateTime}, {@link ZonedDateTime}, {@link Timestamp}, {@link
+ * java.util.Date}, {@link Calendar}, text with an offset) as that instant. A value without a zone
+ * ({@link LocalDateTime}, {@link LocalDate}, {@link java.sql.Date}, text without an offset) is not
+ * converted here: it travels in its own type (a timestamp without a zone, a date, text), and the
+ * server reads it in the session's time zone, exactly as it reads the same literal in SQL text. The
+ * JVM's default zone plays no part in it.
+ *
  * <p>Internal API.
  */
 public final class ParameterEncoder {
@@ -97,6 +105,9 @@ public final class ParameterEncoder {
     final int sqlType;
     final Calendar calendar;
 
+    /** The value as the application gave it, before {@link #coerce} converted it. */
+    final Object source;
+
     /**
      * Creates a bound value.
      *
@@ -105,9 +116,24 @@ public final class ParameterEncoder {
      * @param calendar the zone for wall-clock values, or {@code null}
      */
     public Value(Object value, int sqlType, Calendar calendar) {
+      this(value, sqlType, calendar, value);
+    }
+
+    /**
+     * Creates a bound value that {@link #coerce} converted to its {@link Types} hint.
+     *
+     * @param value the converted value, or {@code null}
+     * @param sqlType the {@link Types} hint, or {@link #NO_TYPE}
+     * @param calendar the zone for wall-clock values, or {@code null}
+     * @param source the value before the conversion: a point in time converted to a {@code
+     *     TIMESTAMP}'s wall clock is still sent as that instant to a parameter the server types
+     *     {@code TIMESTAMP WITH TIME ZONE}
+     */
+    public Value(Object value, int sqlType, Calendar calendar, Object source) {
       this.value = value;
       this.sqlType = sqlType;
       this.calendar = calendar;
+      this.source = source;
     }
 
     /**
@@ -141,16 +167,21 @@ public final class ParameterEncoder {
           declaredField != null && !(declaredField.getType() instanceof ArrowType.Null)
               ? declaredField.getType()
               : null;
-      fields.add(type != null ? declaredField : inferField(name, rows, c));
+      fields.add(
+          type != null ? sentField(declaredField, column(rows, c)) : inferField(name, rows, c));
     }
     try (VectorSchemaRoot root = VectorSchemaRoot.create(new Schema(fields), allocator)) {
       root.allocateNew();
       for (int c = 0; c < columns; c++) {
         FieldVector vector = root.getVector(c);
+        Field declaredField =
+            declared != null && c < declared.getFields().size()
+                ? declared.getFields().get(c)
+                : null;
         for (int r = 0; r < rows.size(); r++) {
           Value value = rows.get(r)[c];
           try {
-            set(vector, r, value.value, value.calendar);
+            set(vector, r, sent(declaredField, value), value.calendar, declaredField);
           } catch (SQLException e) {
             throw new SQLDataException(
                 "Parameter "
@@ -224,9 +255,33 @@ public final class ParameterEncoder {
       case Types.TIMESTAMP:
         return toLocalDateTime(value, null, "TIMESTAMP");
       case Types.TIMESTAMP_WITH_TIMEZONE:
-        return toInstant(value, null, true);
+        return toZoned(value);
       default:
         return value;
+    }
+  }
+
+  /**
+   * The form of a value for a {@code TIMESTAMP WITH TIME ZONE}: a point in time as an {@link
+   * Instant}; a value without a zone stays without one ({@link LocalDateTime}, {@link LocalDate},
+   * or its text), for the server to read in the session's time zone.
+   */
+  private static Object toZoned(Object value) throws SQLException {
+    switch (zonedKind(value, null)) {
+      case DATE:
+        return toDate(value, null);
+      case DATE_TIME:
+        return value;
+      case TEXT:
+        String text = value.toString().trim();
+        try {
+          return LocalDateTime.parse(text.replace(' ', 'T'));
+        } catch (DateTimeParseException e) {
+          // Not ISO: the server reads the text, as it reads a literal.
+          return text;
+        }
+      default:
+        return toInstant(value, null, true);
     }
   }
 
@@ -450,9 +505,231 @@ public final class ParameterEncoder {
     return SqlTypes.columnSize(type);
   }
 
+  // ---- Parameters the server types TIMESTAMP WITH TIME ZONE ----
+
+  /** What a value bound to a {@code TIMESTAMP WITH TIME ZONE} parameter is. */
+  private enum Zoned {
+    /** A point in time: sent as that instant. */
+    INSTANT,
+    /** A date without a zone: the server takes its midnight in the session's time zone. */
+    DATE,
+    /** A date and time without a zone: the server reads it in the session's time zone. */
+    DATE_TIME,
+    /** Text without an offset the driver can read: the server reads it, as it reads a literal. */
+    TEXT,
+    /** Anything else: the declared type's own conversion refuses it. */
+    OTHER
+  }
+
+  private static boolean isZoned(ArrowType type) {
+    return type instanceof ArrowType.Timestamp
+        && ((ArrowType.Timestamp) type).getTimezone() != null;
+  }
+
+  /**
+   * Classifies a value for a {@code TIMESTAMP WITH TIME ZONE} parameter. A {@link Timestamp} is the
+   * instant it wraps, as in {@code new Timestamp(millis)} and as {@code getTimestamp} returns one
+   * for such a column; a {@link java.sql.Date} is a calendar date, unless a {@link Calendar} names
+   * the zone whose midnight is meant.
+   */
+  private static Zoned zonedKind(Object value, Calendar calendar) {
+    if (value instanceof Instant
+        || value instanceof OffsetDateTime
+        || value instanceof ZonedDateTime
+        || value instanceof Timestamp
+        || value instanceof Calendar) {
+      return Zoned.INSTANT;
+    }
+    if (value instanceof java.sql.Date) {
+      return calendar == null ? Zoned.DATE : Zoned.INSTANT;
+    }
+    if (value instanceof Time) {
+      return Zoned.OTHER;
+    }
+    if (value instanceof java.util.Date) {
+      return Zoned.INSTANT;
+    }
+    if (value instanceof LocalDate) {
+      return Zoned.DATE;
+    }
+    if (value instanceof LocalDateTime) {
+      return Zoned.DATE_TIME;
+    }
+    if (value instanceof String || value instanceof Character) {
+      return offsetText(value.toString()) != null ? Zoned.INSTANT : Zoned.TEXT;
+    }
+    return Zoned.OTHER;
+  }
+
+  /**
+   * The instant of ISO text with an offset ({@code 2026-01-02T03:04:05+01:00}), or {@code null}.
+   */
+  private static Instant offsetText(String text) {
+    try {
+      return OffsetDateTime.parse(text.trim().replace(' ', 'T')).toInstant();
+    } catch (DateTimeParseException e) {
+      return null;
+    }
+  }
+
+  private static List<Value> column(List<Value[]> rows, int column) {
+    List<Value> values = new ArrayList<>(rows.size());
+    for (Value[] row : rows) {
+      values.add(row[column]);
+    }
+    return values;
+  }
+
+  private static Field child(Field field) {
+    return field == null || field.getChildren().isEmpty() ? null : field.getChildren().get(0);
+  }
+
+  /**
+   * The value to send for a declared field: for a {@code TIMESTAMP WITH TIME ZONE} parameter, a
+   * point in time that {@code setObject(…, Types.TIMESTAMP)} converted to a wall clock is sent as
+   * the instant it was.
+   */
+  private static Object sent(Field declared, Value value) {
+    if (declared != null
+        && isZoned(declared.getType())
+        && value.sqlType == Types.TIMESTAMP
+        && value.source != value.value
+        && !(value.source instanceof String)
+        && zonedKind(value.source, value.calendar) == Zoned.INSTANT) {
+      return value.source;
+    }
+    return value.value;
+  }
+
+  /**
+   * The field a declared parameter is sent as. It is the declared one, except where the server
+   * types the parameter (or a list's elements) {@code TIMESTAMP WITH TIME ZONE} and a value has no
+   * zone: then the column is sent without a zone too (a timestamp without a zone, or a date when
+   * every value is one), or as text when points in time and values without a zone are mixed or a
+   * value is text, and the server converts each row as it converts the same literal. A batch column
+   * has one Arrow type, so the choice is made over all its rows.
+   */
+  private static Field sentField(Field declared, List<Value> values) throws SQLException {
+    ArrowType type = declared.getType();
+    if (type instanceof ArrowType.List && !declared.getChildren().isEmpty()) {
+      Field element = declared.getChildren().get(0);
+      List<Value> elements = new ArrayList<>();
+      for (Value value : values) {
+        Object list = value.value instanceof Array ? ((Array) value.value).getArray() : value.value;
+        List<?> items = elements(list);
+        if (items != null) {
+          for (Object item : items) {
+            elements.add(new Value(item, NO_TYPE, value.calendar));
+          }
+        }
+      }
+      Field sentElement = sentField(element, elements);
+      return sentElement == element
+          ? declared
+          : new Field(declared.getName(), declared.getFieldType(), List.of(sentElement));
+    }
+    if (!isZoned(type)) {
+      return declared;
+    }
+    boolean instant = false;
+    boolean date = false;
+    boolean dateTime = false;
+    boolean text = false;
+    for (Value value : values) {
+      Object given = sent(declared, value);
+      if (given == null) {
+        continue;
+      }
+      switch (zonedKind(given, value.calendar)) {
+        case DATE:
+          date = true;
+          break;
+        case DATE_TIME:
+          dateTime = true;
+          break;
+        case TEXT:
+          text = true;
+          break;
+        default:
+          instant = true;
+          break;
+      }
+    }
+    if (!date && !dateTime && !text) {
+      return declared;
+    }
+    if (text || instant) {
+      return Field.nullable(declared.getName(), UTF8);
+    }
+    return Field.nullable(
+        declared.getName(),
+        dateTime
+            ? new ArrowType.Timestamp(((ArrowType.Timestamp) type).getUnit(), null)
+            : new ArrowType.Date(DateUnit.DAY));
+  }
+
+  /**
+   * The text of a value for a {@code TIMESTAMP WITH TIME ZONE} parameter whose column is sent as
+   * text: a point in time with its offset from UTC, a value without a zone without one, and text as
+   * it was given.
+   */
+  private static String zonedText(Object value, Calendar calendar, TimeUnit unit)
+      throws SQLException {
+    switch (zonedKind(value, calendar)) {
+      case TEXT:
+        return value.toString();
+      case DATE:
+        return dateText(toDate(value, calendar));
+      case DATE_TIME:
+        LocalDateTime dateTime = (LocalDateTime) value;
+        epoch(dateTime.toInstant(ZoneOffset.UTC), unit);
+        return dateTimeText(dateTime);
+      default:
+        Instant instant = toInstant(value, calendar, true);
+        epoch(instant, unit);
+        return dateTimeText(LocalDateTime.ofInstant(instant, ZoneOffset.UTC)) + "+00:00";
+    }
+  }
+
+  /** {@code yyyy-MM-dd}, the year with a sign only when negative, as the server reads it. */
+  private static String dateText(LocalDate date) {
+    return (date.getYear() < 0 ? "-" : "")
+        + String.format(
+            "%04d-%02d-%02d", Math.abs(date.getYear()), date.getMonthValue(), date.getDayOfMonth());
+  }
+
+  private static String dateTimeText(LocalDateTime dateTime) {
+    String text =
+        dateText(dateTime.toLocalDate())
+            + String.format(
+                " %02d:%02d:%02d", dateTime.getHour(), dateTime.getMinute(), dateTime.getSecond());
+    if (dateTime.getNano() == 0) {
+      return text;
+    }
+    String fraction = String.format("%09d", dateTime.getNano());
+    int end = fraction.length();
+    while (fraction.charAt(end - 1) == '0') {
+      end--;
+    }
+    return text + "." + fraction.substring(0, end);
+  }
+
   // ---- Writing values ----
 
   static void set(FieldVector vector, int row, Object value, Calendar calendar)
+      throws SQLException {
+    set(vector, row, value, calendar, null);
+  }
+
+  /**
+   * Writes one value.
+   *
+   * @param declared the server's declared field for this position, or {@code null} when it declared
+   *     none: text written for a {@code TIMESTAMP WITH TIME ZONE} parameter is written in the form
+   *     the server reads ({@link #zonedText})
+   */
+  private static void set(
+      FieldVector vector, int row, Object value, Calendar calendar, Field declared)
       throws SQLException {
     if (value instanceof Array) {
       value = ((Array) value).getArray();
@@ -499,7 +776,11 @@ public final class ParameterEncoder {
     } else if (vector instanceof BitVector) {
       ((BitVector) vector).setSafe(row, toBoolean(value) ? 1 : 0);
     } else if (vector instanceof VarCharVector) {
-      ((VarCharVector) vector).setSafe(row, toText(value).getBytes(StandardCharsets.UTF_8));
+      String text =
+          declared != null && isZoned(declared.getType())
+              ? zonedText(value, calendar, ((ArrowType.Timestamp) declared.getType()).getUnit())
+              : toText(value);
+      ((VarCharVector) vector).setSafe(row, text.getBytes(StandardCharsets.UTF_8));
     } else if (vector instanceof LargeVarCharVector) {
       ((LargeVarCharVector) vector).setSafe(row, toText(value).getBytes(StandardCharsets.UTF_8));
     } else if (vector instanceof VarBinaryVector) {
@@ -534,7 +815,7 @@ public final class ParameterEncoder {
       ((IntervalMonthDayNanoVector) vector)
           .setSafe(row, interval.months(), interval.days(), interval.nanos());
     } else if (vector instanceof ListVector) {
-      setList((ListVector) vector, row, value, calendar);
+      setList((ListVector) vector, row, value, calendar, child(declared));
     } else {
       throw new SQLException(
           "Parameters of type " + vector.getField().getType() + " are not supported", "0A000");
@@ -566,7 +847,8 @@ public final class ParameterEncoder {
     }
   }
 
-  private static void setList(ListVector vector, int row, Object value, Calendar calendar)
+  private static void setList(
+      ListVector vector, int row, Object value, Calendar calendar, Field declaredChild)
       throws SQLException {
     List<?> elements = elements(value);
     if (elements == null) {
@@ -576,7 +858,7 @@ public final class ParameterEncoder {
     FieldVector data = vector.getDataVector();
     int start = vector.startNewValue(row);
     for (int i = 0; i < elements.size(); i++) {
-      set(data, start + i, elements.get(i), calendar);
+      set(data, start + i, elements.get(i), calendar, declaredChild);
     }
     vector.endValue(row, elements.size());
     data.setValueCount(start + elements.size());
@@ -859,38 +1141,45 @@ public final class ParameterEncoder {
   }
 
   /**
-   * The instant to store. A wall-clock column stores the wall clock as if it were UTC; a zoned
-   * column stores the absolute instant, reading wall-clock values in the calendar's zone (or the
-   * JVM's).
+   * The instant to store. A wall-clock column stores the wall clock as if it were UTC, reading a
+   * point in time in the calendar's zone (or the JVM's, as JDBC defines for {@link Timestamp}). A
+   * zoned column stores the absolute instant of a value that is a point in time; values without a
+   * zone never get here ({@link #sentField}), because only the server knows the session's zone.
    */
   private static Instant toInstant(Object value, Calendar calendar, boolean zoned)
       throws SQLException {
-    if (zoned) {
-      if (value instanceof Instant) {
-        return (Instant) value;
-      } else if (value instanceof OffsetDateTime) {
-        return ((OffsetDateTime) value).toInstant();
-      } else if (value instanceof ZonedDateTime) {
-        return ((ZonedDateTime) value).toInstant();
-      } else if (value instanceof Timestamp) {
-        return ((Timestamp) value).toInstant();
-      } else if (value instanceof Calendar) {
-        return ((Calendar) value).toInstant();
-      } else if (value instanceof java.util.Date && !(value instanceof java.sql.Date)) {
-        return Instant.ofEpochMilli(((java.util.Date) value).getTime());
-      } else if (value instanceof String) {
-        String text = ((String) value).trim().replace(' ', 'T');
-        try {
-          return OffsetDateTime.parse(text).toInstant();
-        } catch (DateTimeParseException e) {
-          // A wall-clock text: read below in the calendar's zone.
-        }
-      }
-      return toLocalDateTime(value, calendar, "TIMESTAMP WITH TIME ZONE")
-          .atZone(zone(calendar))
-          .toInstant();
+    if (!zoned) {
+      return toLocalDateTime(value, calendar, "TIMESTAMP").toInstant(ZoneOffset.UTC);
     }
-    return toLocalDateTime(value, calendar, "TIMESTAMP").toInstant(ZoneOffset.UTC);
+    if (value instanceof Instant) {
+      return (Instant) value;
+    } else if (value instanceof OffsetDateTime) {
+      return ((OffsetDateTime) value).toInstant();
+    } else if (value instanceof ZonedDateTime) {
+      return ((ZonedDateTime) value).toInstant();
+    } else if (value instanceof Timestamp) {
+      return ((Timestamp) value).toInstant();
+    } else if (value instanceof Calendar) {
+      return ((Calendar) value).toInstant();
+    } else if (value instanceof java.sql.Date && calendar != null) {
+      // The Calendar names the zone: that date as the Calendar's zone sees it, at its midnight.
+      return toDate(value, calendar).atStartOfDay(zone(calendar)).toInstant();
+    } else if (value instanceof java.util.Date
+        && !(value instanceof java.sql.Date)
+        && !(value instanceof Time)) {
+      return Instant.ofEpochMilli(((java.util.Date) value).getTime());
+    } else if (value instanceof String || value instanceof Character) {
+      Instant instant = offsetText(value.toString());
+      if (instant != null) {
+        return instant;
+      }
+    }
+    // A time of day has no date (the server refuses TIME as a TIMESTAMP WITH TIME ZONE too), and
+    // numbers and the like are no timestamps.
+    throw unparseable(
+        value instanceof String ? value : value.getClass().getSimpleName(),
+        "TIMESTAMP WITH TIME ZONE",
+        null);
   }
 
   private static long epoch(Instant instant, TimeUnit unit) throws SQLException {

@@ -365,6 +365,273 @@ class ParameterEncoderTest {
         Timestamp.valueOf("2026-01-02 03:04:05"), values[3], "an Instant's wall clock is UTC");
   }
 
+  // ---- A parameter the server types TIMESTAMP WITH TIME ZONE ----
+
+  private static final ArrowType ZONED =
+      new ArrowType.Timestamp(TimeUnit.MICROSECOND, "Asia/Kolkata");
+  private static final ArrowType WALL_CLOCK = new ArrowType.Timestamp(TimeUnit.MICROSECOND, null);
+
+  /**
+   * Encodes one zoned column, one row per value, with the JVM in another zone, and reads it back in
+   * forms that do not depend on the JVM's zone: a timestamp without a zone as {@link
+   * LocalDateTime}, one with a zone as {@link Instant}, a date as {@link LocalDate}.
+   */
+  private Decoded zoned(ParameterEncoder.Value... values) throws Exception {
+    return inAuckland(
+        () -> {
+          List<ParameterEncoder.Value[]> rows = new ArrayList<>();
+          for (ParameterEncoder.Value value : values) {
+            rows.add(new ParameterEncoder.Value[] {value});
+          }
+          Decoded decoded = encode(declared(ZONED), rows);
+          boolean instants = ZONED.equals(decoded.type(0));
+          for (Object[] row : decoded.rows) {
+            if (row[0] instanceof Timestamp) {
+              Timestamp timestamp = (Timestamp) row[0];
+              row[0] = instants ? timestamp.toInstant() : timestamp.toLocalDateTime();
+            } else if (row[0] instanceof Date) {
+              row[0] = ((Date) row[0]).toLocalDate();
+            }
+          }
+          return decoded;
+        });
+  }
+
+  private static <T> T inAuckland(java.util.concurrent.Callable<T> work) throws Exception {
+    TimeZone before = TimeZone.getDefault();
+    TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Auckland"));
+    try {
+      return work.call();
+    } finally {
+      TimeZone.setDefault(before);
+    }
+  }
+
+  private static Object column(Decoded decoded, int row) {
+    return decoded.rows.get(row)[0];
+  }
+
+  @Test
+  void aValueWithoutAZoneTravelsWithoutOneToAZonedParameter() throws Exception {
+    LocalDateTime wallClock = LocalDateTime.of(2026, 1, 1, 0, 0, 0, 123_456_000);
+    Decoded decoded = zoned(value(wallClock), value(null), value(wallClock.plusDays(1)));
+    // Not converted with the JVM's zone, nor the declared one: the server reads it in the
+    // session's zone, as it reads TIMESTAMP '2026-01-01 00:00:00.123456'.
+    assertEquals(WALL_CLOCK, decoded.type(0));
+    assertEquals(wallClock, column(decoded, 0));
+    assertEquals(null, column(decoded, 1));
+    assertEquals(wallClock.plusDays(1), column(decoded, 2));
+  }
+
+  @Test
+  void datesWithoutAZoneTravelAsDates() throws Exception {
+    Date sqlDate = inAuckland(() -> Date.valueOf("2026-03-09"));
+    Decoded decoded =
+        zoned(
+            value(LocalDate.of(2026, 3, 8)), new ParameterEncoder.Value(sqlDate, Types.DATE, null));
+    assertEquals(new ArrowType.Date(DateUnit.DAY), decoded.type(0));
+    assertEquals(LocalDate.of(2026, 3, 8), column(decoded, 0));
+    assertEquals(LocalDate.of(2026, 3, 9), column(decoded, 1));
+  }
+
+  /** One Arrow type per column: a date first must not cut the time off a later date-time. */
+  @Test
+  void datesAndDateTimesInOneBatchKeepTheTime() throws Exception {
+    LocalDateTime wallClock = LocalDateTime.of(2026, 3, 8, 13, 14, 15);
+    for (boolean dateFirst : new boolean[] {true, false}) {
+      ParameterEncoder.Value date = value(LocalDate.of(2026, 3, 9));
+      ParameterEncoder.Value dateTime = value(wallClock);
+      Decoded decoded = dateFirst ? zoned(date, dateTime) : zoned(dateTime, date);
+      assertEquals(WALL_CLOCK, decoded.type(0));
+      assertEquals(LocalDateTime.of(2026, 3, 9, 0, 0), column(decoded, dateFirst ? 0 : 1));
+      assertEquals(wallClock, column(decoded, dateFirst ? 1 : 0));
+    }
+  }
+
+  @Test
+  void pointsInTimeKeepTheDeclaredTypeAndTheirInstant() throws Exception {
+    Instant instant = Instant.parse("2026-01-02T03:04:05.5Z");
+    Calendar tokyo = Calendar.getInstance(TimeZone.getTimeZone("Asia/Tokyo"));
+    Decoded decoded =
+        zoned(
+            value(instant),
+            value(instant.atOffset(java.time.ZoneOffset.ofHours(-7))),
+            value(instant.atZone(java.time.ZoneId.of("Europe/Paris"))),
+            new ParameterEncoder.Value(Timestamp.from(instant), Types.TIMESTAMP, null),
+            new ParameterEncoder.Value(Timestamp.from(instant), Types.TIMESTAMP, tokyo),
+            value(java.util.Date.from(instant)),
+            value("2026-01-02 12:04:05.5+09:00"),
+            value(null));
+    assertEquals(ZONED, decoded.type(0));
+    for (int row = 0; row < 7; row++) {
+      assertEquals(instant, column(decoded, row), "row " + row);
+    }
+  }
+
+  /** {@code setObject(x, Types.TIMESTAMP)} of a point in time is still that instant here. */
+  @Test
+  void aPointInTimeConvertedToATimestampIsStillThatInstant() throws Exception {
+    Instant instant = Instant.parse("2026-01-02T03:04:05Z");
+    Object[] sources = {
+      instant,
+      instant.atOffset(java.time.ZoneOffset.ofHours(9)),
+      Timestamp.from(instant),
+      java.util.Date.from(instant)
+    };
+    ParameterEncoder.Value[] values = new ParameterEncoder.Value[sources.length];
+    for (int i = 0; i < sources.length; i++) {
+      Object source = sources[i];
+      Object wallClock = inAuckland(() -> ParameterEncoder.coerce(source, Types.TIMESTAMP, -1));
+      assertTrue(wallClock instanceof LocalDateTime, "TIMESTAMP is a wall clock");
+      values[i] = new ParameterEncoder.Value(wallClock, Types.TIMESTAMP, null, source);
+    }
+    Decoded decoded = zoned(values);
+    assertEquals(ZONED, decoded.type(0));
+    for (int row = 0; row < sources.length; row++) {
+      assertEquals(instant, column(decoded, row), sources[row].getClass().getName());
+    }
+    // To a TIMESTAMP parameter it is the wall clock it was converted to, as before.
+    List<ParameterEncoder.Value[]> rows = new ArrayList<>();
+    rows.add(new ParameterEncoder.Value[] {values[0]});
+    assertEquals(
+        Timestamp.valueOf("2026-01-02 03:04:05"),
+        encode(declared(WALL_CLOCK), rows).rows.get(0)[0],
+        "an Instant's wall clock is UTC");
+  }
+
+  /** A column that mixes points in time with values without a zone, or has text, goes as text. */
+  @Test
+  void aMixedColumnTravelsAsTextTheServerReads() throws Exception {
+    Decoded decoded =
+        zoned(
+            value(null),
+            value(LocalDateTime.of(2026, 1, 1, 0, 0, 0, 500_000_000)),
+            value(Instant.parse("2026-01-02T03:04:05.000001Z")),
+            value(LocalDate.of(2026, 3, 8)),
+            new ParameterEncoder.Value(
+                Timestamp.from(Instant.parse("2026-01-02T03:04:05Z")), Types.TIMESTAMP, null),
+            value("2026-01-15"),
+            value("2026-01-02T12:04:05+09:00"),
+            value(LocalDateTime.of(-43, 3, 15, 12, 0)),
+            value(Instant.parse("+12345-06-07T08:09:10Z")));
+    assertEquals(ArrowType.Utf8.INSTANCE, decoded.type(0));
+    assertEquals(null, column(decoded, 0));
+    assertEquals("2026-01-01 00:00:00.5", column(decoded, 1));
+    assertEquals("2026-01-02 03:04:05.000001+00:00", column(decoded, 2));
+    assertEquals("2026-03-08", column(decoded, 3));
+    assertEquals("2026-01-02 03:04:05+00:00", column(decoded, 4));
+    assertEquals("2026-01-15", column(decoded, 5), "text without an offset, as it was given");
+    assertEquals(
+        "2026-01-02 03:04:05+00:00", column(decoded, 6), "text with an offset: its instant");
+    assertEquals("-0043-03-15 12:00:00", column(decoded, 7));
+    assertEquals("12345-06-07 08:09:10+00:00", column(decoded, 8));
+  }
+
+  @Test
+  void textWithoutAnOffsetIsLeftToTheServer() throws Exception {
+    Decoded decoded = zoned(value("2026-01-01 00:00:00"), value("2026-01-15"), value("tomorrow"));
+    assertEquals(ArrowType.Utf8.INSTANCE, decoded.type(0));
+    assertEquals("2026-01-01 00:00:00", column(decoded, 0));
+    assertEquals("tomorrow", column(decoded, 2));
+  }
+
+  @Test
+  void aZonedParameterKeepsItsPrecisionAndRefusesWhatIsNoTimestamp() throws Exception {
+    Object[] tooFine = {
+      LocalDateTime.of(2026, 1, 1, 0, 0, 0, 1), Instant.parse("2026-01-01T00:00:00.000000001Z")
+    };
+    for (Object value : tooFine) {
+      assertEquals(
+          "22008", assertThrows(SQLDataException.class, () -> zoned(value(value))).getSQLState());
+      // And in a column sent as text.
+      assertEquals(
+          "22008",
+          assertThrows(SQLDataException.class, () -> zoned(value("2026-01-15"), value(value)))
+              .getSQLState());
+    }
+    for (Object value : new Object[] {Time.valueOf("12:34:56"), LocalTime.of(12, 34), 5, true}) {
+      SQLDataException error = assertThrows(SQLDataException.class, () -> zoned(value(value)));
+      assertEquals("22018", error.getSQLState());
+      assertEquals(
+          "Parameter 1: Cannot convert '"
+              + value.getClass().getSimpleName()
+              + "' to TIMESTAMP WITH TIME ZONE",
+          error.getMessage());
+    }
+  }
+
+  @Test
+  void listsOfZonedTimestampsFollowTheSameRule() throws Exception {
+    Field zonedList =
+        new Field(
+            "1",
+            FieldType.nullable(ArrowType.List.INSTANCE),
+            List.of(Field.nullable("item", ZONED)));
+    LocalDateTime wallClock = LocalDateTime.of(2026, 1, 1, 12, 0);
+    Instant instant = Instant.parse("2026-01-02T03:04:05Z");
+    Decoded wallClocks =
+        encode(
+            new Schema(List.of(zonedList)),
+            List.<ParameterEncoder.Value[]>of(
+                new ParameterEncoder.Value[] {value(List.of(wallClock))},
+                new ParameterEncoder.Value[] {value(new Object[] {wallClock.plusDays(1), null})}));
+    assertEquals(WALL_CLOCK, wallClocks.schema.getFields().get(0).getChildren().get(0).getType());
+    assertEquals(List.of(Timestamp.valueOf(wallClock)), wallClocks.rows.get(0)[0]);
+    Decoded instants =
+        encode(
+            new Schema(List.of(zonedList)),
+            List.<ParameterEncoder.Value[]>of(
+                new ParameterEncoder.Value[] {value(List.of(instant, Timestamp.from(instant)))}));
+    assertEquals(ZONED, instants.schema.getFields().get(0).getChildren().get(0).getType());
+    assertEquals(
+        List.of(Timestamp.from(instant), Timestamp.from(instant)), instants.rows.get(0)[0]);
+    Decoded mixed =
+        encode(
+            new Schema(List.of(zonedList)),
+            List.<ParameterEncoder.Value[]>of(
+                new ParameterEncoder.Value[] {value(List.of(wallClock))},
+                new ParameterEncoder.Value[] {value(List.of(instant))}));
+    assertEquals(
+        ArrowType.Utf8.INSTANCE, mixed.schema.getFields().get(0).getChildren().get(0).getType());
+    assertEquals(List.of("2026-01-01 12:00:00"), mixed.rows.get(0)[0]);
+    assertEquals(List.of("2026-01-02 03:04:05+00:00"), mixed.rows.get(1)[0]);
+  }
+
+  /** {@code setObject(x, Types.TIMESTAMP_WITH_TIMEZONE)} gives no zone to a value without one. */
+  @Test
+  void coerceToTimestampWithTimeZoneKeepsValuesWithoutAZone() throws Exception {
+    LocalDateTime wallClock = LocalDateTime.of(2026, 10, 17, 1, 2, 3);
+    assertEquals(wallClock, ParameterEncoder.coerce(wallClock, Types.TIMESTAMP_WITH_TIMEZONE, -1));
+    assertEquals(
+        wallClock,
+        ParameterEncoder.coerce("2026-10-17 01:02:03", Types.TIMESTAMP_WITH_TIMEZONE, -1));
+    assertEquals(
+        LocalDate.of(2026, 10, 17),
+        ParameterEncoder.coerce(LocalDate.of(2026, 10, 17), Types.TIMESTAMP_WITH_TIMEZONE, -1));
+    assertEquals(
+        LocalDate.of(2026, 10, 17),
+        inAuckland(
+            () ->
+                ParameterEncoder.coerce(
+                    Date.valueOf("2026-10-17"), Types.TIMESTAMP_WITH_TIMEZONE, -1)));
+    assertEquals(
+        "2026-10-17", ParameterEncoder.coerce("2026-10-17", Types.TIMESTAMP_WITH_TIMEZONE, -1));
+    Instant instant = Instant.parse("2026-10-17T00:00:00Z");
+    for (Object pointInTime :
+        new Object[] {
+          instant, Timestamp.from(instant), instant.atOffset(java.time.ZoneOffset.ofHours(5))
+        }) {
+      assertEquals(
+          instant, ParameterEncoder.coerce(pointInTime, Types.TIMESTAMP_WITH_TIMEZONE, -1));
+    }
+    assertEquals(
+        "22018",
+        assertThrows(
+                SQLDataException.class,
+                () -> ParameterEncoder.coerce(LocalTime.NOON, Types.TIMESTAMP_WITH_TIMEZONE, -1))
+            .getSQLState());
+  }
+
   @Test
   void datesAndTimesFromLegacyTypes() throws Exception {
     Schema schema =
