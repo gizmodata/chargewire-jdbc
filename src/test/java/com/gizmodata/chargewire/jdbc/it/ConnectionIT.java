@@ -237,6 +237,50 @@ class ConnectionIT {
     assertEquals("invalid_option_value", ChargewireProblem.codeOf(error));
   }
 
+  /**
+   * A catalog and a schema given together must both land: the schema is one of that catalog, so the
+   * catalog has to be applied first. Whether it is must not depend on the order the options were
+   * written in, nor on chance (the Go driver applied them in a map's random order, and failed about
+   * 33 connects in 40), so each form connects 40 times.
+   */
+  @Test
+  void aCatalogAndASchemaGivenTogetherBothLandOnEveryConnect() throws SQLException {
+    ChargewireServer server = SharedServer.get();
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("ATTACH IF NOT EXISTS ':memory:' AS together");
+      statement.execute("CREATE SCHEMA IF NOT EXISTS together.reports");
+    }
+    String base = "jdbc:chargewire://127.0.0.1:" + server.port;
+    Properties schemaFirst = server.properties();
+    schemaFirst.setProperty("schema", "reports");
+    schemaFirst.setProperty("catalog", "together");
+    Properties schemaOnly = server.properties();
+    schemaOnly.setProperty("schema", "reports");
+    Object[][] forms = {
+      {base + "/together?schema=reports", server.properties()},
+      {base + "?schema=reports&catalog=together", server.properties()},
+      {base + "?catalog=together&schema=reports", server.properties()},
+      {base + ";schema=reports;catalog=together", server.properties()},
+      {base, schemaFirst},
+      {base + "/together", schemaOnly},
+    };
+    for (Object[] form : forms) {
+      for (int attempt = 0; attempt < 40; attempt++) {
+        try (Connection connection =
+                DriverManager.getConnection((String) form[0], (Properties) form[1]);
+            Statement statement = connection.createStatement();
+            ResultSet rows =
+                statement.executeQuery("SELECT current_catalog() || '.' || current_schema()")) {
+          assertTrue(rows.next());
+          assertEquals("together.reports", rows.getString(1), form[0] + ", connect " + attempt);
+          assertEquals("together", connection.getCatalog());
+          assertEquals("reports", connection.getSchema());
+        }
+      }
+    }
+  }
+
   @Test
   void setSchemaAndSetCatalogChangeTheSession() throws SQLException {
     try (Connection connection = SharedServer.connect();
