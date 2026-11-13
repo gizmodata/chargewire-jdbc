@@ -798,11 +798,16 @@ class DuckDbTypesIT {
         assertEquals("BIGNUM", metaData.getColumnTypeName(7));
         assertEquals("VARCHAR", metaData.getColumnTypeName(8));
       }
-      SQLException refused =
-          assertThrows(
-              SQLException.class,
-              () -> statement.executeQuery("SELECT " + HUGEINT_MAX + "::HUGEINT"));
-      assertTrue(refused.getMessage().contains("arrow_lossless_conversion"), refused.getMessage());
+      if (ChargewireServer.NAME.equals("Hardcharger")) {
+        // Hardcharger refuses a HUGEINT that DECIMAL(38, 0) cannot hold rather than send it
+        // (TypesIT has the test of that); chargewire-duckdb sends it.
+        SQLException refused =
+            assertThrows(
+                SQLException.class,
+                () -> statement.executeQuery("SELECT " + HUGEINT_MAX + "::HUGEINT"));
+        assertTrue(
+            refused.getMessage().contains("arrow_lossless_conversion"), refused.getMessage());
+      }
     }
   }
 
