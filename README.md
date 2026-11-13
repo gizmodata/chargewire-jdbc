@@ -272,7 +272,10 @@ the session: a statement, a prepare, or a `DatabaseMetaData` call that asks the 
 the call waits while it resumes, as above. Until then:
 
 - `isValid()` returns `true`, and closing the connection sends nothing.
-- `setAutoCommit`, `setCatalog` and `setSchema` are kept, and sent when the session opens.
+- `setAutoCommit`, `setCatalog` and `setSchema` are kept, and sent when the session opens. As on
+  an open session, `setCatalog` moves to that catalog's default schema: a schema set before it, or
+  given to connect, is not sent (`getSchema()` is `null` until the session opens and the server
+  says which schema that is).
 - `commit()` and `rollback()` have nothing to end.
 
 So a pool's connections, its refills (HikariCP replaces each connection at `maxLifetime`) and its

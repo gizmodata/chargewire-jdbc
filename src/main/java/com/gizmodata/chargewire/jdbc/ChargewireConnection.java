@@ -852,6 +852,11 @@ public final class ChargewireConnection implements Connection {
         // The session opens with the catalog, schema and autocommit the connection has then.
         if ("catalog".equals(name)) {
           catalog = (String) value;
+          // Setting the catalog moves a session to that catalog's default schema, as USE does
+          // (an open session takes the server's answer, which says so). A schema kept from before,
+          // set earlier or given to connect, must not open the session: with the new catalog it
+          // would name a schema of that name there, or refuse every statement when there is none.
+          schema = null;
         } else if ("schema".equals(name)) {
           schema = (String) value;
         }

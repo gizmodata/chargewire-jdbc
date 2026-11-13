@@ -34,6 +34,18 @@ All notable changes to this project are documented here. The format follows
   with SQLSTATE `22009` instead of showing UTC's wall clock as the session's; the instant still
   reads, and `OffsetDateTime` and `getString` give it at UTC, as before.
 
+- **On a connection made to a stopped server, `setSchema` followed by `setCatalog` opened the
+  session in the wrong schema, or not at all.** Such a connection keeps `setCatalog` and
+  `setSchema` and sends them when its first statement opens the session (2.2.6). It kept the
+  schema set before the catalog and sent both, so the session opened in a schema of that name in
+  the new catalog instead of the catalog's default schema (later statements ran there, with no
+  error), and when the new catalog had no such schema, every statement failed with `SET schema:
+  No catalog + schema named …` and the connection could never open. The same happened to a schema
+  given to connect (`?schema=`) before a `setCatalog`. Setting the catalog now forgets the kept
+  schema, as it moves an open session to the catalog's default schema. A connection to a serving
+  server was not affected (it takes the server's answer after each setting), and the session
+  that replaces a lost one opens where the lost one was, for either order.
+
 ### Changed
 
 What an application can see of the first fix above, beyond the corrected instant, when a
