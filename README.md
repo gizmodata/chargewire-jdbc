@@ -315,7 +315,11 @@ rather than wrap around, and text that does not parse raises `22018`.
 A `TIMESTAMP WITH TIME ZONE` is an instant. Reading one, `getTimestamp` (with or without a
 `Calendar`), `getObject(column, Instant.class)` and `getObject(column)` give that instant;
 `OffsetDateTime`, `ZonedDateTime`, `LocalDateTime` and `getString` show it in the session's time
-zone (the server's `TimeZone` setting, which it sends with the column), never the JVM's.
+zone (the server's `TimeZone` setting, which it sends with the column), never the JVM's. That
+includes zones the server names in ways `java.time` does not know by itself: the three-letter IDs
+(`PST`, `IST`, `EST`) and names the time zone database has dropped. In a zone the JVM cannot
+resolve at all, the instant still reads (`Instant`, `Timestamp`; `OffsetDateTime` and `getString`
+at UTC), and `LocalDateTime`, `LocalDate` and `LocalTime` are refused with SQLSTATE `22009`.
 
 A parameter the server types `TIMESTAMP WITH TIME ZONE` takes two kinds of value:
 

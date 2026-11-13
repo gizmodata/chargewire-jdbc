@@ -763,6 +763,84 @@ class TimeZonesIT {
     }
   }
 
+  /**
+   * The server takes zone names java.time does not know by that name: the three-letter IDs of old
+   * JDKs ({@code PST}, {@code IST}, {@code EST}) and names the time zone database has dropped. The
+   * wall clock must still be the session's, not UTC's.
+   */
+  @Test
+  void sessionZonesJavaTimeDoesNotKnowByNameStillShowTheSessionsWallClock() throws SQLException {
+    List<String> legacy =
+        List.of(
+            "ACT",
+            "AET",
+            "AGT",
+            "ART",
+            "AST",
+            "BET",
+            "BST",
+            "CAT",
+            "CNT",
+            "CST",
+            "CTT",
+            "EAT",
+            "ECT",
+            "EST",
+            "HST",
+            "IET",
+            "IST",
+            "JST",
+            "MIT",
+            "MST",
+            "NET",
+            "NST",
+            "PLT",
+            "PNT",
+            "PRT",
+            "PST",
+            "SST",
+            "VST",
+            "Canada/East-Saskatchewan",
+            "US/Pacific-New",
+            "Factory",
+            "ROC");
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      int unknownToJavaTime = 0;
+      for (String zone : legacy) {
+        try {
+          ZoneId.of(zone);
+        } catch (java.time.DateTimeException e) {
+          unknownToJavaTime++;
+        }
+        statement.execute("SET TimeZone = '" + zone + "'");
+        try (ResultSet rows =
+            statement.executeQuery(
+                "SELECT ts, CAST(ts AS TIMESTAMP) AS wall, CAST(ts AS VARCHAR) AS text FROM (VALUES"
+                    + " (TIMESTAMPTZ '2026-01-15 12:00:00+00'),"
+                    + " (TIMESTAMPTZ '2026-07-15 12:00:00+00')) t(ts)")) {
+          for (String instant : List.of("2026-01-15T12:00:00Z", "2026-07-15T12:00:00Z")) {
+            assertTrue(rows.next());
+            LocalDateTime wall = rows.getObject("wall", LocalDateTime.class);
+            assertEquals(wall, rows.getObject("ts", LocalDateTime.class), zone);
+            assertEquals(Instant.parse(instant), rows.getObject("ts", Instant.class), zone);
+            OffsetDateTime offset = rows.getObject("ts", OffsetDateTime.class);
+            assertEquals(Instant.parse(instant), offset.toInstant(), zone);
+            assertEquals(wall, offset.toLocalDateTime(), zone);
+            assertEquals(wall, rows.getObject("ts", ZonedDateTime.class).toLocalDateTime(), zone);
+            assertEquals(
+                wall,
+                OffsetDateTime.parse(rows.getString("ts").replace(' ', 'T')).toLocalDateTime());
+            assertTrue(
+                rows.getString("text").startsWith(wall.toString().replace('T', ' ')),
+                zone + ": " + rows.getString("text") + " and " + wall);
+          }
+        }
+      }
+      assertTrue(unknownToJavaTime > 20, "the test still covers names java.time does not know");
+    }
+  }
+
   /** Where the JVM's zone and the session's differ, the JVM's must not show anywhere. */
   @Test
   void theJvmZoneIsNotTheSessionsZone() throws SQLException {

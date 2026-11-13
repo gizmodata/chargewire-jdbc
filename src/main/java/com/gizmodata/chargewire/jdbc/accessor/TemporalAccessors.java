@@ -18,6 +18,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Calendar;
+import java.util.Map;
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DateMilliVector;
@@ -150,26 +151,58 @@ final class TemporalAccessors {
   }
 
   /**
+   * Names servers send for a column's zone that neither {@link ZoneId#of(String)} nor {@link
+   * ZoneId#SHORT_IDS} knows: names the time zone database has dropped, which ICU (DuckDB's time
+   * zone library) still takes.
+   */
+  private static final Map<String, String> DROPPED_ZONE_NAMES =
+      Map.of(
+          "Canada/East-Saskatchewan", "America/Regina",
+          "US/Pacific-New", "America/Los_Angeles",
+          "ROC", "Asia/Taipei",
+          "Factory", "UTC");
+
+  /**
+   * Resolves the zone a server names for a column. Beyond the names java.time knows, servers send
+   * the three-letter IDs of old JDKs ({@code PST}, {@code IST}, {@code EST}), which ICU keeps with
+   * the meaning {@link ZoneId#SHORT_IDS} gives them, and a few dropped names.
+   *
+   * @return the zone, or {@code null} for a name this JVM cannot resolve
+   */
+  static ZoneId zoneOf(String timezone) {
+    try {
+      return ZoneId.of(timezone);
+    } catch (DateTimeException e) {
+      // Not a name java.time knows by itself.
+    }
+    try {
+      return ZoneId.of(DROPPED_ZONE_NAMES.getOrDefault(timezone, timezone), ZoneId.SHORT_IDS);
+    } catch (DateTimeException e) {
+      return null;
+    }
+  }
+
+  /**
    * Timestamps of any unit. Without a time zone they are wall-clock values; with one they are
-   * absolute instants, which a {@link Calendar} never shifts.
+   * absolute instants, which a {@link Calendar} never shifts, shown in the column's zone (the
+   * session's, on servers that send it).
    */
   static final class TimestampAccessor extends Accessor {
     private final TimeUnit unit;
+
+    /** The column's zone; UTC when {@link #unknownZone} names one this JVM cannot resolve. */
     private final ZoneId zone;
+
+    /** The column's zone name when this JVM cannot resolve it, else {@code null}. */
+    private final String unknownZone;
 
     TimestampAccessor(TimeStampVector vector) {
       super(vector);
       ArrowType.Timestamp type = (ArrowType.Timestamp) vector.getField().getType();
       this.unit = type.getUnit();
-      this.zone = type.getTimezone() == null ? null : zoneOf(type.getTimezone());
-    }
-
-    private static ZoneId zoneOf(String timezone) {
-      try {
-        return ZoneId.of(timezone);
-      } catch (DateTimeException e) {
-        return ZoneOffset.UTC;
-      }
+      ZoneId resolved = type.getTimezone() == null ? null : zoneOf(type.getTimezone());
+      this.unknownZone = type.getTimezone() != null && resolved == null ? type.getTimezone() : null;
+      this.zone = unknownZone != null ? ZoneOffset.UTC : resolved;
     }
 
     private Instant instant(int row) {
@@ -188,18 +221,30 @@ final class TemporalAccessors {
       }
     }
 
+    /**
+     * {@inheritDoc} In a zone this JVM cannot resolve there is no wall clock to give: refused,
+     * rather than UTC's shown as if it were the session's.
+     */
     @Override
-    public LocalDateTime getLocalDateTime(int row) {
+    public LocalDateTime getLocalDateTime(int row) throws SQLException {
+      if (unknownZone != null) {
+        throw new SQLDataException(
+            "This JVM does not know the column's time zone '"
+                + unknownZone
+                + "', so it cannot show the value's wall clock there: read it as an Instant,"
+                + " an OffsetDateTime or a Timestamp, or cast it to VARCHAR in SQL",
+            "22009");
+      }
       return LocalDateTime.ofInstant(instant(row), zone == null ? ZoneOffset.UTC : zone);
     }
 
     @Override
-    public LocalDate getLocalDate(int row) {
+    public LocalDate getLocalDate(int row) throws SQLException {
       return getLocalDateTime(row).toLocalDate();
     }
 
     @Override
-    public LocalTime getLocalTime(int row) {
+    public LocalTime getLocalTime(int row) throws SQLException {
       return getLocalDateTime(row).toLocalTime();
     }
 
@@ -240,7 +285,7 @@ final class TemporalAccessors {
     }
 
     @Override
-    public String getString(int row) {
+    public String getString(int row) throws SQLException {
       if (zone == null) {
         return formatDateTime(getLocalDateTime(row));
       }

@@ -24,10 +24,20 @@ All notable changes to this project are documented here. The format follows
   `OffsetDateTime`, `ZonedDateTime` and `getString` show a `TIMESTAMP WITH TIME ZONE` in the
   session's zone, and `getTimestamp` and `Instant` give the instant. See README, "Time zones".
 
+- **A `TIMESTAMP WITH TIME ZONE` read in a session whose `TimeZone` is a three-letter ID (`PST`,
+  `IST`, `EST`, `ACT` and 24 more) or a name the time zone database has dropped showed UTC's
+  wall clock.** The server takes these names, `java.time` does not know them by themselves, and
+  the driver then fell back to UTC without saying so: `getObject(column, LocalDateTime.class)`,
+  `OffsetDateTime`, `ZonedDateTime` and `getString` were off by the zone's offset (the instant
+  itself, `getTimestamp` and `Instant`, was right). They now resolve as the server means them. In
+  a zone the JVM cannot resolve at all, `LocalDateTime`, `LocalDate` and `LocalTime` are refused
+  with SQLSTATE `22009` instead of showing UTC's wall clock as the session's; the instant still
+  reads, and `OffsetDateTime` and `getString` give it at UTC, as before.
+
 ### Changed
 
-What an application can see of the fix above, beyond the corrected instant, when a parameter is
-typed `TIMESTAMP WITH TIME ZONE`:
+What an application can see of the first fix above, beyond the corrected instant, when a
+parameter is typed `TIMESTAMP WITH TIME ZONE`:
 
 - `setDate(index, date)` without a `Calendar` is that calendar date at midnight in the session's
   zone, as `DATE '…'` is (before: midnight in the JVM's zone). With a `Calendar` it is still
