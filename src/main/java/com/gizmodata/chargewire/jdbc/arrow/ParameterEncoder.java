@@ -19,6 +19,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.time.Period;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -63,6 +64,7 @@ import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.extension.OpaqueType;
 import org.apache.arrow.vector.types.DateUnit;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.IntervalUnit;
@@ -87,6 +89,12 @@ import org.apache.arrow.vector.types.pojo.Schema;
  * converted here: it travels in its own type (a timestamp without a zone, a date, text), and the
  * server reads it in the session's time zone, exactly as it reads the same literal in SQL text. The
  * JVM's default zone plays no part in it.
+ *
+ * <p>The same goes for the types DuckDB declares in encodings of its own ({@code arrow.opaque}): a
+ * HUGEINT, UHUGEINT or BIGNUM parameter takes a number as its decimal text, a BIT its bits as text,
+ * a TIME WITH TIME ZONE an {@link OffsetTime} as text with its offset, and the server casts them.
+ * {@code arrow.bool8}, DuckDB's BOOLEAN with {@code arrow_lossless_conversion}, is sent as Arrow's
+ * own boolean, which servers take where they refuse {@code arrow.bool8}.
  *
  * <p>Internal API.
  */
@@ -256,6 +264,14 @@ public final class ParameterEncoder {
         return toLocalDateTime(value, null, "TIMESTAMP");
       case Types.TIMESTAMP_WITH_TIMEZONE:
         return toZoned(value);
+      case Types.TIME_WITH_TIMEZONE:
+        if (value instanceof OffsetDateTime) {
+          return ((OffsetDateTime) value).toOffsetTime();
+        }
+        if (value instanceof ZonedDateTime) {
+          return ((ZonedDateTime) value).toOffsetDateTime().toOffsetTime();
+        }
+        return value;
       default:
         return value;
     }
@@ -313,6 +329,9 @@ public final class ParameterEncoder {
     if (value instanceof Time || value instanceof LocalTime) {
       return toTime(value, null).toString();
     }
+    if (value instanceof OffsetTime) {
+      return toText(value);
+    }
     if (value instanceof OffsetDateTime
         || value instanceof ZonedDateTime
         || value instanceof Instant) {
@@ -329,10 +348,13 @@ public final class ParameterEncoder {
   // ---- Type inference ----
 
   private static Field inferField(String name, List<Value[]> rows, int column) throws SQLException {
+    return inferField(name, column(rows, column));
+  }
+
+  private static Field inferField(String name, List<Value> values) throws SQLException {
     Field inferred = null;
     int hint = NO_TYPE;
-    for (Value[] row : rows) {
-      Value value = row[column];
+    for (Value value : values) {
       if (value.value == null) {
         if (hint == NO_TYPE) {
           hint = value.sqlType;
@@ -390,7 +412,11 @@ public final class ParameterEncoder {
       return decimalType(new BigDecimal((BigInteger) value));
     } else if (value instanceof BigDecimal) {
       return decimalType((BigDecimal) value);
-    } else if (value instanceof String || value instanceof Character || value instanceof UUID) {
+    } else if (value instanceof String
+        || value instanceof Character
+        || value instanceof UUID
+        || value instanceof OffsetTime) {
+      // An OffsetTime as text with its offset: Arrow has no time with a zone.
       return UTF8;
     } else if (value instanceof byte[]) {
       return ArrowType.Binary.INSTANCE;
@@ -503,6 +529,114 @@ public final class ParameterEncoder {
       return decimal.getPrecision() - decimal.getScale();
     }
     return SqlTypes.columnSize(type);
+  }
+
+  // ---- Parameters whose declared type is not what is sent ----
+
+  /** What a parameter's declared type means for what is sent. */
+  private enum Target {
+    /** Sent as declared. */
+    PLAIN,
+    /** {@code TIMESTAMP WITH TIME ZONE}: see {@link Zoned}. */
+    ZONED,
+    /**
+     * {@code arrow.bool8}, DuckDB's BOOLEAN with {@code arrow_lossless_conversion}: sent as Arrow's
+     * own boolean, because servers refuse {@code arrow.bool8} in a parameter stream.
+     */
+    BOOL8,
+    /** DuckDB's HUGEINT, UHUGEINT and BIGNUM in their own encodings: numbers go as text. */
+    BIG_INTEGER,
+    /** DuckDB's BIT in its own encoding: the bits go as text. */
+    BIT,
+    /** DuckDB's TIME WITH TIME ZONE in its own encoding. */
+    TIME_TZ,
+    /** A time of day: an {@link OffsetTime} goes as text, for the server to take or refuse. */
+    TIME,
+    /**
+     * Any other {@code arrow.opaque} type, and a dictionary-encoded one (DuckDB's ENUM), whose
+     * dictionary only the server has: the value goes in its own type.
+     */
+    OWN
+  }
+
+  private static Target target(Field declared) {
+    ArrowType type = declared.getType();
+    if (declared.getDictionary() != null || SqlTypes.isVariant(declared)) {
+      // A VARIANT takes a value of any type; the server makes the Variant of it.
+      return Target.OWN;
+    }
+    if (isZoned(type)) {
+      return Target.ZONED;
+    }
+    if (SqlTypes.isBool8(declared)) {
+      return Target.BOOL8;
+    }
+    String duckDb = SqlTypes.duckDbType(type);
+    if (duckDb != null) {
+      switch (duckDb) {
+        case "hugeint":
+        case "uhugeint":
+        case "bignum":
+          return Target.BIG_INTEGER;
+        case "bit":
+          return Target.BIT;
+        case "time_tz":
+          return Target.TIME_TZ;
+        default:
+          return Target.OWN;
+      }
+    }
+    if (type instanceof OpaqueType || type instanceof ArrowType.FixedSizeList) {
+      // A fixed-size list (DuckDB's ARRAY) goes as a list, which the server casts to its size.
+      return Target.OWN;
+    }
+    return type instanceof ArrowType.Time ? Target.TIME : Target.PLAIN;
+  }
+
+  /** The text of a value for a declared field whose column is sent as text. */
+  private static String sentText(Field declared, Object value, Calendar calendar)
+      throws SQLException {
+    switch (target(declared)) {
+      case ZONED:
+        return zonedText(value, calendar, ((ArrowType.Timestamp) declared.getType()).getUnit());
+      case BIG_INTEGER:
+        // Exact for any size; text is the server's to read, as in a literal.
+        return value instanceof String || value instanceof Character
+            ? value.toString().trim()
+            : exactInteger(value).toString();
+      case BIT:
+        if (value instanceof String || value instanceof Character) {
+          return value.toString();
+        }
+        throw unparseable(value.getClass().getSimpleName(), "BIT (give the bits as text)", null);
+      case TIME_TZ:
+      case TIME:
+        return timeText(value, calendar);
+      default:
+        return toText(value);
+    }
+  }
+
+  /** A time of day as text: {@code HH:mm:ss}, a fraction to the microsecond, an offset if any. */
+  private static String timeText(Object value, Calendar calendar) throws SQLException {
+    if (value instanceof String || value instanceof Character) {
+      return value.toString();
+    }
+    if (value instanceof OffsetDateTime) {
+      value = ((OffsetDateTime) value).toOffsetTime();
+    }
+    LocalTime time;
+    String offset = "";
+    if (value instanceof OffsetTime) {
+      time = ((OffsetTime) value).toLocalTime();
+      offset = ((OffsetTime) value).getOffset().getId().replace("Z", "+00:00");
+    } else if (value instanceof LocalTime || value instanceof Time) {
+      time = toTime(value, calendar);
+    } else {
+      throw unparseable(value.getClass().getSimpleName(), "TIME WITH TIME ZONE", null);
+    }
+    exactDivide(time.toNanoOfDay(), 1_000L, "microsecond");
+    return dateTimeText(LocalDate.EPOCH.atTime(time)).substring("1970-01-01 ".length()) + offset;
   }
 
   // ---- Parameters the server types TIMESTAMP WITH TIME ZONE ----
@@ -628,8 +762,26 @@ public final class ParameterEncoder {
           ? declared
           : new Field(declared.getName(), declared.getFieldType(), List.of(sentElement));
     }
-    if (!isZoned(type)) {
-      return declared;
+    switch (target(declared)) {
+      case ZONED:
+        break;
+      case BOOL8:
+        return Field.nullable(declared.getName(), ArrowType.Bool.INSTANCE);
+      case BIG_INTEGER:
+      case BIT:
+        return Field.nullable(declared.getName(), UTF8);
+      case TIME_TZ:
+      case TIME:
+        return timeField(declared, values);
+      case OWN:
+        return inferField(declared.getName(), values);
+      default:
+        // An extension type Arrow Java has no class for (arrow.json: text with a name) is sent
+        // as its storage type: servers refuse extension types they don't take as parameters.
+        return SqlTypes.extensionName(declared) != null
+                && !(type instanceof ArrowType.ExtensionType)
+            ? new Field(declared.getName(), FieldType.nullable(type), declared.getChildren())
+            : declared;
     }
     boolean instant = false;
     boolean date = false;
@@ -666,6 +818,34 @@ public final class ParameterEncoder {
         dateTime
             ? new ArrowType.Timestamp(((ArrowType.Timestamp) type).getUnit(), null)
             : new ArrowType.Date(DateUnit.DAY));
+  }
+
+  /**
+   * The field of a time parameter. A TIME WITH TIME ZONE takes times of day without an offset as a
+   * time (the server gives them one, as it does for {@code TIME '…'}), and anything with an offset
+   * or text as text. A TIME takes times of day as declared; an {@link OffsetTime} goes as text, so
+   * the server decides what a time with an offset means for it.
+   */
+  private static Field timeField(Field declared, List<Value> values) {
+    boolean zoned = target(declared) == Target.TIME_TZ;
+    boolean text = false;
+    for (Value value : values) {
+      Object given = value.value;
+      if (given == null) {
+        continue;
+      }
+      if (given instanceof OffsetTime
+          || given instanceof OffsetDateTime
+          || (zoned && !(given instanceof LocalTime) && !(given instanceof Time))) {
+        text = true;
+      }
+    }
+    if (text) {
+      return Field.nullable(declared.getName(), UTF8);
+    }
+    return zoned
+        ? Field.nullable(declared.getName(), new ArrowType.Time(TimeUnit.MICROSECOND, 64))
+        : declared;
   }
 
   /**
@@ -776,10 +956,7 @@ public final class ParameterEncoder {
     } else if (vector instanceof BitVector) {
       ((BitVector) vector).setSafe(row, toBoolean(value) ? 1 : 0);
     } else if (vector instanceof VarCharVector) {
-      String text =
-          declared != null && isZoned(declared.getType())
-              ? zonedText(value, calendar, ((ArrowType.Timestamp) declared.getType()).getUnit())
-              : toText(value);
+      String text = declared == null ? toText(value) : sentText(declared, value, calendar);
       ((VarCharVector) vector).setSafe(row, text.getBytes(StandardCharsets.UTF_8));
     } else if (vector instanceof LargeVarCharVector) {
       ((LargeVarCharVector) vector).setSafe(row, toText(value).getBytes(StandardCharsets.UTF_8));
@@ -1015,6 +1192,10 @@ public final class ParameterEncoder {
     }
     if (value instanceof BigDecimal) {
       return ((BigDecimal) value).toPlainString();
+    }
+    if (value instanceof OffsetTime) {
+      // Seconds always, where OffsetTime.toString() drops them at a full minute.
+      return timeText(value, null);
     }
     return value.toString();
   }

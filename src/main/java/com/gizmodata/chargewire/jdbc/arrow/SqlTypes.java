@@ -64,7 +64,95 @@ public final class SqlTypes {
    * @return a {@link Types} code
    */
   public static int jdbcType(Field field) {
+    if (isBool8(field)) {
+      return Types.BOOLEAN;
+    }
+    if (isVariant(field)) {
+      return Types.OTHER;
+    }
+    String duckDb = duckDbType(field.getType());
+    if (duckDb != null) {
+      switch (duckDb) {
+        case "bignum":
+          return Types.NUMERIC;
+        case "time_tz":
+          return Types.TIME_WITH_TIMEZONE;
+        case "bit":
+          return Types.OTHER;
+        default:
+          break;
+      }
+    }
     return jdbcType(field.getType());
+  }
+
+  /** Field metadata key of an Arrow extension type the reader has no class registered for. */
+  private static final String EXTENSION_NAME = "ARROW:extension:name";
+
+  /**
+   * Returns the name of a column's Arrow extension type, whether Arrow Java decodes it to a class
+   * of its own ({@code arrow.uuid}, {@code arrow.opaque}) or leaves it as its storage type with the
+   * name in the field's metadata ({@code arrow.bool8}, {@code arrow.json}).
+   *
+   * @param field the column
+   * @return the extension name, or {@code null} for a plain Arrow type
+   */
+  public static String extensionName(Field field) {
+    if (field.getType() instanceof ArrowType.ExtensionType) {
+      return ((ArrowType.ExtensionType) field.getType()).extensionName();
+    }
+    Map<String, String> metadata = field.getMetadata();
+    return metadata == null ? null : metadata.get(EXTENSION_NAME);
+  }
+
+  /**
+   * Returns whether a column is Arrow's {@code arrow.bool8}: a boolean in one signed byte, zero for
+   * false. DuckDB sends BOOLEAN that way with {@code arrow_lossless_conversion}.
+   *
+   * @param field the column
+   * @return {@code true} for {@code arrow.bool8} over an 8-bit integer
+   */
+  public static boolean isBool8(Field field) {
+    return field.getType() instanceof ArrowType.Int
+        && ((ArrowType.Int) field.getType()).getBitWidth() == 8
+        && "arrow.bool8".equals(extensionName(field));
+  }
+
+  /**
+   * Returns whether a column is a Variant ({@code arrow.parquet.variant}): a struct of the Variant
+   * encoding's {@code metadata} and {@code value}, which is how DuckDB sends VARIANT.
+   *
+   * @param field the column
+   * @return {@code true} for a Variant
+   */
+  public static boolean isVariant(Field field) {
+    if (!(field.getType() instanceof ArrowType.Struct)
+        || !"arrow.parquet.variant".equals(extensionName(field))) {
+      return false;
+    }
+    boolean metadata = false;
+    boolean value = false;
+    for (Field child : field.getChildren()) {
+      metadata |= child.getName().equals("metadata");
+      value |= child.getName().equals("value");
+    }
+    return metadata && value && field.getChildren().size() == 2;
+  }
+
+  /**
+   * Returns the name of a type DuckDB sends as {@code arrow.opaque} (vendor {@code DuckDB}): {@code
+   * hugeint} and {@code uhugeint} (16 bytes, with {@code arrow_lossless_conversion}), {@code
+   * time_tz} (8 bytes, with it), {@code bit} (binary, with it) and {@code bignum} (binary, always).
+   *
+   * @param type the Arrow type
+   * @return DuckDB's name for the type, or {@code null} for any other type
+   */
+  public static String duckDbType(ArrowType type) {
+    if (!(type instanceof OpaqueType)) {
+      return null;
+    }
+    OpaqueType opaque = (OpaqueType) type;
+    return "DuckDB".equals(opaque.vendorName()) ? opaque.typeName() : null;
   }
 
   /**
@@ -197,6 +285,30 @@ public final class SqlTypes {
     if (integer16 != null) {
       return integer16;
     }
+    if (type == field.getType()) {
+      if (isBool8(field)) {
+        return "BOOLEAN";
+      }
+      if (isVariant(field)) {
+        return "VARIANT";
+      }
+      if ("arrow.json".equals(extensionName(field))) {
+        return "JSON";
+      }
+      String duckDb = duckDbType(type);
+      if (duckDb != null) {
+        switch (duckDb) {
+          case "bignum":
+            return "BIGNUM";
+          case "bit":
+            return "BIT";
+          case "time_tz":
+            return "TIME WITH TIME ZONE";
+          default:
+            break;
+        }
+      }
+    }
     if (type instanceof ArrowType.ExtensionType) {
       return isUuid(type)
           ? "UUID"
@@ -261,6 +373,73 @@ public final class SqlTypes {
       default:
         return type.getTypeID().name().toUpperCase(java.util.Locale.ROOT);
     }
+  }
+
+  /**
+   * Returns the column size as JDBC defines it, for a column: as {@link #columnSize(ArrowType)},
+   * and for the types only the column tells ({@code arrow.bool8}, DuckDB's own).
+   *
+   * @param field the column
+   * @return the size, or {@code null} where it does not apply
+   */
+  public static Integer columnSize(Field field) {
+    if (isBool8(field)) {
+      return 1;
+    }
+    String duckDb = duckDbType(field.getType());
+    if ("time_tz".equals(duckDb)) {
+      return 21;
+    }
+    if ("bignum".equals(duckDb) || "bit".equals(duckDb)) {
+      return null;
+    }
+    return columnSize(field.getType());
+  }
+
+  /**
+   * Returns the number of fractional digits of a column.
+   *
+   * @param field the column
+   * @return the scale, or {@code null} where it does not apply
+   */
+  public static Integer decimalDigits(Field field) {
+    if (isBool8(field)) {
+      return null;
+    }
+    String duckDb = duckDbType(field.getType());
+    if ("time_tz".equals(duckDb)) {
+      return 6;
+    }
+    if ("bignum".equals(duckDb)) {
+      return 0;
+    }
+    return decimalDigits(field.getType());
+  }
+
+  /**
+   * Returns whether a column's numbers can be negative.
+   *
+   * @param field the column
+   * @return {@code true} for signed numbers
+   */
+  public static boolean isSigned(Field field) {
+    if (isBool8(field)) {
+      return false;
+    }
+    return "bignum".equals(duckDbType(field.getType())) || isSigned(field.getType());
+  }
+
+  /**
+   * Returns whether a column is numeric.
+   *
+   * @param field the column
+   * @return {@code true} for integers, floating point and decimals
+   */
+  public static boolean isNumeric(Field field) {
+    if (isBool8(field)) {
+      return false;
+    }
+    return "bignum".equals(duckDbType(field.getType())) || isNumeric(field.getType());
   }
 
   /**

@@ -362,7 +362,7 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
     boolean described = SqlTypes.takesPrecisionMetadata(type);
     Integer size = described ? number(metadata.get(SqlTypes.PRECISION)) : null;
     if (size == null) {
-      size = SqlTypes.columnSize(type);
+      size = SqlTypes.columnSize(field);
       if (type instanceof ArrowType.FloatingPoint) {
         size =
             ((ArrowType.FloatingPoint) type).getPrecision() == FloatingPointPrecision.DOUBLE
@@ -372,10 +372,10 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
     }
     Integer digits = described ? number(metadata.get(SqlTypes.SCALE)) : null;
     if (digits == null) {
-      digits = SqlTypes.decimalDigits(type);
+      digits = SqlTypes.decimalDigits(field);
     }
     Integer radix =
-        SqlTypes.isNumeric(type) ? (type instanceof ArrowType.FloatingPoint ? 2 : 10) : null;
+        SqlTypes.isNumeric(field) ? (type instanceof ArrowType.FloatingPoint ? 2 : 10) : null;
     String autoIncrement = metadata.get(SqlTypes.IS_AUTO_INCREMENT);
     return new Object[] {
       table.text("catalog_name"),

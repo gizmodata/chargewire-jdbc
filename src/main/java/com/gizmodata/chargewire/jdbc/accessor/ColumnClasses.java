@@ -7,6 +7,7 @@ import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.OffsetTime;
 import java.time.Period;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +39,25 @@ public final class ColumnClasses {
     }
     if (SqlTypes.duckDbInteger(type) != null) {
       return BigDecimal.class;
+    }
+    if (SqlTypes.isBool8(field)) {
+      return Boolean.class;
+    }
+    if (SqlTypes.isVariant(field)) {
+      return Object.class;
+    }
+    String duckDb = SqlTypes.duckDbType(type);
+    if (duckDb != null) {
+      switch (duckDb) {
+        case "bignum":
+          return BigDecimal.class;
+        case "bit":
+          return String.class;
+        case "time_tz":
+          return OffsetTime.class;
+        default:
+          break;
+      }
     }
     if (type instanceof ArrowType.ExtensionType) {
       type = ((ArrowType.ExtensionType) type).storageType();

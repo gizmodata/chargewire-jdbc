@@ -133,6 +133,7 @@ For a local server without TLS, add `useEncryption=false`.
 | `resultBufferSize` | `134217728` | Bytes an unread result may buffer when another statement needs its session (see below) |
 | `resultPartitions` | `32` | Read up to this many partitions of a result at once, each over its own connection (1 to 256; 1: one stream; see below) |
 | `resultOrder` | `preserve` | `any` lets a result read in partitions come back in any row order, which can be faster |
+| `arrowLosslessConversion` | `true` | On a DuckDB server (Hardcharger, chargewire-duckdb), ask each session for exact Arrow types, so UUID, TIME WITH TIME ZONE, BIT and the whole range of HUGEINT arrive as themselves; `false` leaves the session as the server opens it (see [DuckDB types](#duckdb-types)) |
 
 `ChargewireDataSource` takes the same URL and properties.
 
@@ -324,6 +325,9 @@ at connect as before.
 | struct | STRUCT | java.util.Map (`getObject(i, Struct.class)` gives a java.sql.Struct) |
 | map | JAVA_OBJECT | java.util.Map |
 | arrow.uuid | OTHER | UUID |
+| arrow.bool8 | BOOLEAN | Boolean |
+| arrow.json | VARCHAR (type name `JSON`) | String |
+| arrow.parquet.variant | OTHER (type name `VARIANT`) | the value it holds (see below) |
 | dictionary-encoded | the value type's | the value type's |
 
 `getObject(column, Class)` also converts to `LocalDate`, `LocalTime`, `LocalDateTime`,
@@ -332,6 +336,47 @@ zone), `BigInteger` and `UUID`. A timestamp without a time zone is a wall-clock 
 `Calendar` argument says which zone to read it in. A timestamp with a time zone is an instant, and
 a `Calendar` never shifts it. Numbers that do not fit the requested type raise SQLSTATE `22003`
 rather than wrap around, and text that does not parse raises `22018`.
+
+### DuckDB types
+
+DuckDB's Arrow export has two forms. The plain one sends UUID as text, TIME WITH TIME ZONE as a
+time without its offset, BIT as bytes nothing can tell from a BLOB, and HUGEINT and UHUGEINT as
+DECIMAL(38, 0), which fails for a value above 38 digits. The exact one
+(`arrow_lossless_conversion`) sends each as itself. On a server whose sessions have the option
+`duckdb_arrow_lossless_conversion` (Hardcharger, chargewire-duckdb), the driver turns it on as
+each session opens, so an application gets the exact types without choosing anything:
+
+| DuckDB type | JDBC type (type name) | `getObject` returns | With `arrowLosslessConversion=false` |
+|---|---|---|---|
+| BOOLEAN | BOOLEAN | Boolean | the same |
+| HUGEINT, UHUGEINT | NUMERIC (`HUGEINT`, `UHUGEINT`) | BigDecimal, exact through the whole range | DECIMAL (`DECIMAL(38,0)`); the server refuses a value above 38 digits |
+| BIGNUM | NUMERIC (`BIGNUM`) | BigDecimal | the same |
+| UUID | OTHER (`UUID`) | java.util.UUID | VARCHAR, String |
+| TIME WITH TIME ZONE | TIME_WITH_TIMEZONE | java.time.OffsetTime | TIME, java.sql.Time: the offset is lost |
+| BIT | OTHER (`BIT`) | String of `0` and `1` | VARBINARY, byte[] in DuckDB's encoding |
+| JSON | VARCHAR (`JSON`) | String | VARCHAR (`VARCHAR`), String |
+| VARIANT | OTHER (`VARIANT`) | the value it holds | the same |
+| ENUM | VARCHAR | String | the same |
+| LIST, ARRAY | ARRAY | java.util.List | the same |
+| STRUCT, MAP, UNION | STRUCT, JAVA_OBJECT, JAVA_OBJECT | Map, Map, the member's value | the same |
+
+A VARIANT reads as the Java value it holds: `Boolean`, `Byte`, `Short`, `Integer`, `Long`, `Float`,
+`Double`, `BigDecimal`, `String`, `byte[]`, `UUID`, `LocalDate`, `LocalTime`, `LocalDateTime` (a
+timestamp without a zone), `OffsetDateTime` at UTC (one with a zone), a `List` for an array and a
+`Map` for an object; `getString` gives a scalar as its text and an object or array as JSON. `getTime`
+of a TIME WITH TIME ZONE is that moment on 1970-01-01; `getObject(column, LocalTime.class)` is the
+time of day as written. The types are the same from a nullable column, a NOT NULL column and an
+empty result, in lists and structs too, and `SET SESSION arrow_lossless_conversion` in SQL switches
+the form for the statements that follow (the driver reads both).
+
+As parameters, each type takes what `getObject` returns for it, and NULL: HUGEINT, UHUGEINT and
+BIGNUM take any integer (`BigInteger`, `BigDecimal`, `Long`, or its text) through their whole
+range; BIT takes its bits as text; TIME WITH TIME ZONE takes an `OffsetTime`, and a `LocalTime` as
+`TIME '…'` cast to it; ENUM takes its text; a fixed-size ARRAY takes a `List`; a VARIANT takes a
+scalar or a `List`, which the server makes a Variant of. STRUCT, MAP and UNION have no parameter
+form, nor does an object for a VARIANT: bind its JSON text to `CAST(CAST(? AS JSON) AS VARIANT)`.
+With `arrowLosslessConversion=false` the server declares a BIT parameter as bytes, and text bound
+to it is taken as those bytes, not as bits: write `CAST(CAST(? AS VARCHAR) AS BIT)` there.
 
 ### Time zones
 

@@ -119,6 +119,12 @@ public final class ChargewireConnection implements Connection {
   /** The {@code session_ended} reason for a transaction left idle too long (spec §5.6, §5.7). */
   static final String IDLE_IN_TRANSACTION = "idle_in_transaction";
 
+  /**
+   * DuckDB servers' session option (spec §5.3, a server's own) for Arrow types that lose nothing:
+   * UUID as {@code arrow.uuid}, HUGEINT and TIME WITH TIME ZONE in DuckDB's own encodings.
+   */
+  static final String LOSSLESS_OPTION = "duckdb_arrow_lossless_conversion";
+
   private final ChargewireClient client;
   private final String url;
   private final Map<String, String> properties;
@@ -139,6 +145,10 @@ public final class ChargewireConnection implements Connection {
   private volatile boolean sessionPending;
 
   private volatile int sessionGeneration;
+
+  /** Whether to turn {@link #LOSSLESS_OPTION} on in each session that has the option. */
+  private boolean lossless;
+
   private String catalog;
   private String schema;
   private volatile boolean optionsStale;
@@ -218,6 +228,8 @@ public final class ChargewireConnection implements Connection {
     try {
       connection.catalog = ChargewireProperty.CATALOG.get(properties);
       connection.schema = ChargewireProperty.SCHEMA.get(properties);
+      connection.lossless =
+          ChargewireDriver.bool(properties, ChargewireProperty.ARROW_LOSSLESS_CONVERSION);
       if (client.signInPending()) {
         // A stopped server: a sign-in or a session would start it, so the first work does that.
         connection.sessionPending = true;
@@ -257,11 +269,24 @@ public final class ChargewireConnection implements Connection {
     transaction = TransactionState.of(session);
     try {
       applyOptions(session.path("options"), catalog, schema);
+      askForLosslessTypes(id, session.path("options"));
     } catch (SQLException e) {
       String failed = id;
       sessionId = null;
       client.deleteSession(failed);
       throw e;
+    }
+  }
+
+  /**
+   * Turns {@link #LOSSLESS_OPTION} on in a session that lists it and has it off, unless {@code
+   * arrowLosslessConversion=false}. A server without the option is not asked (an option it doesn't
+   * have would fail the request, spec §5.3), and one that refuses the value keeps its own.
+   */
+  private void askForLosslessTypes(String id, JsonNode options) throws SQLException {
+    JsonNode current = options.path(LOSSLESS_OPTION);
+    if (lossless && current.isBoolean() && !current.asBoolean()) {
+      client.patchSession(id, client.newObject().put(LOSSLESS_OPTION, true));
     }
   }
 

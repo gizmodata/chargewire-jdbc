@@ -23,7 +23,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.time.Period;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -33,6 +35,7 @@ import java.util.UUID;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.extension.OpaqueType;
 import org.apache.arrow.vector.extension.UuidType;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.types.DateUnit;
@@ -630,6 +633,204 @@ class ParameterEncoderTest {
                 SQLDataException.class,
                 () -> ParameterEncoder.coerce(LocalTime.NOON, Types.TIMESTAMP_WITH_TIMEZONE, -1))
             .getSQLState());
+  }
+
+  // ---- Parameters DuckDB declares in encodings of its own ----
+
+  private static Field opaque(ArrowType storage, String typeName) {
+    return Field.nullable("1", new OpaqueType(storage, typeName, "DuckDB"));
+  }
+
+  private static Field named(ArrowType storage, String extensionName) {
+    return new Field(
+        "1",
+        new FieldType(true, storage, null, java.util.Map.of("ARROW:extension:name", extensionName)),
+        List.of());
+  }
+
+  private Decoded column(Field declared, Object... values) throws Exception {
+    List<ParameterEncoder.Value[]> rows = new ArrayList<>();
+    for (Object value : values) {
+      rows.add(new ParameterEncoder.Value[] {value(value)});
+    }
+    return encode(new Schema(List.of(declared)), rows);
+  }
+
+  @Test
+  void sixteenByteIntegersAndBignumsGoAsExactText() throws Exception {
+    String max = "170141183460469231731687303715884105727";
+    for (String type : List.of("hugeint", "uhugeint", "bignum")) {
+      ArrowType storage =
+          type.equals("bignum") ? ArrowType.Binary.INSTANCE : new ArrowType.FixedSizeBinary(16);
+      Decoded decoded =
+          column(
+              opaque(storage, type),
+              new BigInteger(max),
+              new BigDecimal("-5"),
+              7L,
+              (short) 3,
+              true,
+              " 12345678901234567890 ",
+              null,
+              new BigDecimal("1E+3"));
+      assertEquals(ArrowType.Utf8.INSTANCE, decoded.type(0), type);
+      assertEquals(max, decoded.rows.get(0)[0]);
+      assertEquals("-5", decoded.rows.get(1)[0]);
+      assertEquals("7", decoded.rows.get(2)[0]);
+      assertEquals("3", decoded.rows.get(3)[0]);
+      assertEquals("1", decoded.rows.get(4)[0]);
+      assertEquals("12345678901234567890", decoded.rows.get(5)[0], "text is the server's to read");
+      assertEquals(null, decoded.rows.get(6)[0]);
+      assertEquals("1000", decoded.rows.get(7)[0]);
+      SQLDataException fraction =
+          assertThrows(
+              SQLDataException.class, () -> column(opaque(storage, type), new BigDecimal("1.5")));
+      assertEquals("22003", fraction.getSQLState());
+    }
+  }
+
+  @Test
+  void bitsGoAsText() throws Exception {
+    Field bit = opaque(ArrowType.Binary.INSTANCE, "bit");
+    Decoded decoded = column(bit, "10101", null, "1");
+    assertEquals(ArrowType.Utf8.INSTANCE, decoded.type(0));
+    assertEquals("10101", decoded.rows.get(0)[0]);
+    SQLDataException error = assertThrows(SQLDataException.class, () -> column(bit, 5));
+    assertEquals("22018", error.getSQLState());
+    assertEquals(
+        "Parameter 1: Cannot convert 'Integer' to BIT (give the bits as text)", error.getMessage());
+  }
+
+  @Test
+  void timesWithATimeZone() throws Exception {
+    Field timeTz = opaque(new ArrowType.FixedSizeBinary(8), "time_tz");
+    Decoded offsets =
+        column(
+            timeTz,
+            OffsetTime.of(13, 14, 0, 0, ZoneOffset.ofHours(2)),
+            OffsetTime.of(1, 2, 3, 500_000_000, ZoneOffset.UTC),
+            null,
+            LocalTime.of(4, 5, 6),
+            "07:08:09-03",
+            OffsetDateTime.parse("2026-01-02T10:11:12.000001+05:30"));
+    assertEquals(ArrowType.Utf8.INSTANCE, offsets.type(0));
+    assertEquals("13:14:00+02:00", offsets.rows.get(0)[0], "seconds are always written");
+    assertEquals("01:02:03.5+00:00", offsets.rows.get(1)[0]);
+    assertEquals(null, offsets.rows.get(2)[0]);
+    assertEquals("04:05:06", offsets.rows.get(3)[0], "no offset: the server gives it one");
+    assertEquals("07:08:09-03", offsets.rows.get(4)[0], "text as it was given");
+    assertEquals("10:11:12.000001+05:30", offsets.rows.get(5)[0]);
+    // Times of day alone travel as a time, and the server gives them an offset.
+    Decoded plain = column(timeTz, LocalTime.of(4, 5, 6), Time.valueOf("07:08:09"), null);
+    assertEquals(new ArrowType.Time(TimeUnit.MICROSECOND, 64), plain.type(0));
+    assertEquals(Time.valueOf("04:05:06"), plain.rows.get(0)[0]);
+    assertEquals(
+        "22008",
+        assertThrows(
+                SQLDataException.class,
+                () -> column(timeTz, OffsetTime.of(1, 2, 3, 1, ZoneOffset.UTC)))
+            .getSQLState(),
+        "finer than a microsecond");
+    assertEquals(
+        "22018", assertThrows(SQLDataException.class, () -> column(timeTz, 5)).getSQLState());
+    // To a TIME parameter an OffsetTime goes as text too, so the server decides what it means.
+    Field time = Field.nullable("1", new ArrowType.Time(TimeUnit.MICROSECOND, 64));
+    Decoded mixed = column(time, LocalTime.of(4, 5, 6), OffsetTime.of(1, 2, 3, 0, ZoneOffset.UTC));
+    assertEquals(ArrowType.Utf8.INSTANCE, mixed.type(0));
+    assertEquals("04:05:06", mixed.rows.get(0)[0]);
+    assertEquals("01:02:03+00:00", mixed.rows.get(1)[0]);
+    assertEquals(time.getType(), column(time, LocalTime.of(4, 5, 6)).type(0), "as declared");
+  }
+
+  /** Servers refuse arrow.bool8 and arrow.json in a parameter stream: their storage is sent. */
+  @Test
+  void extensionTypesWithoutAClassGoAsWhatTheyStore() throws Exception {
+    Decoded booleans =
+        column(named(new ArrowType.Int(8, true), "arrow.bool8"), true, false, null, "true", 0);
+    Field sent = booleans.schema.getFields().get(0);
+    assertEquals(ArrowType.Bool.INSTANCE, sent.getType());
+    assertEquals(null, SqlTypes.extensionName(sent));
+    assertEquals(true, booleans.rows.get(0)[0]);
+    assertEquals(false, booleans.rows.get(1)[0]);
+    assertEquals(null, booleans.rows.get(2)[0]);
+    assertEquals(true, booleans.rows.get(3)[0]);
+    assertEquals(false, booleans.rows.get(4)[0]);
+    Decoded json = column(named(ArrowType.Utf8.INSTANCE, "arrow.json"), "{\"a\": 1}");
+    assertEquals(ArrowType.Utf8.INSTANCE, json.type(0));
+    assertEquals(null, SqlTypes.extensionName(json.schema.getFields().get(0)));
+    assertEquals("{\"a\": 1}", json.rows.get(0)[0]);
+    // A list of bool8: its elements too.
+    Field list =
+        new Field(
+            "1",
+            FieldType.nullable(ArrowType.List.INSTANCE),
+            List.of(
+                new Field(
+                    "item",
+                    new FieldType(
+                        true,
+                        new ArrowType.Int(8, true),
+                        null,
+                        java.util.Map.of("ARROW:extension:name", "arrow.bool8")),
+                    List.of())));
+    Decoded lists = column(list, Arrays.asList(true, null, false));
+    assertEquals(
+        ArrowType.Bool.INSTANCE, lists.schema.getFields().get(0).getChildren().get(0).getType());
+    assertEquals(Arrays.asList(true, null, false), lists.rows.get(0)[0]);
+  }
+
+  /** What only the server can encode goes in the value's own type, for the server to cast. */
+  @Test
+  void enumsVariantsAndFixedSizeListsGoInTheValuesOwnType() throws Exception {
+    Field dictionary =
+        new Field(
+            "1",
+            new FieldType(
+                true,
+                new ArrowType.Int(8, false),
+                new org.apache.arrow.vector.types.pojo.DictionaryEncoding(1, false, null)),
+            List.of());
+    Decoded enums = column(dictionary, "ok", null);
+    assertEquals(ArrowType.Utf8.INSTANCE, enums.type(0));
+    assertEquals(null, enums.schema.getFields().get(0).getDictionary());
+    assertEquals("ok", enums.rows.get(0)[0]);
+    Field variant =
+        new Field(
+            "1",
+            new FieldType(
+                true,
+                ArrowType.Struct.INSTANCE,
+                null,
+                java.util.Map.of("ARROW:extension:name", "arrow.parquet.variant")),
+            List.of(
+                Field.notNullable("metadata", ArrowType.Binary.INSTANCE),
+                Field.nullable("value", ArrowType.Binary.INSTANCE)));
+    assertEquals(new ArrowType.Int(32, true), column(variant, 42).type(0));
+    assertEquals(ArrowType.Utf8.INSTANCE, column(variant, "x").type(0));
+    assertEquals(ArrowType.List.INSTANCE, column(variant, List.of(1, 2)).type(0));
+    Field fixed =
+        new Field(
+            "1",
+            FieldType.nullable(new ArrowType.FixedSizeList(3)),
+            List.of(Field.nullable("item", new ArrowType.Int(32, true))));
+    Decoded arrays = column(fixed, List.of(4, 5, 6));
+    assertEquals(ArrowType.List.INSTANCE, arrays.type(0));
+    assertEquals(List.of(4, 5, 6), arrays.rows.get(0)[0]);
+  }
+
+  @Test
+  void anOffsetTimeWithoutADeclaredTypeIsTextWithItsOffset() throws Exception {
+    Decoded decoded = one(OffsetTime.of(13, 14, 0, 0, ZoneOffset.ofHoursMinutes(-5, -30)));
+    assertEquals(ArrowType.Utf8.INSTANCE, decoded.type(0));
+    assertEquals("13:14:00-05:30", decoded.rows.get(0)[0]);
+    assertEquals(
+        "13:14:00-05:30",
+        ParameterEncoder.jsonValue(
+            OffsetTime.of(13, 14, 0, 0, ZoneOffset.ofHoursMinutes(-5, -30))));
+    assertEquals(
+        OffsetTime.of(10, 11, 12, 0, ZoneOffset.ofHours(2)),
+        ParameterEncoder.coerce(
+            OffsetDateTime.parse("2026-01-02T10:11:12+02:00"), Types.TIME_WITH_TIMEZONE, -1));
   }
 
   @Test

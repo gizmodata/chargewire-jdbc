@@ -48,20 +48,20 @@ public final class ChargewireParameterMetaData implements ParameterMetaData {
   @Override
   public boolean isSigned(int parameter) throws SQLException {
     Field field = field(parameter);
-    return field != null && SqlTypes.isSigned(field.getType());
+    return field != null && SqlTypes.isSigned(field);
   }
 
   @Override
   public int getPrecision(int parameter) throws SQLException {
     Field field = field(parameter);
-    Integer size = field == null ? null : SqlTypes.columnSize(field.getType());
+    Integer size = field == null ? null : SqlTypes.columnSize(field);
     return size == null ? 0 : size;
   }
 
   @Override
   public int getScale(int parameter) throws SQLException {
     Field field = field(parameter);
-    Integer digits = field == null ? null : SqlTypes.decimalDigits(field.getType());
+    Integer digits = field == null ? null : SqlTypes.decimalDigits(field);
     return digits == null ? 0 : digits;
   }
 

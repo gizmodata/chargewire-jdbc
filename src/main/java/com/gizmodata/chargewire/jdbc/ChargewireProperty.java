@@ -140,7 +140,21 @@ public enum ChargewireProperty {
   RESULT_ORDER(
       "resultOrder",
       "preserve",
-      "preserve or any: whether a result read in partitions must keep its row order");
+      "preserve or any: whether a result read in partitions must keep its row order"),
+  /**
+   * Whether the driver asks a DuckDB server for its exact Arrow types: on a server whose sessions
+   * have the option {@code duckdb_arrow_lossless_conversion} (Hardcharger, chargewire-duckdb), the
+   * driver turns it on as each session opens. UUID then arrives as a UUID (not text), TIME WITH
+   * TIME ZONE with its offset, BIT as bits, and HUGEINT and UHUGEINT exactly through their whole
+   * range (not as DECIMAL(38, 0), which fails above 38 digits). {@code false} leaves the session as
+   * the server opens it, which is what the driver did before this property existed. Either way a
+   * statement can {@code SET SESSION arrow_lossless_conversion}, and the driver reads both forms.
+   */
+  ARROW_LOSSLESS_CONVERSION(
+      "arrowLosslessConversion",
+      "true",
+      "Ask a DuckDB server for exact Arrow types (UUID, TIME WITH TIME ZONE, BIT, HUGEINT);"
+          + " false: as the server opens the session");
 
   private final String key;
   private final String defaultValue;

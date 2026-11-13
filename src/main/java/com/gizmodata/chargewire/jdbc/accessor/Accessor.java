@@ -243,6 +243,18 @@ public abstract class Accessor {
   }
 
   /**
+   * Returns the value as a time of day with its offset from UTC: a time with a time zone as it is,
+   * a timestamp with a time zone at its time of day.
+   *
+   * @param row a non-null row
+   * @return the offset time
+   * @throws SQLException unless the value is a time or a timestamp with a time zone
+   */
+  public OffsetTime getOffsetTime(int row) throws SQLException {
+    return getOffsetDateTime(row).toOffsetTime();
+  }
+
+  /**
    * Returns the value as a {@link Date}. A date without a zone is taken at midnight in the
    * calendar's zone, or the JVM's when there is no calendar.
    *
@@ -391,7 +403,7 @@ public abstract class Accessor {
     } else if (type == ZonedDateTime.class) {
       value = getZonedDateTime(row);
     } else if (type == OffsetTime.class) {
-      value = getOffsetDateTime(row).toOffsetTime();
+      value = getOffsetTime(row);
     } else if (type == Date.class) {
       value = getDate(row, null);
     } else if (type == Time.class) {

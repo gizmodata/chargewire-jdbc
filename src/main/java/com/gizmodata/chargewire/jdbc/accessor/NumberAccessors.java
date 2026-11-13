@@ -280,14 +280,29 @@ final class NumberAccessors {
     }
   }
 
-  /** Booleans: also readable as 1 and 0. */
+  /**
+   * Booleans: also readable as 1 and 0. Arrow's own boolean is a bit; {@code arrow.bool8}, which
+   * DuckDB sends with {@code arrow_lossless_conversion}, is a byte that is zero for false.
+   */
   static final class BoolAccessor extends Accessor {
     BoolAccessor(BitVector vector) {
       super(vector);
     }
 
+    /** Creates the accessor of an {@code arrow.bool8} column. */
+    BoolAccessor(TinyIntVector vector) {
+      super(vector);
+    }
+
     private boolean value(int row) {
-      return ((BitVector) vector).get(row) != 0;
+      return vector instanceof BitVector
+          ? ((BitVector) vector).get(row) != 0
+          : ((TinyIntVector) vector).get(row) != 0;
+    }
+
+    @Override
+    protected String typeDescription() {
+      return "BOOLEAN";
     }
 
     @Override

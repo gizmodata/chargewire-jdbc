@@ -197,6 +197,92 @@ final class NestedAccessors {
     }
   }
 
+  /**
+   * VARIANT, a value that says its own type ({@code arrow.parquet.variant}: a struct of the
+   * encoding's metadata and value). {@link #getObject} returns the Java value ({@link Variants});
+   * its text is the value itself for a scalar and JSON for an object or an array.
+   */
+  static final class VariantAccessor extends Accessor {
+    private final Accessor metadata;
+    private final Accessor value;
+
+    VariantAccessor(StructVector vector, DictionaryProvider dictionaries) {
+      super(vector);
+      this.metadata = Accessors.create(vector.getChild("metadata"), dictionaries);
+      this.value = Accessors.create(vector.getChild("value"), dictionaries);
+    }
+
+    @Override
+    public Object getObject(int row) throws SQLException {
+      if (value.isNull(row)) {
+        return null;
+      }
+      return Variants.decode(metadata.getBytes(row), value.getBytes(row));
+    }
+
+    @Override
+    public String getString(int row) throws SQLException {
+      Object decoded = getObject(row);
+      if (decoded instanceof Map || decoded instanceof List) {
+        return render(decoded);
+      }
+      if (decoded instanceof BigDecimal) {
+        return ((BigDecimal) decoded).toPlainString();
+      }
+      if (decoded instanceof LocalDateTime) {
+        return TemporalAccessors.formatDateTime((LocalDateTime) decoded);
+      }
+      if (decoded instanceof byte[]) {
+        return Base64.getEncoder().encodeToString((byte[]) decoded);
+      }
+      return String.valueOf(decoded);
+    }
+
+    private Number number(int row, String target) throws SQLException {
+      Object decoded = getObject(row);
+      if (decoded instanceof Boolean) {
+        return (Boolean) decoded ? 1 : 0;
+      }
+      if (decoded instanceof Number) {
+        return (Number) decoded;
+      }
+      throw cannotConvert(target);
+    }
+
+    @Override
+    public boolean getBoolean(int row) throws SQLException {
+      Object decoded = getObject(row);
+      if (decoded instanceof Boolean) {
+        return (Boolean) decoded;
+      }
+      return number(row, "boolean").doubleValue() != 0;
+    }
+
+    @Override
+    public long getLong(int row) throws SQLException {
+      Number number = number(row, "long");
+      return number instanceof BigDecimal || number instanceof Double || number instanceof Float
+          ? toLong(getBigDecimal(row))
+          : number.longValue();
+    }
+
+    @Override
+    public double getDouble(int row) throws SQLException {
+      return number(row, "double").doubleValue();
+    }
+
+    @Override
+    public BigDecimal getBigDecimal(int row) throws SQLException {
+      Number number = number(row, "BigDecimal");
+      return number instanceof BigDecimal ? (BigDecimal) number : new BigDecimal(number.toString());
+    }
+
+    @Override
+    protected String typeDescription() {
+      return "VARIANT";
+    }
+  }
+
   /** Maps; {@link #getObject} returns a {@link Map} in entry order. */
   static final class MapAccessor extends Accessor {
     private final Accessor keys;

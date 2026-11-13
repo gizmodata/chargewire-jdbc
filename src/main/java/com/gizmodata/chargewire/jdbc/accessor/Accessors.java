@@ -1,6 +1,7 @@
 package com.gizmodata.chargewire.jdbc.accessor;
 
 import com.gizmodata.chargewire.jdbc.arrow.SqlTypes;
+import java.util.function.IntFunction;
 import org.apache.arrow.vector.BaseIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
@@ -25,6 +26,7 @@ import org.apache.arrow.vector.TimeMilliVector;
 import org.apache.arrow.vector.TimeNanoVector;
 import org.apache.arrow.vector.TimeSecVector;
 import org.apache.arrow.vector.TimeStampVector;
+import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.UuidVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
@@ -69,6 +71,9 @@ public final class Accessors {
     }
     if (vector instanceof NullVector) {
       return new NestedAccessors.NullAccessor(vector);
+    }
+    if (vector instanceof TinyIntVector && SqlTypes.isBool8(vector.getField())) {
+      return new NumberAccessors.BoolAccessor((TinyIntVector) vector);
     }
     if (vector instanceof BaseIntVector && vector.getField().getType() instanceof ArrowType.Int) {
       ArrowType.Int type = (ArrowType.Int) vector.getField().getType();
@@ -149,6 +154,9 @@ public final class Accessors {
       return new NestedAccessors.ListAccessor(
           vector, ((ListViewVector) vector).getDataVector(), dictionaries);
     }
+    if (vector instanceof StructVector && SqlTypes.isVariant(vector.getField())) {
+      return new NestedAccessors.VariantAccessor((StructVector) vector, dictionaries);
+    }
     if (vector instanceof StructVector) {
       return new NestedAccessors.StructAccessor((StructVector) vector, dictionaries);
     }
@@ -161,6 +169,28 @@ public final class Accessors {
           vector,
           (FixedSizeBinaryVector) ((ExtensionTypeVector<?>) vector).getUnderlyingVector(),
           integer16.equals("HUGEINT"));
+    }
+    String duckDb = SqlTypes.duckDbType(vector.getField().getType());
+    if (duckDb != null && vector instanceof ExtensionTypeVector) {
+      FieldVector storage = ((ExtensionTypeVector<?>) vector).getUnderlyingVector();
+      IntFunction<byte[]> bytes =
+          storage instanceof VarBinaryVector
+              ? ((VarBinaryVector) storage)::get
+              : storage instanceof FixedSizeBinaryVector
+                  ? ((FixedSizeBinaryVector) storage)::get
+                  : null;
+      if (bytes != null) {
+        switch (duckDb) {
+          case "bignum":
+            return new DuckDbAccessors.BignumAccessor(vector, bytes);
+          case "bit":
+            return new DuckDbAccessors.BitAccessor(vector, bytes);
+          case "time_tz":
+            return new DuckDbAccessors.TimeTzAccessor(vector, bytes);
+          default:
+            break;
+        }
+      }
     }
     if (vector instanceof ExtensionTypeVector) {
       ExtensionTypeVector<?> extension = (ExtensionTypeVector<?>) vector;

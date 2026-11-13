@@ -62,8 +62,54 @@ All notable changes to this project are documented here. The format follows
   Messages name keys, never values. A URL shown in an error now hides the value of every unknown
   key as well as passwords and tokens (a misspelled `pasword=` holds a password).
 
+- **`TIME WITH TIME ZONE` lost its offset, and an `OffsetTime` could not be bound.** The column
+  read as a `java.sql.Time` of the time as written (`TIMETZ '13:14:15+02:00'` as `13:14:15`), and
+  `setObject` with an `OffsetTime` failed with `Cannot convert 'OffsetTime' to TIME`. It now reads
+  as `java.time.OffsetTime` (JDBC type `TIME_WITH_TIMEZONE`) and takes one as a parameter, through
+  the whole range of offsets.
+- **With `arrow_lossless_conversion` on, BOOLEAN read as TINYINT (`Byte`), and a BOOLEAN or JSON
+  parameter was refused by the server** (`Arrow parameters of type extension<arrow.bool8> are not
+  supported`), so the exact types could not be used. Both read and bind as themselves now, in
+  lists, structs and maps too.
+- **BIGNUM, BIT and VARIANT arrived as bytes in DuckDB's encodings.** BIGNUM now reads as a
+  `BigDecimal` (JDBC type `NUMERIC`), BIT as its bits (`"10101"`), and VARIANT as the Java value
+  it holds, with JSON text for an object or an array (README, "DuckDB types").
+- **Several types could not be bound, and one was stored wrong.** A parameter for an ENUM column
+  failed (`IPC stream did not have the expected number (1) of dictionaries`), a fixed-size ARRAY,
+  a BIGNUM and a VARIANT were refused (`Parameters of type … are not supported`), and a HUGEINT or
+  UHUGEINT above 38 digits did not fit (`does not fit in DECIMAL(38,0)`). `setString` for a BIT
+  parameter stored the text's bytes as bits (`'10101'` became 40 bits) without an error. Each now
+  takes what `getObject` returns for it, and stores it exactly.
+
+### Added
+
+- **`arrowLosslessConversion`** (default `true`): on a DuckDB server (Hardcharger,
+  chargewire-duckdb), the driver turns the session option `duckdb_arrow_lossless_conversion` on as
+  each session opens, so every DuckDB type arrives as itself without the application choosing a
+  mode. `arrowLosslessConversion=false` leaves the session as the server opens it, which is what
+  2.2.6 did. A server without the option is not asked, and `SET SESSION arrow_lossless_conversion`
+  in SQL still switches the form; the driver reads both.
+
 ### Changed
 
+- **What `getObject` and the metadata return for some DuckDB types, now that the driver asks for
+  the exact types.** Before and after, for a connection that set nothing (set
+  `arrowLosslessConversion=false` to keep the "before" column, except for BIGNUM and VARIANT,
+  which arrive in the same encoding either way):
+
+  | DuckDB type | Before (2.2.6) | Now |
+  |---|---|---|
+  | UUID | `String`, VARCHAR, type name `VARCHAR` | `java.util.UUID`, OTHER, type name `UUID` (`getString` is unchanged) |
+  | TIME WITH TIME ZONE | `java.sql.Time` without the offset, TIME | `java.time.OffsetTime`, TIME_WITH_TIMEZONE, type name `TIME WITH TIME ZONE` |
+  | HUGEINT, UHUGEINT | `BigDecimal`, DECIMAL, type name `DECIMAL(38,0)`; above 38 digits an error from the server | `BigDecimal`, NUMERIC, type name `HUGEINT` or `UHUGEINT`, precision 39; every value reads |
+  | BIT | `byte[]` in DuckDB's encoding, VARBINARY | `String` of `0` and `1`, OTHER, type name `BIT` (`getBytes` still gives the encoding) |
+  | BIGNUM | `byte[]` in DuckDB's encoding, VARBINARY | `BigDecimal`, NUMERIC, type name `BIGNUM` (`getBytes` still gives the encoding) |
+  | VARIANT | `Map` of two byte arrays (`metadata`, `value`), STRUCT | the value it holds, OTHER, type name `VARIANT` |
+  | JSON | `String`, VARCHAR, type name `VARCHAR` | the same, type name `JSON` |
+
+  For an application that had turned `arrow_lossless_conversion` on itself, BOOLEAN changes from
+  `Byte` (TINYINT) to `Boolean`, TIME WITH TIME ZONE from eight bytes to `OffsetTime`, and BIT,
+  BIGNUM and VARIANT as above.
 - **`Connection.setReadOnly(true)` says that it enforces nothing.** It was, and is, a hint: the
   driver keeps the value and the session still runs any statement its user may run, because
   Chargewire has no read-only session to switch to. The first `setReadOnly(true)` on a connection
