@@ -265,7 +265,8 @@ public final class ChargewireConnection implements Connection {
     }
     try {
       if (readOnly && !confirmedReadOnly(session.path("options"))) {
-        throw SqlErrors.protocolError("The server did not confirm read_only=true; the new session was rejected");
+        throw SqlErrors.protocolError(
+            "The server did not confirm read_only=true; the new session was rejected");
       }
       readOnly |= confirmedReadOnly(session.path("options"));
       applyOptions(session.path("options"), catalog, schema);
@@ -925,7 +926,9 @@ public final class ChargewireConnection implements Connection {
     }
     JsonNode actual = response.path("options");
     if ("read_only".equals(name) && Boolean.TRUE.equals(value) && !confirmedReadOnly(actual)) {
-      SQLException failure = SqlErrors.protocolError("The server did not confirm read_only=true; the connection is closed");
+      SQLException failure =
+          SqlErrors.protocolError(
+              "The server did not confirm read_only=true; the connection is closed");
       closed = true;
       try {
         close();
@@ -1050,8 +1053,8 @@ public final class ChargewireConnection implements Connection {
   }
 
   /**
-   * {@inheritDoc} Requests server-enforced read-only mode. This restriction is one-way;
-   * open a separate connection to write. A server that cannot confirm it causes an error.
+   * {@inheritDoc} Requests server-enforced read-only mode. This restriction is one-way; open a
+   * separate connection to write. A server that cannot confirm it causes an error.
    */
   @Override
   public void setReadOnly(boolean requested) throws SQLException {

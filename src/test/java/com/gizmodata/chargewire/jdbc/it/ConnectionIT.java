@@ -498,15 +498,18 @@ class ConnectionIT {
       connection.setReadOnly(true);
       assertTrue(connection.isReadOnly());
       assertNull(connection.getWarnings());
-      SQLException refused = assertThrows(SQLException.class,
-          () -> statement.executeUpdate("INSERT INTO read_only_client VALUES (1)"));
+      SQLException refused =
+          assertThrows(
+              SQLException.class,
+              () -> statement.executeUpdate("INSERT INTO read_only_client VALUES (1)"));
       assertEquals("25006", refused.getSQLState());
       try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_client")) {
         assertTrue(rows.next());
         assertEquals(0, rows.getLong(1));
       }
-      assertEquals("25006", assertThrows(SQLException.class,
-          () -> connection.setReadOnly(false)).getSQLState());
+      assertEquals(
+          "25006",
+          assertThrows(SQLException.class, () -> connection.setReadOnly(false)).getSQLState());
       connection.setReadOnly(true);
       assertEquals(1, setup.executeUpdate("INSERT INTO read_only_client VALUES (2)"));
       setup.execute("DROP TABLE read_only_client");
@@ -522,8 +525,12 @@ class ConnectionIT {
         assertTrue(rows.next());
         assertEquals(42, rows.getInt(1));
       }
-      assertEquals("25006", assertThrows(SQLException.class,
-          () -> statement.execute("CREATE TABLE readonly_property_probe (i INTEGER)")).getSQLState());
+      assertEquals(
+          "25006",
+          assertThrows(
+                  SQLException.class,
+                  () -> statement.execute("CREATE TABLE readonly_property_probe (i INTEGER)"))
+              .getSQLState());
     }
   }
 
@@ -533,7 +540,8 @@ class ConnectionIT {
         Statement statement = connection.createStatement()) {
       statement.execute("CREATE OR REPLACE TABLE read_only_transaction (i INTEGER)");
       statement.execute("BEGIN TRANSACTION READ ONLY");
-      assertThrows(SQLException.class,
+      assertThrows(
+          SQLException.class,
           () -> statement.executeUpdate("INSERT INTO read_only_transaction VALUES (1)"));
       statement.execute("ROLLBACK");
       try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_transaction")) {
