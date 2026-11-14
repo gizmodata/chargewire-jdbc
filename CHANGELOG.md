@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-14
+
 ### Added
 
 - The `readOnly=true` connection property requests a server-enforced read-only
