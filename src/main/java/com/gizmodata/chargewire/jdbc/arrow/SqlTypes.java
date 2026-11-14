@@ -7,6 +7,7 @@ import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 
 /**
  * Maps Arrow types to JDBC's: {@link Types} codes, type names, precision and scale.
@@ -137,6 +138,76 @@ public final class SqlTypes {
       value |= child.getName().equals("value");
     }
     return metadata && value && field.getChildren().size() == 2;
+  }
+
+  /**
+   * Returns a column of a table's schema, as the server's catalog gives it, in the form a result
+   * carries the same column in, so that {@code DatabaseMetaData.getColumns} describes a column as
+   * {@code ResultSetMetaData} and {@code ParameterMetaData} do.
+   *
+   * <p>A DuckDB server's catalog gives the types DuckDB encodes itself as their storage alone (16
+   * bytes for HUGEINT and UHUGEINT, 8 for TIME WITH TIME ZONE, bytes for BIGNUM and BIT, a struct
+   * for VARIANT), with the type's name in {@link #TYPE_NAME} and without the {@code arrow.opaque}
+   * or {@code arrow.parquet.variant} extension that a result's column has; read as they are, they
+   * are binaries and a struct. HUGEINT, UHUGEINT and TIME WITH TIME ZONE come as these bytes only
+   * in a session with {@code arrow_lossless_conversion}, BIGNUM and VARIANT always, and BIT comes
+   * as bytes either way, so whether a result has it as bits is the caller's to say.
+   *
+   * @param field the column in the table's schema
+   * @param exactTypes whether results in this session carry BIT in DuckDB's own encoding
+   * @return the column as a result carries it; {@code field} itself for every other type
+   */
+  public static Field catalogField(Field field, boolean exactTypes) {
+    Map<String, String> metadata = field.getMetadata();
+    String name = metadata == null ? null : metadata.get(TYPE_NAME);
+    if (name == null || extensionName(field) != null) {
+      return field;
+    }
+    ArrowType type = field.getType();
+    int bytes =
+        type instanceof ArrowType.FixedSizeBinary
+            ? ((ArrowType.FixedSizeBinary) type).getByteWidth()
+            : 0;
+    String duckDb = null;
+    switch (name) {
+      case "HUGEINT":
+        duckDb = bytes == 16 ? "hugeint" : null;
+        break;
+      case "UHUGEINT":
+        duckDb = bytes == 16 ? "uhugeint" : null;
+        break;
+      case "TIME WITH TIME ZONE":
+        duckDb = bytes == 8 ? "time_tz" : null;
+        break;
+      case "BIGNUM":
+        duckDb = type instanceof ArrowType.Binary ? "bignum" : null;
+        break;
+      case "BIT":
+        duckDb = exactTypes && type instanceof ArrowType.Binary ? "bit" : null;
+        break;
+      case "VARIANT":
+        Map<String, String> variant = new java.util.LinkedHashMap<>(metadata);
+        variant.put(EXTENSION_NAME, "arrow.parquet.variant");
+        Field described =
+            new Field(
+                field.getName(),
+                new FieldType(field.isNullable(), type, field.getDictionary(), variant),
+                field.getChildren());
+        return isVariant(described) ? described : field;
+      default:
+        break;
+    }
+    if (duckDb == null) {
+      return field;
+    }
+    return new Field(
+        field.getName(),
+        new FieldType(
+            field.isNullable(),
+            new OpaqueType(type, duckDb, "DuckDB"),
+            field.getDictionary(),
+            metadata),
+        field.getChildren());
   }
 
   /**

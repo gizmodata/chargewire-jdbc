@@ -155,6 +155,12 @@ Everything here is something an application written for 2.2.6 can notice.
   | VARIANT | `Map` of two byte arrays (`metadata`, `value`), STRUCT | the value it holds, OTHER, type name `VARIANT` |
   | JSON | `String`, VARCHAR, type name `VARCHAR` | the same, type name `JSON` |
 
+  `DatabaseMetaData.getColumns` says the same as `ResultSetMetaData` and `ParameterMetaData` for
+  each of them (`DATA_TYPE`, `COLUMN_SIZE`, `DECIMAL_DIGITS`, `NUM_PREC_RADIX`). On 2.2.6 it said
+  DECIMAL 39 for HUGEINT and UHUGEINT (now NUMERIC 39), TIME 15 for TIME WITH TIME ZONE (now
+  TIME_WITH_TIMEZONE 21), VARCHAR for UUID (now OTHER 36), VARBINARY for BIT (now OTHER) and
+  BIGNUM (now NUMERIC), and STRUCT for VARIANT (now OTHER); `TYPE_NAME` is unchanged.
+
   For an application that had turned `arrow_lossless_conversion` on itself, BOOLEAN changes from
   `Byte` (TINYINT) to `Boolean`, TIME WITH TIME ZONE from eight bytes to `OffsetTime`, and BIT,
   BIGNUM and VARIANT as above.

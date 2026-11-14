@@ -278,6 +278,11 @@ public final class ChargewireConnection implements Connection {
     }
   }
 
+  /** Whether the connection asks its sessions for exact types ({@code arrowLosslessConversion}). */
+  boolean exactTypes() {
+    return lossless;
+  }
+
   /**
    * Turns {@link #LOSSLESS_OPTION} on in a session that lists it and has it off, unless {@code
    * arrowLosslessConversion=false}. A server without the option is not asked (an option it doesn't

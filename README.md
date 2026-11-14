@@ -378,6 +378,17 @@ time of day as written. The types are the same from a nullable column, a NOT NUL
 empty result, in lists and structs too, and `SET SESSION arrow_lossless_conversion` in SQL switches
 the form for the statements that follow (the driver reads both).
 
+`DatabaseMetaData.getColumns`, `ResultSetMetaData` and `ParameterMetaData` give every type the
+same JDBC type, size and scale. Two things differ by design. `getColumns` has the server's own name
+for a column where a result has the JDBC name of what arrives (`FLOAT` and `REAL`, `BLOB` and
+`VARBINARY`, `DECIMAL` and `DECIMAL(18,3)`, `ENUM` and `VARCHAR`, `TIMESTAMP_S` and `TIMESTAMP`,
+`INTEGER[3]` and `INTEGER[]`), and it gives the size of a FLOAT or DOUBLE in bits (24, 53, with
+`NUM_PREC_RADIX` 2) where the others give decimal digits (7, 15). With
+`arrowLosslessConversion=false` the three still give the same JDBC type, and `getColumns` keeps the
+server's name and size for a column (`HUGEINT`, 39) that a result then carries as `DECIMAL(38,0)`.
+`getColumns` describes a BIT column by the connection's `arrowLosslessConversion`, not by a `SET
+SESSION arrow_lossless_conversion` run since: the catalog gives a BIT as bytes either way.
+
 As parameters, each type takes what `getObject` returns for it, and NULL: HUGEINT, UHUGEINT and
 BIGNUM take any integer (`BigInteger`, `BigDecimal`, `Long`, or its text) through their whole
 range; BIT takes its bits as text; TIME WITH TIME ZONE takes an `OffsetTime`, and a `LocalTime` as

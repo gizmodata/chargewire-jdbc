@@ -462,6 +462,143 @@ class DuckDbTypesIT {
   }
 
   /**
+   * Where the catalog's name for a type is DuckDB's and a result's is the JDBC name of what
+   * arrives: {@code getColumns} has the first (it reads the server's own name for the column), and
+   * the two other sources the second (a result's column does not carry it). As on 2.2.6.
+   */
+  private static final Map<String, String> CATALOG_NAMES =
+      Map.of(
+          "c_float", "FLOAT",
+          "c_dec", "DECIMAL",
+          "c_blob", "BLOB",
+          "c_time_ns", "TIME_NS",
+          "c_ts_s", "TIMESTAMP_S",
+          "c_ts_ms", "TIMESTAMP_MS",
+          "c_ts_ns", "TIMESTAMP_NS",
+          "c_enum", "ENUM",
+          "c_arr", "INTEGER[3]");
+
+  /**
+   * {@code DatabaseMetaData.getColumns}, {@code ResultSetMetaData} and {@code ParameterMetaData}
+   * say the same about every type: the JDBC type, its size and its scale, the type's name but for
+   * {@link #CATALOG_NAMES}, and for the last two the Java class. They read three different things
+   * (the table's schema as the server's catalog gives it, a result's schema and a statement's
+   * parameter schema), and a tool that builds its model from one and reads through another must
+   * find them the same. The one difference in size is JDBC's own: {@code getColumns} gives a
+   * floating point's in bits, with {@code NUM_PREC_RADIX} 2.
+   */
+  @Test
+  void theThreeSourcesOfMetadataAgreeOnEveryType() throws SQLException {
+    List<Column> columns = new ArrayList<>(columns());
+    columns.add(
+        readOnly(
+            "c_variant", "VARIANT", "42::VARIANT", "VARIANT", Types.OTHER, Object.class, 42, "42"));
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      StringBuilder definition = new StringBuilder();
+      StringBuilder marks = new StringBuilder();
+      for (Column column : columns) {
+        definition.append(definition.length() == 0 ? "" : ", ");
+        definition.append(column.name()).append(' ').append(column.sqlType());
+        marks.append(marks.length() == 0 ? "?" : ", ?");
+      }
+      statement.execute("CREATE OR REPLACE TABLE metadata_sources (" + definition + ")");
+      try (ResultSet described =
+              connection.getMetaData().getColumns(null, null, "metadata_sources", null);
+          ResultSet rows = statement.executeQuery("SELECT * FROM metadata_sources");
+          PreparedStatement insert =
+              connection.prepareStatement("INSERT INTO metadata_sources VALUES (" + marks + ")")) {
+        ResultSetMetaData result = rows.getMetaData();
+        ParameterMetaData parameters = insert.getParameterMetaData();
+        assertEquals(columns.size(), result.getColumnCount());
+        assertEquals(columns.size(), parameters.getParameterCount());
+        for (int i = 1; i <= columns.size(); i++) {
+          Column column = columns.get(i - 1);
+          String at = column.name() + " (" + column.sqlType() + ")";
+          assertTrue(described.next(), at);
+          assertEquals(column.name(), described.getString("COLUMN_NAME"));
+          assertEquals(i, described.getInt("ORDINAL_POSITION"), at);
+
+          assertEquals(column.jdbcType(), result.getColumnType(i), at);
+          assertEquals(column.jdbcType(), parameters.getParameterType(i), at);
+          assertEquals(column.jdbcType(), described.getInt("DATA_TYPE"), at);
+
+          assertEquals(column.typeName(), result.getColumnTypeName(i), at);
+          assertEquals(column.typeName(), parameters.getParameterTypeName(i), at);
+          assertEquals(
+              CATALOG_NAMES.getOrDefault(column.name(), column.typeName()),
+              described.getString("TYPE_NAME"),
+              at);
+
+          assertEquals(result.getPrecision(i), parameters.getPrecision(i), at);
+          assertEquals(result.getScale(i), parameters.getScale(i), at);
+          if (column.jdbcType() == Types.REAL || column.jdbcType() == Types.DOUBLE) {
+            assertEquals(
+                column.jdbcType() == Types.REAL ? 24 : 53, described.getInt("COLUMN_SIZE"));
+            assertEquals(2, described.getInt("NUM_PREC_RADIX"), at);
+          } else {
+            assertEquals(result.getPrecision(i), described.getInt("COLUMN_SIZE"), at);
+          }
+          assertEquals(result.getScale(i), described.getInt("DECIMAL_DIGITS"), at);
+
+          assertEquals(column.javaClass().getName(), result.getColumnClassName(i), at);
+          assertEquals(column.javaClass().getName(), parameters.getParameterClassName(i), at);
+        }
+        assertFalse(described.next());
+      } finally {
+        statement.execute("DROP TABLE metadata_sources");
+      }
+    }
+  }
+
+  /**
+   * Without the exact types ({@code arrowLosslessConversion=false}), the three sources give every
+   * type the JDBC type 2.2.6 gave it, and the same one.
+   */
+  @Test
+  void withTheOptionOffTheThreeSourcesOfMetadataAgreeOnTheJdbcType() throws SQLException {
+    Properties off = new Properties();
+    off.setProperty("arrowLosslessConversion", "false");
+    Map<String, Integer> plainer =
+        Map.of(
+            "c_hugeint", Types.DECIMAL,
+            "c_uhugeint", Types.DECIMAL,
+            "c_uuid", Types.VARCHAR,
+            "c_bit", Types.VARBINARY,
+            "c_timetz", Types.TIME);
+    List<Column> columns = columns();
+    try (Connection connection = SharedServer.connect(off);
+        Statement statement = connection.createStatement()) {
+      StringBuilder definition = new StringBuilder();
+      StringBuilder marks = new StringBuilder();
+      for (Column column : columns) {
+        definition.append(definition.length() == 0 ? "" : ", ");
+        definition.append(column.name()).append(' ').append(column.sqlType());
+        marks.append(marks.length() == 0 ? "?" : ", ?");
+      }
+      statement.execute("CREATE OR REPLACE TABLE metadata_sources_plain (" + definition + ")");
+      try (ResultSet described =
+              connection.getMetaData().getColumns(null, null, "metadata_sources_plain", null);
+          ResultSet rows = statement.executeQuery("SELECT * FROM metadata_sources_plain");
+          PreparedStatement insert =
+              connection.prepareStatement(
+                  "INSERT INTO metadata_sources_plain VALUES (" + marks + ")")) {
+        for (int i = 1; i <= columns.size(); i++) {
+          Column column = columns.get(i - 1);
+          int jdbcType = plainer.getOrDefault(column.name(), column.jdbcType());
+          assertTrue(described.next(), column.name());
+          assertEquals(jdbcType, described.getInt("DATA_TYPE"), column.name());
+          assertEquals(jdbcType, rows.getMetaData().getColumnType(i), column.name());
+          assertEquals(jdbcType, insert.getParameterMetaData().getParameterType(i), column.name());
+        }
+        assertFalse(described.next());
+      } finally {
+        statement.execute("DROP TABLE metadata_sources_plain");
+      }
+    }
+  }
+
+  /**
    * Every type reads as a member of a UNION as it reads as a column, next to an INTEGER member of
    * the same union and a NULL of it, alone and inside a list.
    */
