@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-14
+
+### Added
+
+- The `readOnly=true` connection property requests a server-enforced read-only
+  session from creation. Lazy connections confirm it when first used, and replacement
+  sessions request and confirm it again.
+
+### Changed
+
+- `Connection.setReadOnly(true)` now requests enforcement instead of recording a hint.
+  A server that does not support or confirm read-only mode causes an error. Once set,
+  the mode is one-way: `setReadOnly(false)` fails; open another connection to write.
+  Connections that do not request read-only continue to work with older servers.
+
 ## [2.3.0] - 2026-11-13
 
 **This release changes behaviour that an application written for 2.2.6 can depend on.** Each
