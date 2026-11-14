@@ -65,6 +65,29 @@ All notable changes to this project are documented here. The format follows
   the driver's own options, everything else as `***`. A password that holds an unencoded `&` or
   `;` continues there, and 2.2.6 showed the rest of it as an option (`password=***&rest-of-it`).
 
+- **A password or token written in a URL could be shown in the error that refused the URL.** A
+  password has to be percent-encoded in a URL, and one that was not is exactly what gets a URL
+  refused. Then:
+  - a space, `^`, `|`, `{`, `}`, `"`, `<`, `>`, `\`, a backtick or a `%` without two hexadecimal
+    digits in it made the message end with `java.net.URI`'s own text, which quotes the whole URL:
+    `Invalid Chargewire URL '…?password=***': Illegal character in query at index 46:
+    chargewire://host/db?password=the password`;
+  - after an `&` or `;` in it, the rest was quoted as an option (`option 'rest-of-it' is not
+    key=value`), and since this release would have been named as an unknown property when it
+    held an `=`;
+  - a value given to another option was quoted (`Invalid value '…' for connectTimeout`), which is
+    where a password ends up when two options are swapped.
+
+  No message quotes any of these now. The reason is `java.net.URI`'s without its input, an option
+  that is not `key=value` is not quoted, `Invalid value for connectTimeout: expected a number`
+  names the option and what it takes, and a key the driver does not know that follows a hidden
+  value is reported without its name (`Unknown connection property in the URL after 'password'
+  (not named: it may be the rest of that value …)`). Two refusals that were not `SQLException`s
+  are: a `%` without two hexadecimal digits in the `;key=value` part of a URL, and a `trustStore`
+  that is not a file, both an `IllegalArgumentException` before, are SQLSTATE `08001`.
+  `UrlCredentialsTest` writes a marker password and token in every place a URL has for one, with
+  35 characters and sequences in it, and looks for it in every message of every refusal.
+
 - **`TIME WITH TIME ZONE` lost its offset, and an `OffsetTime` could not be bound.** The column
   read as a `java.sql.Time` of the time as written (`TIMETZ '13:14:15+02:00'` as `13:14:15`), and
   `setObject` with an `OffsetTime` failed with `Cannot convert 'OffsetTime' to TIME`. It now reads
@@ -136,6 +159,10 @@ Everything here is something an application written for 2.2.6 can notice.
 - **Connection strings that connected before and now fail** (see the fix above): a URL with a
   key that is not a driver property (it was ignored), and `Properties` with a key that resembles
   a driver property or names TLS or signing in. Remove the key, or spell it as the error says.
+- **The text of three connection errors** (their class and SQLSTATE `08001` are unchanged), so
+  that none quotes what may be a password: `Invalid value for <option>: expected …` (before:
+  `Invalid value '<value>' for <option>: …`), `an option is not key=value; …` (before: `option
+  '<text>' is not key=value`), and `java.net.URI`'s reason without `at index N: <the URL>`.
 
 - **Parameters typed `TIMESTAMP WITH TIME ZONE`**: what an application can see of the first fix
   above, beyond the corrected instant:

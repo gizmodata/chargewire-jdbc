@@ -105,24 +105,44 @@ public final class ChargewireDriver implements Driver {
    * Refuses keys the driver has no property for, so that a misspelled setting is never silently not
    * applied: every such key in the URL, and in the {@code Properties} those that resemble one of
    * the driver's or name TLS or signing in. Values are never part of the message: a misspelled
-   * {@code password} key holds a password.
+   * {@code password} key holds a password. Nor is a URL's key that follows a hidden value: it may
+   * be the rest of a password that holds an unencoded {@code &} or {@code ;}.
    *
    * @return the other unknown keys of the {@code Properties}, which frameworks put there for
    *     themselves: tolerated, and reported as warnings on the connection
    * @throws SQLException (SQLSTATE 08001) for a refused key
    */
   static List<String> unknownKeys(ChargewireUrl url, Properties info) throws SQLException {
+    boolean unnamed = false;
     for (String lowerCaseKey : url.options.keySet()) {
-      if (ChargewireProperty.of(lowerCaseKey) == null) {
-        String key = url.writtenKeys.getOrDefault(lowerCaseKey, lowerCaseKey);
-        ChargewireProperty meant = ChargewireProperty.resembling(key);
-        throw unknown(
-            key,
-            "the URL",
-            meant != null
-                ? "did you mean '" + meant.key() + "'?"
-                : "the driver's properties are " + keys(List.of(ChargewireProperty.values())));
+      if (ChargewireProperty.of(lowerCaseKey) != null) {
+        continue;
       }
+      if (!url.shown.named.contains(lowerCaseKey)) {
+        unnamed = true;
+        continue;
+      }
+      String key = url.writtenKeys.getOrDefault(lowerCaseKey, lowerCaseKey);
+      ChargewireProperty meant = ChargewireProperty.resembling(key);
+      throw unknown(
+          key,
+          "the URL",
+          meant != null
+              ? "did you mean '" + meant.key() + "'?"
+              : "the driver's properties are " + keys(List.of(ChargewireProperty.values())));
+    }
+    if (unnamed) {
+      throw new SQLNonTransientConnectionException(
+          "Unknown connection property in the URL"
+              + (url.shown.hiddenFrom == null
+                  ? " (not named: it may be part of a password"
+                  : " after '"
+                      + url.shown.hiddenFrom
+                      + "' (not named: it may be the rest of that"
+                      + " value")
+              + ", in which an '&' or ';' is written %26 or %3B); the driver's properties are "
+              + keys(List.of(ChargewireProperty.values())),
+          "08001");
     }
     List<String> foreign = new ArrayList<>();
     if (info != null) {
@@ -210,7 +230,7 @@ public final class ChargewireDriver implements Driver {
   }
 
   /** Lower-cases keys; URL options win over {@code info}. */
-  private static Map<String, String> merge(ChargewireUrl url, Properties info) {
+  static Map<String, String> merge(ChargewireUrl url, Properties info) {
     Map<String, String> properties = new HashMap<>();
     if (info != null) {
       for (String key : info.stringPropertyNames()) {
@@ -235,21 +255,17 @@ public final class ChargewireDriver implements Driver {
     return properties;
   }
 
-  private static ConnectionConfig config(ChargewireUrl url, Map<String, String> properties)
+  static ConnectionConfig config(ChargewireUrl url, Map<String, String> properties)
       throws SQLException {
     String compression = IpcCompression.parse(ChargewireProperty.IPC_COMPRESSION.get(properties));
     if (compression == null) {
-      throw invalid(
-          ChargewireProperty.IPC_COMPRESSION,
-          ChargewireProperty.IPC_COMPRESSION.get(properties),
-          "auto, lz4_frame, zstd or none");
+      throw invalid(ChargewireProperty.IPC_COMPRESSION, "auto, lz4_frame, zstd or none");
     }
     String retain = ChargewireProperty.RETAIN_RESULTS.get(properties);
     long partitions = number(properties, ChargewireProperty.RESULT_PARTITIONS);
     if (partitions < 1 || partitions > ChargewireClient.MAX_RESULT_PARTITIONS) {
       throw invalid(
           ChargewireProperty.RESULT_PARTITIONS,
-          Long.toString(partitions),
           "a number from 1 to " + ChargewireClient.MAX_RESULT_PARTITIONS);
     }
     boolean anyOrder = resultOrderIsAny(ChargewireProperty.RESULT_ORDER.get(properties));
@@ -259,7 +275,7 @@ public final class ChargewireDriver implements Driver {
     if (browserSignIn(properties)) {
       long timeout = number(properties, ChargewireProperty.OAUTH_TIMEOUT);
       if (timeout == 0) {
-        throw invalid(ChargewireProperty.OAUTH_TIMEOUT, "0", "a number of seconds above zero");
+        throw invalid(ChargewireProperty.OAUTH_TIMEOUT, "a number of seconds above zero");
       }
       String command = ChargewireProperty.OAUTH_BROWSER.get(properties);
       builder.browserSignIn(
@@ -319,7 +335,6 @@ public final class ChargewireDriver implements Driver {
       default:
         throw invalid(
             ChargewireProperty.AUTH_TYPE,
-            value,
             "password, client_certificate (or mtls) or oauth_browser (or external)");
     }
   }
@@ -419,7 +434,7 @@ public final class ChargewireDriver implements Driver {
       return true;
     }
     if (!"preserve".equals(order)) {
-      throw invalid(ChargewireProperty.RESULT_ORDER, value, "preserve or any");
+      throw invalid(ChargewireProperty.RESULT_ORDER, "preserve or any");
     }
     return false;
   }
@@ -433,7 +448,7 @@ public final class ChargewireDriver implements Driver {
     if ("false".equalsIgnoreCase(value) || "0".equals(value)) {
       return false;
     }
-    throw invalid(property, value, "true or false");
+    throw invalid(property, "true or false");
   }
 
   static long number(Map<String, String> properties, ChargewireProperty property)
@@ -442,11 +457,11 @@ public final class ChargewireDriver implements Driver {
     try {
       long number = Long.parseLong(value);
       if (number < 0) {
-        throw invalid(property, value, "a number of zero or more");
+        throw invalid(property, "a number of zero or more");
       }
       return number;
     } catch (NumberFormatException e) {
-      throw invalid(property, value, "a number");
+      throw invalid(property, "a number");
     }
   }
 
@@ -460,8 +475,12 @@ public final class ChargewireDriver implements Driver {
     return value == null || value.isEmpty() ? null : Path.of(value);
   }
 
-  private static SQLException invalid(ChargewireProperty property, String value, String expected) {
+  /**
+   * The value is not quoted: what is given for one option by mistake may be meant for another, a
+   * password among them.
+   */
+  private static SQLException invalid(ChargewireProperty property, String expected) {
     return new SQLNonTransientConnectionException(
-        "Invalid value '" + value + "' for " + property.key() + ": expected " + expected, "08001");
+        "Invalid value for " + property.key() + ": expected " + expected, "08001");
   }
 }

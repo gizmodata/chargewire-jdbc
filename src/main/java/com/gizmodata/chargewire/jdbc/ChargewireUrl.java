@@ -32,17 +32,22 @@ final class ChargewireUrl {
   /** The option keys as they were written, by their lower-case form, for messages. */
   final Map<String, String> writtenKeys;
 
+  /** What a message may show of the URL, and which of its keys a message may name. */
+  final Shown shown;
+
   private ChargewireUrl(
       String host,
       int port,
       String catalog,
       Map<String, String> options,
-      Map<String, String> writtenKeys) {
+      Map<String, String> writtenKeys,
+      Shown shown) {
     this.host = host;
     this.port = port;
     this.catalog = catalog;
     this.options = options;
     this.writtenKeys = writtenKeys;
+    this.shown = shown;
   }
 
   static boolean accepts(String url) {
@@ -69,7 +74,12 @@ final class ChargewireUrl {
     try {
       uri = new URI("chargewire:" + rest);
     } catch (URISyntaxException e) {
-      throw invalid(url, e.getMessage());
+      // Its reason only: its message quotes the whole input, a password in it included.
+      throw invalid(
+          url,
+          e.getReason()
+              + " (in a value, every character but letters, digits and -._~ is percent-encoded:"
+              + " a space is %20, a literal % is %25)");
     }
     String host = uri.getHost();
     if (host == null || host.isEmpty()) {
@@ -95,7 +105,7 @@ final class ChargewireUrl {
     if (host.startsWith("[") && host.endsWith("]")) {
       host = host.substring(1, host.length() - 1);
     }
-    return new ChargewireUrl(host, uri.getPort(), catalog, options, writtenKeys);
+    return new ChargewireUrl(host, uri.getPort(), catalog, options, writtenKeys, shown(url));
   }
 
   private static void parseOptions(
@@ -111,12 +121,22 @@ final class ChargewireUrl {
       }
       int equals = pair.indexOf('=');
       if (equals <= 0) {
-        throw invalid(url, "option '" + pair + "' is not key=value");
+        // Not quoted: after an unencoded '&' or ';', it is the rest of a value.
+        throw invalid(
+            url, "an option is not key=value; an '&' or ';' inside a value is written %26 or %3B");
       }
-      String written = decode(pair.substring(0, equals));
-      String key = written.toLowerCase(Locale.ROOT);
-      options.put(key, decode(pair.substring(equals + 1)));
-      writtenKeys.put(key, written);
+      try {
+        String written = decode(pair.substring(0, equals));
+        String key = written.toLowerCase(Locale.ROOT);
+        options.put(key, decode(pair.substring(equals + 1)));
+        writtenKeys.put(key, written);
+      } catch (IllegalArgumentException e) {
+        // Its message quotes what follows the '%'.
+        throw invalid(
+            url,
+            "an option has a '%' that two hexadecimal digits do not follow; a literal % is"
+                + " written %25");
+      }
     }
   }
 

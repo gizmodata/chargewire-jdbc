@@ -3,11 +3,13 @@ package com.gizmodata.chargewire.jdbc;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
 import java.sql.SQLNonTransientConnectionException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -136,5 +138,233 @@ class UrlCredentialsTest {
     for (String url : urls()) {
       assertHidden(ChargewireUrl.redact(url), url);
     }
+  }
+
+  // ---- What a refusal says ----
+
+  /** Every message of a failure: its causes, the suppressed and the chained ones. */
+  static String messages(Throwable failure) {
+    StringBuilder all = new StringBuilder();
+    java.util.Deque<Throwable> left = new java.util.LinkedList<>(List.of(failure));
+    java.util.Set<Throwable> seen =
+        java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    while (!left.isEmpty()) {
+      Throwable next = left.pop();
+      if (next == null || !seen.add(next)) {
+        continue;
+      }
+      all.append(next).append('\n');
+      left.add(next.getCause());
+      left.addAll(List.of(next.getSuppressed()));
+      if (next instanceof SQLException) {
+        left.add(((SQLException) next).getNextException());
+      }
+    }
+    return all.toString();
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        // java.net.URI's own message quotes its whole input; only its reason is passed on.
+        "jdbc:chargewire://h:1/db?password=Zq7Kv Xw9Jp"
+            + "|Invalid Chargewire URL 'jdbc:chargewire://h:1/db?password=***': Illegal character"
+            + " in query (in a value, every character but letters, digits and -._~ is"
+            + " percent-encoded: a space is %20, a literal % is %25)",
+        "jdbc:chargewire://h:1/db?password=Zq7Kv%Xw9Jp"
+            + "|Invalid Chargewire URL 'jdbc:chargewire://h:1/db?password=***': Malformed escape"
+            + " pair (in a value, every character but letters, digits and -._~ is"
+            + " percent-encoded: a space is %20, a literal % is %25)",
+        "jdbc:chargewire://h:1/db;password=Zq7Kv%Xw9Jp"
+            + "|Invalid Chargewire URL 'jdbc:chargewire://h:1/db;password=***': an option has a"
+            + " '%' that two hexadecimal digits do not follow; a literal % is written %25",
+        // An option that is not key=value is not quoted: it may be the rest of a password.
+        "jdbc:chargewire://h:1/db?password=Zq7Kv&Xw9Jp"
+            + "|Invalid Chargewire URL 'jdbc:chargewire://h:1/db?password=***&***': an option is"
+            + " not key=value; an '&' or ';' inside a value is written %26 or %3B",
+        "jdbc:chargewire://h:1/db?password=Zq7Kv;Xw9Jp"
+            + "|Invalid Chargewire URL 'jdbc:chargewire://h:1/db?password=***;***': an option is"
+            + " not key=value; an '&' or ';' inside a value is written %26 or %3B",
+        "jdbc:chargewire://h:1/db?Xw9Jp"
+            + "|Invalid Chargewire URL 'jdbc:chargewire://h:1/db?***': an option is"
+            + " not key=value; an '&' or ';' inside a value is written %26 or %3B",
+      })
+  void aRefusedUrlIsNotQuotedInTheReason(String url, String message) {
+    SQLException error =
+        assertThrows(SQLNonTransientConnectionException.class, () -> ChargewireUrl.parse(url));
+    assertEquals("08001", error.getSQLState());
+    assertEquals(message, error.getMessage());
+  }
+
+  @Test
+  void anUnknownKeyAfterAHiddenValueIsNotNamed() throws SQLException {
+    // The rest of a password that holds an unencoded '&' reads as a key: 2.2.6 ignored it, and
+    // naming it as an unknown property would show it.
+    SQLException error =
+        assertThrows(
+            SQLNonTransientConnectionException.class,
+            () ->
+                ChargewireDriver.unknownKeys(
+                    ChargewireUrl.parse(
+                        "jdbc:chargewire://h:1/db?user=joe&password=" + HEAD + "&" + TAIL + "=1"),
+                    new Properties()));
+    assertEquals("08001", error.getSQLState());
+    assertEquals(
+        "Unknown connection property in the URL after 'password' (not named: it may be the rest"
+            + " of that value, in which an '&' or ';' is written %26 or %3B); the driver's"
+            + " properties are "
+            + PROPERTIES,
+        error.getMessage());
+    // The first unknown key is named as before, with what it resembles.
+    error =
+        assertThrows(
+            SQLNonTransientConnectionException.class,
+            () ->
+                ChargewireDriver.unknownKeys(
+                    ChargewireUrl.parse("jdbc:chargewire://h:1/db?user=joe&pasword=" + HEAD),
+                    new Properties()));
+    assertEquals(
+        "Unknown connection property 'pasword' in the URL: did you mean 'password'?",
+        error.getMessage());
+    error =
+        assertThrows(
+            SQLNonTransientConnectionException.class,
+            () ->
+                ChargewireDriver.unknownKeys(
+                    ChargewireUrl.parse(
+                        "jdbc:chargewire://h:1/db;sslmode=require?pasword=" + HEAD + "&x=1"),
+                    new Properties()));
+    assertEquals(
+        "Unknown connection property 'sslmode' in the URL: the driver's properties are "
+            + PROPERTIES,
+        error.getMessage());
+  }
+
+  private static final String PROPERTIES =
+      java.util.Arrays.stream(ChargewireProperty.values())
+          .map(ChargewireProperty::key)
+          .collect(java.util.stream.Collectors.joining(", "));
+
+  @ParameterizedTest
+  @CsvSource({
+    "useEncryption,true or false",
+    "connectTimeout,a number",
+    "authType,'password, client_certificate (or mtls) or oauth_browser (or external)'",
+    "ipcCompression,'auto, lz4_frame, zstd or none'",
+    "resultOrder,preserve or any",
+    "retainResults,true or false",
+  })
+  void anInvalidValueIsNotQuoted(String key, String expected) {
+    // A password pasted as another option's value, or the rest of one after an unencoded '&'.
+    SQLException error =
+        assertThrows(
+            SQLNonTransientConnectionException.class,
+            () ->
+                new ChargewireDriver()
+                    .connect("jdbc:chargewire://127.0.0.1:1?" + key + "=" + HEAD + TAIL, null));
+    assertEquals("08001", error.getSQLState());
+    assertEquals("Invalid value for " + key + ": expected " + expected, error.getMessage());
+  }
+
+  /**
+   * Every place and form of the password, through everything a connection attempt does before it
+   * reaches the network: the URL is read, its keys are checked, and its options become the
+   * connection's settings. Whatever is refused is refused with a {@code SQLException}, and no
+   * message of it holds either half of the password.
+   */
+  @Test
+  void noRefusalShowsAnyPartOfAPassword() {
+    java.util.Map<String, Integer> kinds = new java.util.TreeMap<>();
+    for (String url : urls()) {
+      for (Properties properties : List.of(new Properties(), credentials())) {
+        try {
+          ChargewireUrl parsed = ChargewireUrl.parse(url);
+          ChargewireDriver.unknownKeys(parsed, properties);
+          ChargewireDriver.config(parsed, ChargewireDriver.merge(parsed, properties));
+          kinds.merge("accepted", 1, Integer::sum);
+        } catch (SQLException e) {
+          assertTrue(List.of("08001", "28000").contains(e.getSQLState()), url);
+          String messages = messages(e);
+          assertHidden(messages, url);
+          kinds.merge(messages.replaceAll("^[^:]*: |[':(\n].*", "").trim(), 1, Integer::sum);
+        }
+      }
+    }
+    // The sweep reached every kind of refusal, not one of them two thousand times.
+    assertEquals(
+        java.util.Set.of(
+            "accepted",
+            "Invalid Chargewire URL",
+            "authType=oauth_browser signs in through the browser with the server",
+            "Unknown connection property",
+            "Unknown connection property in the URL",
+            "Unknown connection property in the URL after"),
+        kinds.keySet(),
+        kinds.toString());
+  }
+
+  /**
+   * The same through whole connection attempts, to a port nothing listens on, for the password as
+   * it is and with a character in it that a URL takes in a value.
+   */
+  @Test
+  void noFailureToConnectShowsAnyPartOfAPassword() throws Exception {
+    int port;
+    try (java.net.ServerSocket free = new java.net.ServerSocket(0)) {
+      port = free.getLocalPort();
+    }
+    ChargewireDriver driver = new ChargewireDriver();
+    int unreachable = 0;
+    for (String place : PLACES) {
+      for (String password : List.of(HEAD + TAIL, HEAD + "@" + TAIL + "=" + HEAD)) {
+        String url = place.replace("$", password).replace("nohost.invalid:1", "127.0.0.1:" + port);
+        SQLException error =
+            assertThrows(SQLException.class, () -> driver.connect(url, credentials()).close(), url);
+        String messages = messages(error);
+        assertHidden(messages, url);
+        if (messages.contains("127.0.0.1:" + port)) {
+          unreachable++;
+        }
+      }
+    }
+    assertTrue(unreachable >= 10, "connections that got as far as the network: " + unreachable);
+  }
+
+  @Test
+  void aTrustStoreThatCannotBeReadIsRefusedWithoutItsPassword(
+      @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+    java.nio.file.Path store = directory.resolve("trust.p12");
+    java.security.KeyStore empty = java.security.KeyStore.getInstance("PKCS12");
+    empty.load(null, null);
+    try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(store)) {
+      empty.store(out, "changeit".toCharArray());
+    }
+    ChargewireDriver driver = new ChargewireDriver();
+    for (java.nio.file.Path file : List.of(store, directory.resolve("missing.p12"), directory)) {
+      String url =
+          "jdbc:chargewire://127.0.0.1:1/db?trustStore="
+              + file.toUri().getRawPath()
+              + "&trustStorePassword="
+              + HEAD
+              + TAIL;
+      SQLException error =
+          assertThrows(
+              SQLNonTransientConnectionException.class,
+              () -> driver.connect(url, credentials()).close(),
+              url);
+      assertEquals("08001", error.getSQLState());
+      assertTrue(error.getMessage().startsWith("Cannot set up TLS: "), error.getMessage());
+      assertHidden(messages(error), url);
+    }
+  }
+
+  /** A password and a token in the Properties too: they are in no message either. */
+  private static Properties credentials() {
+    Properties properties = new Properties();
+    properties.setProperty("user", "joe");
+    properties.setProperty("password", TAIL + HEAD + TAIL);
+    properties.setProperty("connectTimeout", "2000");
+    return properties;
   }
 }

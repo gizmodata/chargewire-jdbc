@@ -103,8 +103,7 @@ class LosslessTypesTest {
             () -> DriverManager.getConnection(server.url("arrowLosslessConversion=maybe")));
     assertEquals("08001", invalid.getSQLState());
     assertEquals(
-        "Invalid value 'maybe' for arrowLosslessConversion: expected true or false",
-        invalid.getMessage());
+        "Invalid value for arrowLosslessConversion: expected true or false", invalid.getMessage());
   }
 
   /** The session that replaces a lost one gets the option too. */

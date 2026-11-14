@@ -101,6 +101,39 @@ class ConnectionIT {
   }
 
   @Test
+  void aRefusedSignInShowsNeitherThePasswordNorTheToken() {
+    ChargewireServer server = SharedServer.get();
+    String secret = "Zq7Kv@Xw9Jp";
+    for (String option : new String[] {"password", "token"}) {
+      for (boolean inUrl : new boolean[] {true, false}) {
+        Properties properties = server.properties();
+        properties.remove("password");
+        String url = server.url("");
+        if (inUrl) {
+          url += (url.contains("?") ? "&" : "?") + option + "=" + secret;
+        } else {
+          properties.setProperty(option, secret);
+        }
+        String connectUrl = url;
+        SQLException error =
+            assertThrows(
+                SQLException.class, () -> DriverManager.getConnection(connectUrl, properties));
+        assertEquals("28000", error.getSQLState(), error.getMessage());
+        assertEquals(401, error.getErrorCode());
+        StringBuilder messages = new StringBuilder();
+        for (Throwable each = error; each != null; each = each.getCause()) {
+          messages.append(each).append('\n');
+          for (Throwable suppressed : each.getSuppressed()) {
+            messages.append(suppressed).append('\n');
+          }
+        }
+        assertFalse(messages.toString().contains("Zq7Kv"), messages.toString());
+        assertFalse(messages.toString().contains("Xw9Jp"), messages.toString());
+      }
+    }
+  }
+
+  @Test
   void unknownUserIsRefused() {
     ChargewireServer server = SharedServer.get();
     Properties properties = server.properties();
