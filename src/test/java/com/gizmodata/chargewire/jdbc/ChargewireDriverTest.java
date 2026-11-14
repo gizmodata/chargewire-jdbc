@@ -376,7 +376,7 @@ class ChargewireDriverTest {
   @Test
   void redactionHidesTheValuesOfUnknownKeys() {
     assertEquals(
-        "jdbc:chargewire://h:1/lake?pasword=***&useEncryption=false;sslmode=***;user=joe",
+        "jdbc:chargewire://h:1/lake?pasword=***&useEncryption=false;***;user=joe",
         ChargewireUrl.redact(
             "jdbc:chargewire://h:1/lake?pasword=s3cr3t&useEncryption=false;sslmode=x;user=joe"));
     SQLException error =

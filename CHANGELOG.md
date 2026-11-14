@@ -59,8 +59,11 @@ All notable changes to this project are documented here. The format follows
     there (Spark's `dbtable`, `fetchsize`; Hibernate's `hibernate.connection.*`), and is reported
     as a warning on the connection (SQLSTATE `01S00`).
 
-  Messages name keys, never values. A URL shown in an error now hides the value of every unknown
-  key as well as passwords and tokens (a misspelled `pasword=` holds a password).
+  Messages name keys, never values. A URL shown in an error or returned by
+  `DatabaseMetaData.getURL()` now hides the value of every unknown key as well as passwords and
+  tokens (a misspelled `pasword=` holds a password), and after the first hidden value shows only
+  the driver's own options, everything else as `***`. A password that holds an unencoded `&` or
+  `;` continues there, and 2.2.6 showed the rest of it as an option (`password=***&rest-of-it`).
 
 - **`TIME WITH TIME ZONE` lost its offset, and an `OffsetTime` could not be bound.** The column
   read as a `java.sql.Time` of the time as written (`TIMETZ '13:14:15+02:00'` as `13:14:15`), and

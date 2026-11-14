@@ -154,8 +154,10 @@ above all) can't quietly not apply:
   `hibernate.connection.*` settings). The connection reports each as a warning
   (`Connection.getWarnings()`, SQLSTATE `01S00`).
 
-Messages name keys, never values, and a URL in a message shows `***` for passwords, tokens and
-the value of every unknown key.
+Messages name keys, never values. A URL in a message, and the one `DatabaseMetaData.getURL()`
+returns, shows `***` for passwords, tokens and the value of every unknown key, and after the first
+of those only the driver's own options (`…?password=***&useEncryption=false&***`): a password with
+an unencoded `&`, `;` or `#` in it continues there, so anything else is `***` whole.
 
 ## 🧠 How statements run
 
