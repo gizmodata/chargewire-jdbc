@@ -7,6 +7,7 @@ import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 
 /**
  * Maps Arrow types to JDBC's: {@link Types} codes, type names, precision and scale.
@@ -64,7 +65,165 @@ public final class SqlTypes {
    * @return a {@link Types} code
    */
   public static int jdbcType(Field field) {
+    if (isBool8(field)) {
+      return Types.BOOLEAN;
+    }
+    if (isVariant(field)) {
+      return Types.OTHER;
+    }
+    String duckDb = duckDbType(field.getType());
+    if (duckDb != null) {
+      switch (duckDb) {
+        case "bignum":
+          return Types.NUMERIC;
+        case "time_tz":
+          return Types.TIME_WITH_TIMEZONE;
+        case "bit":
+          return Types.OTHER;
+        default:
+          break;
+      }
+    }
     return jdbcType(field.getType());
+  }
+
+  /** Field metadata key of an Arrow extension type the reader has no class registered for. */
+  private static final String EXTENSION_NAME = "ARROW:extension:name";
+
+  /**
+   * Returns the name of a column's Arrow extension type, whether Arrow Java decodes it to a class
+   * of its own ({@code arrow.uuid}, {@code arrow.opaque}) or leaves it as its storage type with the
+   * name in the field's metadata ({@code arrow.bool8}, {@code arrow.json}).
+   *
+   * @param field the column
+   * @return the extension name, or {@code null} for a plain Arrow type
+   */
+  public static String extensionName(Field field) {
+    if (field.getType() instanceof ArrowType.ExtensionType) {
+      return ((ArrowType.ExtensionType) field.getType()).extensionName();
+    }
+    Map<String, String> metadata = field.getMetadata();
+    return metadata == null ? null : metadata.get(EXTENSION_NAME);
+  }
+
+  /**
+   * Returns whether a column is Arrow's {@code arrow.bool8}: a boolean in one signed byte, zero for
+   * false. DuckDB sends BOOLEAN that way with {@code arrow_lossless_conversion}.
+   *
+   * @param field the column
+   * @return {@code true} for {@code arrow.bool8} over an 8-bit integer
+   */
+  public static boolean isBool8(Field field) {
+    return field.getType() instanceof ArrowType.Int
+        && ((ArrowType.Int) field.getType()).getBitWidth() == 8
+        && "arrow.bool8".equals(extensionName(field));
+  }
+
+  /**
+   * Returns whether a column is a Variant ({@code arrow.parquet.variant}): a struct of the Variant
+   * encoding's {@code metadata} and {@code value}, which is how DuckDB sends VARIANT.
+   *
+   * @param field the column
+   * @return {@code true} for a Variant
+   */
+  public static boolean isVariant(Field field) {
+    if (!(field.getType() instanceof ArrowType.Struct)
+        || !"arrow.parquet.variant".equals(extensionName(field))) {
+      return false;
+    }
+    boolean metadata = false;
+    boolean value = false;
+    for (Field child : field.getChildren()) {
+      metadata |= child.getName().equals("metadata");
+      value |= child.getName().equals("value");
+    }
+    return metadata && value && field.getChildren().size() == 2;
+  }
+
+  /**
+   * Returns a column of a table's schema, as the server's catalog gives it, in the form a result
+   * carries the same column in, so that {@code DatabaseMetaData.getColumns} describes a column as
+   * {@code ResultSetMetaData} and {@code ParameterMetaData} do.
+   *
+   * <p>A DuckDB server's catalog gives the types DuckDB encodes itself as their storage alone (16
+   * bytes for HUGEINT and UHUGEINT, 8 for TIME WITH TIME ZONE, bytes for BIGNUM and BIT, a struct
+   * for VARIANT), with the type's name in {@link #TYPE_NAME} and without the {@code arrow.opaque}
+   * or {@code arrow.parquet.variant} extension that a result's column has; read as they are, they
+   * are binaries and a struct. HUGEINT, UHUGEINT and TIME WITH TIME ZONE come as these bytes only
+   * in a session with {@code arrow_lossless_conversion}, BIGNUM and VARIANT always, and BIT comes
+   * as bytes either way, so whether a result has it as bits is the caller's to say.
+   *
+   * @param field the column in the table's schema
+   * @param exactTypes whether results in this session carry BIT in DuckDB's own encoding
+   * @return the column as a result carries it; {@code field} itself for every other type
+   */
+  public static Field catalogField(Field field, boolean exactTypes) {
+    Map<String, String> metadata = field.getMetadata();
+    String name = metadata == null ? null : metadata.get(TYPE_NAME);
+    if (name == null || extensionName(field) != null) {
+      return field;
+    }
+    ArrowType type = field.getType();
+    int bytes =
+        type instanceof ArrowType.FixedSizeBinary
+            ? ((ArrowType.FixedSizeBinary) type).getByteWidth()
+            : 0;
+    String duckDb = null;
+    switch (name) {
+      case "HUGEINT":
+        duckDb = bytes == 16 ? "hugeint" : null;
+        break;
+      case "UHUGEINT":
+        duckDb = bytes == 16 ? "uhugeint" : null;
+        break;
+      case "TIME WITH TIME ZONE":
+        duckDb = bytes == 8 ? "time_tz" : null;
+        break;
+      case "BIGNUM":
+        duckDb = type instanceof ArrowType.Binary ? "bignum" : null;
+        break;
+      case "BIT":
+        duckDb = exactTypes && type instanceof ArrowType.Binary ? "bit" : null;
+        break;
+      case "VARIANT":
+        Map<String, String> variant = new java.util.LinkedHashMap<>(metadata);
+        variant.put(EXTENSION_NAME, "arrow.parquet.variant");
+        Field described =
+            new Field(
+                field.getName(),
+                new FieldType(field.isNullable(), type, field.getDictionary(), variant),
+                field.getChildren());
+        return isVariant(described) ? described : field;
+      default:
+        break;
+    }
+    if (duckDb == null) {
+      return field;
+    }
+    return new Field(
+        field.getName(),
+        new FieldType(
+            field.isNullable(),
+            new OpaqueType(type, duckDb, "DuckDB"),
+            field.getDictionary(),
+            metadata),
+        field.getChildren());
+  }
+
+  /**
+   * Returns the name of a type DuckDB sends as {@code arrow.opaque} (vendor {@code DuckDB}): {@code
+   * hugeint} and {@code uhugeint} (16 bytes, with {@code arrow_lossless_conversion}), {@code
+   * time_tz} (8 bytes, with it), {@code bit} (binary, with it) and {@code bignum} (binary, always).
+   *
+   * @param type the Arrow type
+   * @return DuckDB's name for the type, or {@code null} for any other type
+   */
+  public static String duckDbType(ArrowType type) {
+    if (!(type instanceof OpaqueType)) {
+      return null;
+    }
+    OpaqueType opaque = (OpaqueType) type;
+    return "DuckDB".equals(opaque.vendorName()) ? opaque.typeName() : null;
   }
 
   /**
@@ -197,6 +356,30 @@ public final class SqlTypes {
     if (integer16 != null) {
       return integer16;
     }
+    if (type == field.getType()) {
+      if (isBool8(field)) {
+        return "BOOLEAN";
+      }
+      if (isVariant(field)) {
+        return "VARIANT";
+      }
+      if ("arrow.json".equals(extensionName(field))) {
+        return "JSON";
+      }
+      String duckDb = duckDbType(type);
+      if (duckDb != null) {
+        switch (duckDb) {
+          case "bignum":
+            return "BIGNUM";
+          case "bit":
+            return "BIT";
+          case "time_tz":
+            return "TIME WITH TIME ZONE";
+          default:
+            break;
+        }
+      }
+    }
     if (type instanceof ArrowType.ExtensionType) {
       return isUuid(type)
           ? "UUID"
@@ -261,6 +444,73 @@ public final class SqlTypes {
       default:
         return type.getTypeID().name().toUpperCase(java.util.Locale.ROOT);
     }
+  }
+
+  /**
+   * Returns the column size as JDBC defines it, for a column: as {@link #columnSize(ArrowType)},
+   * and for the types only the column tells ({@code arrow.bool8}, DuckDB's own).
+   *
+   * @param field the column
+   * @return the size, or {@code null} where it does not apply
+   */
+  public static Integer columnSize(Field field) {
+    if (isBool8(field)) {
+      return 1;
+    }
+    String duckDb = duckDbType(field.getType());
+    if ("time_tz".equals(duckDb)) {
+      return 21;
+    }
+    if ("bignum".equals(duckDb) || "bit".equals(duckDb)) {
+      return null;
+    }
+    return columnSize(field.getType());
+  }
+
+  /**
+   * Returns the number of fractional digits of a column.
+   *
+   * @param field the column
+   * @return the scale, or {@code null} where it does not apply
+   */
+  public static Integer decimalDigits(Field field) {
+    if (isBool8(field)) {
+      return null;
+    }
+    String duckDb = duckDbType(field.getType());
+    if ("time_tz".equals(duckDb)) {
+      return 6;
+    }
+    if ("bignum".equals(duckDb)) {
+      return 0;
+    }
+    return decimalDigits(field.getType());
+  }
+
+  /**
+   * Returns whether a column's numbers can be negative.
+   *
+   * @param field the column
+   * @return {@code true} for signed numbers
+   */
+  public static boolean isSigned(Field field) {
+    if (isBool8(field)) {
+      return false;
+    }
+    return "bignum".equals(duckDbType(field.getType())) || isSigned(field.getType());
+  }
+
+  /**
+   * Returns whether a column is numeric.
+   *
+   * @param field the column
+   * @return {@code true} for integers, floating point and decimals
+   */
+  public static boolean isNumeric(Field field) {
+    if (isBool8(field)) {
+      return false;
+    }
+    return "bignum".equals(duckDbType(field.getType())) || isNumeric(field.getType());
   }
 
   /**

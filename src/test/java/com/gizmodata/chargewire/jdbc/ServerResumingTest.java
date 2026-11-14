@@ -202,6 +202,69 @@ class ServerResumingTest {
     }
   }
 
+  /** The options the driver opened its session with. */
+  private String sessionOptionsAfterAStatement(Connection connection) throws SQLException {
+    server.route(
+        "POST",
+        "/v1/sessions/s1/statements",
+        (exchange, request, path) ->
+            json(
+                exchange,
+                200,
+                document("q1", "succeeded", "{\"kind\":\"update\",\"rows_affected\":1}")));
+    try (Statement statement = connection.createStatement()) {
+      assertEquals(1, statement.executeUpdate("INSERT INTO t VALUES (1)"));
+    }
+    assertEquals(1, server.requests("POST", "/v1/sessions").size());
+    return server.requests("POST", "/v1/sessions").get(0).body();
+  }
+
+  /**
+   * Setting the catalog moves a session to that catalog's default schema, so a schema set before it
+   * (or given to connect) is not sent when the session opens: with the new catalog it would name
+   * another schema, or one that does not exist.
+   */
+  @Test
+  void aCatalogSetOnAStoppedServersConnectionForgetsTheSchemaSetBefore() throws Exception {
+    server.state = "stopped";
+    try (Connection connection = connect("")) {
+      connection.setSchema("raw");
+      assertEquals("raw", connection.getSchema());
+      connection.setCatalog("lake");
+      assertEquals("lake", connection.getCatalog());
+      assertNull(connection.getSchema(), "the catalog's default, which only the server knows");
+      String options = sessionOptionsAfterAStatement(connection);
+      assertTrue(options.contains("\"catalog\":\"lake\""), options);
+      assertFalse(options.contains("schema"), options);
+      assertEquals("main", connection.getSchema(), "the server's answer");
+    }
+  }
+
+  @Test
+  void aCatalogSetOnAStoppedServersConnectionForgetsTheSchemaGivenToConnect() throws Exception {
+    server.state = "stopped";
+    try (Connection connection = connect("catalog=cat&schema=raw")) {
+      connection.setCatalog("lake");
+      String options = sessionOptionsAfterAStatement(connection);
+      assertTrue(options.contains("\"catalog\":\"lake\""), options);
+      assertFalse(options.contains("schema"), options);
+    }
+  }
+
+  @Test
+  void aSchemaSetAfterTheCatalogOnAStoppedServersConnectionIsSent() throws Exception {
+    server.state = "stopped";
+    try (Connection connection = connect("schema=first")) {
+      connection.setCatalog("lake");
+      connection.setSchema("raw");
+      String options = sessionOptionsAfterAStatement(connection);
+      assertTrue(options.contains("\"catalog\":\"lake\""), options);
+      assertTrue(options.contains("\"schema\":\"raw\""), options);
+      assertTrue(
+          options.indexOf("catalog") < options.indexOf("schema"), "catalog first: " + options);
+    }
+  }
+
   @Test
   void aWrongPasswordForAStoppedServerFailsAtTheFirstStatement() throws Exception {
     server.state = "stopped";

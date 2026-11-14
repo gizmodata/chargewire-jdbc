@@ -1,6 +1,7 @@
 package com.gizmodata.chargewire.jdbc.accessor;
 
 import com.gizmodata.chargewire.jdbc.arrow.SqlTypes;
+import java.util.function.IntFunction;
 import org.apache.arrow.vector.BaseIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
@@ -25,6 +26,7 @@ import org.apache.arrow.vector.TimeMilliVector;
 import org.apache.arrow.vector.TimeNanoVector;
 import org.apache.arrow.vector.TimeSecVector;
 import org.apache.arrow.vector.TimeStampVector;
+import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.UuidVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
@@ -42,6 +44,7 @@ import org.apache.arrow.vector.dictionary.Dictionary;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.DictionaryEncoding;
+import org.apache.arrow.vector.types.pojo.Field;
 
 /**
  * Creates the {@link Accessor} for a vector.
@@ -59,6 +62,21 @@ public final class Accessors {
    * @return the accessor
    */
   public static Accessor create(FieldVector vector, DictionaryProvider dictionaries) {
+    return create(vector, null, dictionaries);
+  }
+
+  /**
+   * Creates the accessor for a column of the current batch.
+   *
+   * @param vector the column
+   * @param declared the column's field as the stream's schema declares it, or {@code null} for the
+   *     vector's own: a sparse union's type ids are only in the declaration (Arrow Java's {@code
+   *     UnionVector} reports ids of its own making)
+   * @param dictionaries the stream's dictionaries, for dictionary-encoded columns, or {@code null}
+   * @return the accessor
+   */
+  public static Accessor create(
+      FieldVector vector, Field declared, DictionaryProvider dictionaries) {
     DictionaryEncoding encoding = vector.getField().getDictionary();
     if (encoding != null && dictionaries != null) {
       Dictionary dictionary = dictionaries.lookup(encoding.getId());
@@ -69,6 +87,9 @@ public final class Accessors {
     }
     if (vector instanceof NullVector) {
       return new NestedAccessors.NullAccessor(vector);
+    }
+    if (vector instanceof TinyIntVector && SqlTypes.isBool8(vector.getField())) {
+      return new NumberAccessors.BoolAccessor((TinyIntVector) vector);
     }
     if (vector instanceof BaseIntVector && vector.getField().getType() instanceof ArrowType.Int) {
       ArrowType.Int type = (ArrowType.Int) vector.getField().getType();
@@ -131,29 +152,32 @@ public final class Accessors {
       return new TemporalAccessors.DurationAccessor((DurationVector) vector);
     }
     if (vector instanceof MapVector) {
-      return new NestedAccessors.MapAccessor((MapVector) vector, dictionaries);
+      return new NestedAccessors.MapAccessor((MapVector) vector, declared, dictionaries);
     }
     if (vector instanceof ListVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((ListVector) vector).getDataVector(), dictionaries);
+          vector, ((ListVector) vector).getDataVector(), child(declared, 0), dictionaries);
     }
     if (vector instanceof LargeListVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((LargeListVector) vector).getDataVector(), dictionaries);
+          vector, ((LargeListVector) vector).getDataVector(), child(declared, 0), dictionaries);
     }
     if (vector instanceof FixedSizeListVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((FixedSizeListVector) vector).getDataVector(), dictionaries);
+          vector, ((FixedSizeListVector) vector).getDataVector(), child(declared, 0), dictionaries);
     }
     if (vector instanceof ListViewVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((ListViewVector) vector).getDataVector(), dictionaries);
+          vector, ((ListViewVector) vector).getDataVector(), child(declared, 0), dictionaries);
+    }
+    if (vector instanceof StructVector && SqlTypes.isVariant(vector.getField())) {
+      return new NestedAccessors.VariantAccessor((StructVector) vector, dictionaries);
     }
     if (vector instanceof StructVector) {
-      return new NestedAccessors.StructAccessor((StructVector) vector, dictionaries);
+      return new NestedAccessors.StructAccessor((StructVector) vector, declared, dictionaries);
     }
     if (vector instanceof UnionVector || vector instanceof DenseUnionVector) {
-      return new NestedAccessors.UnionAccessor(vector, dictionaries);
+      return new NestedAccessors.UnionAccessor(vector, declared, dictionaries);
     }
     String integer16 = SqlTypes.duckDbInteger(vector.getField().getType());
     if (integer16 != null && vector instanceof ExtensionTypeVector) {
@@ -162,10 +186,39 @@ public final class Accessors {
           (FixedSizeBinaryVector) ((ExtensionTypeVector<?>) vector).getUnderlyingVector(),
           integer16.equals("HUGEINT"));
     }
+    String duckDb = SqlTypes.duckDbType(vector.getField().getType());
+    if (duckDb != null && vector instanceof ExtensionTypeVector) {
+      FieldVector storage = ((ExtensionTypeVector<?>) vector).getUnderlyingVector();
+      IntFunction<byte[]> bytes =
+          storage instanceof VarBinaryVector
+              ? ((VarBinaryVector) storage)::get
+              : storage instanceof FixedSizeBinaryVector
+                  ? ((FixedSizeBinaryVector) storage)::get
+                  : null;
+      if (bytes != null) {
+        switch (duckDb) {
+          case "bignum":
+            return new DuckDbAccessors.BignumAccessor(vector, bytes);
+          case "bit":
+            return new DuckDbAccessors.BitAccessor(vector, bytes);
+          case "time_tz":
+            return new DuckDbAccessors.TimeTzAccessor(vector, bytes);
+          default:
+            break;
+        }
+      }
+    }
     if (vector instanceof ExtensionTypeVector) {
       ExtensionTypeVector<?> extension = (ExtensionTypeVector<?>) vector;
       return create(extension.getUnderlyingVector(), dictionaries);
     }
     return new NestedAccessors.GenericAccessor(vector);
+  }
+
+  /** A declared field's child, or {@code null} when the declaration is not known. */
+  static Field child(Field declared, int index) {
+    return declared == null || declared.getChildren().size() <= index
+        ? null
+        : declared.getChildren().get(index);
   }
 }

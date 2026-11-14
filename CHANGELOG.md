@@ -6,6 +6,286 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-13
+
+**This release changes behaviour that an application written for 2.2.6 can depend on.** Each
+item is under "Changed" below, with what it was and what it is:
+
+- **Exact DuckDB types are on by default.** `getObject` and all three kinds of metadata change
+  for UUID, TIME WITH TIME ZONE, HUGEINT, UHUGEINT, BIT, BIGNUM, VARIANT and JSON.
+  `arrowLosslessConversion=false` keeps what 2.2.6 returned, except for BIGNUM and VARIANT.
+- **Connection strings that connected can now fail:** a URL with a key the driver does not know
+  or with `user:password@` before the host, and `Properties` with a key that resembles one of the
+  driver's or names TLS or signing in.
+- **Parameters typed `TIMESTAMP WITH TIME ZONE`** take a value without a zone as the session
+  reads the same literal (the fix), which also changes `setDate` without a `Calendar` and
+  `setObject` with a target type.
+- **A parameter is the value it had when its setter was called**, and **a batch may take more
+  than one request**; a failed batch reports the entries applied before the failing request.
+- **Text:** a nested `TIMESTAMP WITH TIME ZONE` in `getString` of a list, struct or map, and
+  three connection error messages, which no longer quote values.
+- **`setReadOnly(true)` adds a warning** that it enforces nothing.
+
+### Fixed
+
+- **A value without a time zone bound to a `TIMESTAMP WITH TIME ZONE` parameter was read in the
+  JVM's default time zone instead of the session's, so filters matched the wrong rows without an
+  error.** `setObject` with a `LocalDateTime` or a `LocalDate`, `setDate`, and `setString` with
+  text that has no offset were converted to an instant inside the driver, with the JVM's zone. On
+  a connection whose session `TimeZone` differs from the JVM's (a server in another zone, or
+  `SET TimeZone`), `ts = ?` then meant another instant than `ts = TIMESTAMP '2026-01-01 00:00:00'`
+  in the same session: with the JVM at UTC and the session in `Asia/Kolkata`, five and a half hours
+  off. Such a value now travels without a zone (as a timestamp without a zone, a date, or text),
+  and the server converts it in the session's time zone when the statement runs, exactly as it
+  converts the literal, daylight-saving gaps and overlaps included; the JVM's zone plays no part.
+  Values that are points in time (`Instant`, `OffsetDateTime`, `ZonedDateTime`,
+  `java.sql.Timestamp` with or without a `Calendar`, `java.util.Date`, `Calendar`, text with an
+  offset) are stored as that instant, as before. Reading was already right: `LocalDateTime`,
+  `OffsetDateTime`, `ZonedDateTime` and `getString` show a `TIMESTAMP WITH TIME ZONE` in the
+  session's zone, and `getTimestamp` and `Instant` give the instant. See README, "Time zones".
+
+  Not changed, and now said in the README: a parameter the server gives no type (`ts >= ? -
+  INTERVAL 7 DAY`, `date_trunc('day', ?)`, `CASE … THEN ? END`) takes a `java.sql.Timestamp` as a
+  TIMESTAMP holding the JVM zone's wall clock, as 2.2.6 did. Against a TIMESTAMP column that is
+  right; against a `TIMESTAMP WITH TIME ZONE` column it is the wrong instant when the session's
+  zone is not the JVM's. Bind an `Instant` or an `OffsetDateTime` there, or write `CAST(? AS
+  TIMESTAMPTZ)`.
+
+- **A `TIMESTAMP WITH TIME ZONE` read in a session whose `TimeZone` is a three-letter ID (`PST`,
+  `IST`, `EST`, `ACT` and 24 more) or a name the time zone database has dropped showed UTC's
+  wall clock.** The server takes these names, `java.time` does not know them by themselves, and
+  the driver then fell back to UTC without saying so: `getObject(column, LocalDateTime.class)`,
+  `OffsetDateTime`, `ZonedDateTime` and `getString` were off by the zone's offset (the instant
+  itself, `getTimestamp` and `Instant`, was right). They now resolve as the server means them. In
+  a zone the JVM cannot resolve at all, `LocalDateTime`, `LocalDate` and `LocalTime` are refused
+  with SQLSTATE `22009` instead of showing UTC's wall clock as the session's; the instant still
+  reads, and `OffsetDateTime` and `getString` give it at UTC, as before.
+
+- **`getString` of a LIST, STRUCT or MAP holding a `TIMESTAMP WITH TIME ZONE` showed the JVM
+  zone's wall clock, without an offset.** The text of a nested value was made from the elements'
+  Java objects, and a `java.sql.Timestamp` prints itself in the JVM's zone: the instant that a
+  column shows as `2026-01-15 17:30:00+05:30` in a session in `Asia/Kolkata` read
+  `["2026-01-15 07:00:00.0"]` in a list on a JVM in New York, and changed with the JVM's zone. A
+  nested `TIMESTAMP WITH TIME ZONE` now has the text it has as a column, in lists, structs, maps
+  (as a key too) and unions, at any depth. A nested TIME WITH TIME ZONE, which reads as an
+  `OffsetTime` since this release, has its column's text as well (`12:00:00+05:30`; an
+  `OffsetTime` prints `12:00+05:30`). The elements `getObject` returns are unchanged.
+
+- **On a connection made to a stopped server, `setSchema` followed by `setCatalog` opened the
+  session in the wrong schema, or not at all.** Such a connection keeps `setCatalog` and
+  `setSchema` and sends them when its first statement opens the session (2.2.6). It kept the
+  schema set before the catalog and sent both, so the session opened in a schema of that name in
+  the new catalog instead of the catalog's default schema (later statements ran there, with no
+  error), and when the new catalog had no such schema, every statement failed with `SET schema:
+  No catalog + schema named …` and the connection could never open. The same happened to a schema
+  given to connect (`?schema=`) before a `setCatalog`. Setting the catalog now forgets the kept
+  schema, as it moves an open session to the catalog's default schema. A connection to a serving
+  server was not affected (it takes the server's answer after each setting), and the session
+  that replaces a lost one opens where the lost one was, for either order.
+
+- **A connection property the driver does not know was ignored without a word**, in the URL and
+  in the `Properties`, so a misspelled setting silently did not apply: `tlsRootCert=…`,
+  `useSystemTruststore=false` or `clientCert=…` left the connection with the defaults its author
+  meant to change. Now (README, "Properties"):
+  - an unknown key in the URL fails the connection (`SQLNonTransientConnectionException`, SQLSTATE
+    `08001`), naming the key and the property it resembles;
+  - an unknown key in the `Properties` fails the connection the same way when it resembles one of
+    the driver's (`tls_root_certs`, `tlsRootCert`, `clientCert`, `connectTimeoutMs`) or names TLS
+    or signing in in another driver's words (`sslmode`, `useSSL`, `trustServerCertificate`);
+  - any other unknown key in the `Properties` still connects, since frameworks put their own keys
+    there (Spark's `dbtable`, `fetchsize`; Hibernate's `hibernate.connection.*`), and is reported
+    as a warning on the connection (SQLSTATE `01S00`).
+
+  Messages name keys, never values. A URL shown in an error or returned by
+  `DatabaseMetaData.getURL()` now hides the value of every unknown key as well as passwords and
+  tokens (a misspelled `pasword=` holds a password), and after the first hidden value shows only
+  the driver's own options, everything else as `***`. A password that holds an unencoded `&` or
+  `;` continues there, and 2.2.6 showed the rest of it as an option (`password=***&rest-of-it`).
+
+- **A password or token written in a URL could be shown in the error that refused the URL.** A
+  password has to be percent-encoded in a URL, and one that was not is exactly what gets a URL
+  refused. Then:
+  - a space, `^`, `|`, `{`, `}`, `"`, `<`, `>`, `\`, a backtick or a `%` without two hexadecimal
+    digits in it made the message end with `java.net.URI`'s own text, which quotes the whole URL:
+    `Invalid Chargewire URL '…?password=***': Illegal character in query at index 46:
+    chargewire://host/db?password=the password`;
+  - after an `&` or `;` in it, the rest was quoted as an option (`option 'rest-of-it' is not
+    key=value`), and since this release would have been named as an unknown property when it
+    held an `=`;
+  - a value given to another option was quoted (`Invalid value '…' for connectTimeout`), which is
+    where a password ends up when two options are swapped.
+
+  No message quotes any of these now. The reason is `java.net.URI`'s without its input, an option
+  that is not `key=value` is not quoted, `Invalid value for connectTimeout: expected a number`
+  names the option and what it takes, and a key the driver does not know that follows a hidden
+  value is reported without its name (`Unknown connection property in the URL after 'password'
+  (not named: it may be the rest of that value …)`). Two refusals that were not `SQLException`s
+  are: a `%` without two hexadecimal digits in the `;key=value` part of a URL, and a `trustStore`
+  that is not a file, both an `IllegalArgumentException` before, are SQLSTATE `08001`.
+  `UrlCredentialsTest` writes a marker password and token in every place a URL has for one, with
+  35 characters and sequences in it, and looks for it in every message of every refusal.
+
+- **`TIME WITH TIME ZONE` lost its offset, and an `OffsetTime` could not be bound.** The column
+  read as a `java.sql.Time` of the time as written (`TIMETZ '13:14:15+02:00'` as `13:14:15`), and
+  `setObject` with an `OffsetTime` failed with `Cannot convert 'OffsetTime' to TIME`. It now reads
+  as `java.time.OffsetTime` (JDBC type `TIME_WITH_TIMEZONE`) and takes one as a parameter, through
+  the whole range of offsets.
+- **With `arrow_lossless_conversion` on, BOOLEAN read as TINYINT (`Byte`), and a BOOLEAN or JSON
+  parameter was refused by the server** (`Arrow parameters of type extension<arrow.bool8> are not
+  supported`), so the exact types could not be used. Both read and bind as themselves now, in
+  lists, structs and maps too.
+- **BIGNUM, BIT and VARIANT arrived as bytes in DuckDB's encodings.** BIGNUM now reads as a
+  `BigDecimal` (JDBC type `NUMERIC`), BIT as its bits (`"10101"`), and VARIANT as the Java value
+  it holds, with JSON text for an object or an array (README, "DuckDB types").
+- **A parameter set from an object that was changed afterwards took the later value.** The
+  driver kept the object a setter was given and read it when the statement ran. One
+  `java.sql.Timestamp` or `java.sql.Date` reused for every row of a batch (`ts.setTime(…);
+  ps.setTimestamp(1, ts); ps.addBatch();` in a loop) therefore stored the last row's value in
+  every row, without an error, and so did a `byte[]`, an array or a `List` filled again between
+  rows; a value changed after its setter and before `execute` was stored as changed; the
+  `Calendar` given to `setTimestamp`, `setDate` or `setTime` was read at its later zone; and a
+  `java.sql.Array` freed after `setObject` failed the statement (`The array was freed`). A setter
+  now takes the value as it is when it is called: `java.util.Date` and its subclasses,
+  `Calendar`, arrays and `List`s with their elements, and a `java.sql.Array`'s elements are
+  copied, a `StringBuilder` is kept as its text and an `AtomicLong` as its number. Streams,
+  readers, `Blob`s and `Clob`s were already read by their setters.
+- **`executeBatch` could store something else than the same rows stored one by one.** A batch
+  goes to the server as Arrow, one column per parameter, and a column has one type. For a
+  parameter the server gives no type (an argument of a function that takes any type), the driver
+  chose one type for the whole batch: an `Integer` next to a `Long` went as BIGINT, and rows of
+  unrelated types all went as text, numbers, dates and booleans included, or the batch failed
+  (`Cannot convert 'binary data' to text`) where each row alone was accepted. A TIME parameter
+  with an `OffsetTime` in one row turned the whole column to text and then refused rows it takes
+  alone. A batch is now sent as one request per run of consecutive rows of the same form wherever
+  the form follows the value, so every row goes exactly as it goes alone (README, "How statements
+  run"); a batch for a parameter of a declared type is one request, as before. `BatchesIT` binds
+  67 Java values to a parameter of each of 43 types, and to an untyped one, alone and in
+  one batch, and compares what the server holds.
+- **A UNION failed to read, or read as NULL, for most member types.** The driver asked Arrow
+  Java for a union's member by the kind of its type, which cannot answer for a kind that needs
+  more than its name and has one slot per kind. Reading a member that is a DECIMAL, HUGEINT,
+  UHUGEINT, BIGNUM, TIMESTAMP WITH TIME ZONE or MAP threw a `NullPointerException` (not a
+  `SQLException`), a fixed-size ARRAY or a UNION inside the union an
+  `UnsupportedOperationException`, and a LIST, STRUCT or VARIANT member read as NULL without an
+  error; of two members of the same type, the second read as the first. With the exact types this
+  release asks for, UUID, TIME WITH TIME ZONE and BIT members would have joined the first group.
+  Every type now reads as a member of a union exactly as it reads as a column, alone and in a list.
+- **Several types could not be bound, and one was stored wrong.** A parameter for an ENUM column
+  failed (`IPC stream did not have the expected number (1) of dictionaries`), a fixed-size ARRAY,
+  a BIGNUM and a VARIANT were refused (`Parameters of type … are not supported`), and a HUGEINT or
+  UHUGEINT above 38 digits did not fit (`does not fit in DECIMAL(38,0)`). `setString` for a BIT
+  parameter stored the text's bytes as bits (`'10101'` became 40 bits) without an error. Each now
+  takes what `getObject` returns for it, and stores it exactly.
+
+- **The jar lacked licence texts for what it bundles.** It had no Apache License 2.0 text at all
+  (its own licence, and that of Arrow, Jackson, Commons and FlatBuffers inside it), none for
+  SLF4J (MIT) or for zstd-jni and the Zstandard library in it (BSD-2-Clause and BSD-3-Clause),
+  which those licences require of a binary redistribution, and its NOTICE was a machine merge of
+  the components' notices, headed "in this case for" no product and without this driver's own. The
+  jar now has `META-INF/LICENSE`, a `META-INF/NOTICE` that is this driver's notice followed by each
+  component's own, `META-INF/THIRD-PARTY-NOTICES.txt` listing every component with its version and
+  licence, and the other licence texts under `META-INF/licenses/`, for the exact versions bundled:
+  the build fails when the list, a notice or a licence text no longer matches the jars it
+  resolves, or the list no longer matches the built jar.
+
+### Added
+
+- **`arrowLosslessConversion`** (default `true`): on a DuckDB server (Hardcharger,
+  chargewire-duckdb), the driver turns the session option `duckdb_arrow_lossless_conversion` on as
+  each session opens, so every DuckDB type arrives as itself without the application choosing a
+  mode. `arrowLosslessConversion=false` leaves the session as the server opens it, which is what
+  2.2.6 did. A server without the option is not asked, and `SET SESSION arrow_lossless_conversion`
+  in SQL still switches the form; the driver reads both.
+
+- **`ChargewireDriver.redact(url)`**: a URL as the driver's messages show one, for a driver built
+  over this one with a URL scheme of its own, so both hide the same things.
+
+### Changed
+
+Everything here is something an application written for 2.2.6 can notice.
+
+- **What `getObject` and the metadata return for some DuckDB types, now that the driver asks for
+  the exact types.** Before and after, for a connection that set nothing (set
+  `arrowLosslessConversion=false` to keep the "before" column, except for BIGNUM and VARIANT,
+  which arrive in the same encoding either way):
+
+  | DuckDB type | Before (2.2.6) | Now |
+  |---|---|---|
+  | UUID | `String`, VARCHAR, type name `VARCHAR` | `java.util.UUID`, OTHER, type name `UUID` (`getString` is unchanged) |
+  | TIME WITH TIME ZONE | `java.sql.Time` without the offset, TIME | `java.time.OffsetTime`, TIME_WITH_TIMEZONE, type name `TIME WITH TIME ZONE` |
+  | HUGEINT, UHUGEINT | `BigDecimal`, DECIMAL, type name `DECIMAL(38,0)`; above 38 digits an error from the server | `BigDecimal`, NUMERIC, type name `HUGEINT` or `UHUGEINT`, precision 39; every value reads |
+  | BIT | `byte[]` in DuckDB's encoding, VARBINARY | `String` of `0` and `1`, OTHER, type name `BIT` (`getBytes` still gives the encoding) |
+  | BIGNUM | `byte[]` in DuckDB's encoding, VARBINARY | `BigDecimal`, NUMERIC, type name `BIGNUM` (`getBytes` still gives the encoding) |
+  | VARIANT | `Map` of two byte arrays (`metadata`, `value`), STRUCT | the value it holds, OTHER, type name `VARIANT` |
+  | JSON | `String`, VARCHAR, type name `VARCHAR` | the same, type name `JSON` |
+
+  `DatabaseMetaData.getColumns` says the same as `ResultSetMetaData` and `ParameterMetaData` for
+  each of them (`DATA_TYPE`, `COLUMN_SIZE`, `DECIMAL_DIGITS`, `NUM_PREC_RADIX`). On 2.2.6 it said
+  DECIMAL 39 for HUGEINT and UHUGEINT (now NUMERIC 39), TIME 15 for TIME WITH TIME ZONE (now
+  TIME_WITH_TIMEZONE 21), VARCHAR for UUID (now OTHER 36), VARBINARY for BIT (now OTHER) and
+  BIGNUM (now NUMERIC), and STRUCT for VARIANT (now OTHER); `TYPE_NAME` is unchanged.
+
+  For an application that had turned `arrow_lossless_conversion` on itself, BOOLEAN changes from
+  `Byte` (TINYINT) to `Boolean`, TIME WITH TIME ZONE from eight bytes to `OffsetTime`, and BIT,
+  BIGNUM and VARIANT as above.
+- **`Connection.setReadOnly(true)` says that it enforces nothing.** It was, and is, a hint: the
+  driver keeps the value and the session still runs any statement its user may run, because
+  Chargewire has no read-only session to switch to. The first `setReadOnly(true)` on a connection
+  now adds a warning (`getWarnings()`, SQLSTATE `01000`) that says so and names what does refuse
+  writes (a read-only user, a server started read-only, `BEGIN TRANSACTION READ ONLY`), and the
+  README has a section on it. Nothing else changes: no request is sent, and no statement is
+  refused.
+- **Connection strings that connected before and now fail** (see the fix above): a URL with a
+  key that is not a driver property (it was ignored), and `Properties` with a key that resembles
+  a driver property or names TLS or signing in. Remove the key, or spell it as the error says.
+- **A URL with credentials before the host is refused**: `jdbc:chargewire://user:password@host/…`
+  fails with SQLSTATE `08001` and says where they go (the `user` and `password` properties, or
+  the URL's options of those names). 2.2.6 connected and dropped them without a word, so such a
+  URL only ever worked with the credentials given a second time, and it showed them unredacted in
+  every message with the URL and in `DatabaseMetaData.getURL()`. They are `***@` in messages now.
+- **The text of a nested `TIMESTAMP WITH TIME ZONE`** (see the fix above): `getString` of a list,
+  struct or map shows it as `"2026-01-15 17:30:00+05:30"` (the session's wall clock and offset)
+  where it showed `"2026-01-15 07:00:00.0"` (the JVM zone's wall clock). A timestamp without a zone
+  inside a list keeps its text (`"2026-01-15 12:00:00.0"`).
+- **A parameter is the value it had when its setter was called** (see the fix above). Code that
+  set a parameter from a `Timestamp`, `Date`, `Calendar`, array or `List`, changed that object and
+  then executed had the changed value sent; it now has the value as it was set, and must call the
+  setter again to send another.
+- **A batch may take more than one request** (see the fix above): for a parameter the server
+  gives no type, a `TIMESTAMP WITH TIME ZONE` or a time of day, when the rows differ in form (an
+  `Instant` in one row and a `LocalDateTime` in the next; an `Integer` and a `String` for an
+  untyped parameter). Before, such a batch was one request with every row re-typed to one type.
+  The values stored are the ones each row stores alone. When a batch fails,
+  `BatchUpdateException.getUpdateCounts()` now has the counts of the entries of the requests
+  that were applied before the failing one (before: always empty).
+- **The text of three connection errors** (their class and SQLSTATE `08001` are unchanged), so
+  that none quotes what may be a password: `Invalid value for <option>: expected …` (before:
+  `Invalid value '<value>' for <option>: …`), `an option is not key=value; …` (before: `option
+  '<text>' is not key=value`), and `java.net.URI`'s reason without `at index N: <the URL>`.
+
+- **Parameters typed `TIMESTAMP WITH TIME ZONE`**: what an application can see of the first fix
+  above, beyond the corrected instant:
+
+  - `setDate(index, date)` without a `Calendar` is that calendar date at midnight in the session's
+    zone, as `DATE '…'` is (before: midnight in the JVM's zone). With a `Calendar` it is still
+    midnight in the `Calendar`'s zone.
+  - `setObject(index, value, Types.TIMESTAMP)` with an `Instant`, `OffsetDateTime`, `ZonedDateTime`
+    or `Calendar` stores that instant (before: the value's own wall clock, read in the JVM's zone).
+  - `setObject(index, value, Types.TIMESTAMP_WITH_TIMEZONE)` with a `LocalDateTime`, a `LocalDate`,
+    a `java.sql.Date` or text without an offset keeps the value without a zone (before: an instant
+    made with the JVM's zone). For a parameter whose type the server does not know, the value is
+    therefore sent as a `TIMESTAMP` or `DATE` (before: a `TIMESTAMP WITH TIME ZONE`), and a
+    `TIMESTAMP` parameter stores the wall clock as given (before: shifted by the JVM's offset).
+  - Text without an offset is read by the server, so every form it reads in a literal works
+    (`2026-01-15`, `2026-01-15 12:00:00+05`, `2026-01-15 12:00:00 America/New_York`), and text it
+    cannot read fails with the server's conversion error (before: only ISO date-times, and SQLSTATE
+    `22018` from the driver).
+  - `setTime` and a `java.sql.Time` are refused with SQLSTATE `22018`, as a `LocalTime` already was
+    (before: stored as that time of day on 1970-01-01 in the JVM's zone).
+- **A `TIMESTAMP WITH TIME ZONE` in a zone the JVM cannot resolve** (a name only a newer time zone
+  database has) refuses `LocalDateTime`, `LocalDate` and `LocalTime` with SQLSTATE `22009`
+  (before: UTC's wall clock). Its instant reads as before.
+
 ## [2.2.6] - 2026-11-07
 
 ### Fixed

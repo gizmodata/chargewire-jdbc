@@ -80,6 +80,30 @@ public abstract class Accessor {
   }
 
   /**
+   * Appends the value as it reads inside the text of a list, a struct or a map: JSON, made from the
+   * value's object. A type whose object no longer has what its text shows (a {@code TIMESTAMP WITH
+   * TIME ZONE}'s zone: its object is the instant) appends its {@link #getString} instead.
+   *
+   * @param row a row, which may be null
+   * @param out where the text goes
+   * @throws SQLException if the value cannot be read
+   */
+  void appendJson(int row, StringBuilder out) throws SQLException {
+    NestedAccessors.render(isNull(row) ? null : getObject(row), out);
+  }
+
+  /**
+   * Returns the value as the key of a map in that text.
+   *
+   * @param row a non-null row
+   * @return the key's text
+   * @throws SQLException if the value cannot be read
+   */
+  String jsonKey(int row) throws SQLException {
+    return String.valueOf(getObject(row));
+  }
+
+  /**
    * Returns the value as a boolean.
    *
    * @param row a non-null row
@@ -243,6 +267,18 @@ public abstract class Accessor {
   }
 
   /**
+   * Returns the value as a time of day with its offset from UTC: a time with a time zone as it is,
+   * a timestamp with a time zone at its time of day.
+   *
+   * @param row a non-null row
+   * @return the offset time
+   * @throws SQLException unless the value is a time or a timestamp with a time zone
+   */
+  public OffsetTime getOffsetTime(int row) throws SQLException {
+    return getOffsetDateTime(row).toOffsetTime();
+  }
+
+  /**
    * Returns the value as a {@link Date}. A date without a zone is taken at midnight in the
    * calendar's zone, or the JVM's when there is no calendar.
    *
@@ -391,7 +427,7 @@ public abstract class Accessor {
     } else if (type == ZonedDateTime.class) {
       value = getZonedDateTime(row);
     } else if (type == OffsetTime.class) {
-      value = getOffsetDateTime(row).toOffsetTime();
+      value = getOffsetTime(row);
     } else if (type == Date.class) {
       value = getDate(row, null);
     } else if (type == Time.class) {

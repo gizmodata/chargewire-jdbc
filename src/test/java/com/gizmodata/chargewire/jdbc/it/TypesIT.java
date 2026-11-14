@@ -94,7 +94,8 @@ class TypesIT {
    */
   @Test
   void hugeintBeyondDecimal38IsRefusedWithoutLosslessConversion() throws SQLException {
-    try (Connection connection = SharedServer.connect();
+    // The driver now asks for lossless conversion itself: this is the session without it.
+    try (Connection connection = SharedServer.connect("arrowLosslessConversion=false");
         Statement statement = connection.createStatement()) {
       SQLException refused =
           assertThrows(

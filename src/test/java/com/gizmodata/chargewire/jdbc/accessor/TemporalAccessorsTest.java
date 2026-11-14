@@ -277,6 +277,56 @@ class TemporalAccessorsTest extends AccessorFixture {
     assertEquals("1970-01-01 05:30:00+05:30", offset.getString(0));
   }
 
+  /** Zone names servers send that {@code ZoneId.of} alone does not know. */
+  @Test
+  void zonesNamedByOldIdsShowTheirOwnWallClock() throws SQLException {
+    long noonUtcInJuly = Instant.parse("2026-07-15T12:00:00Z").getEpochSecond();
+    Object[][] zones = {
+      {"PST", "2026-07-15T05:00"}, // America/Los_Angeles, with its daylight saving
+      {"EST", "2026-07-15T07:00"}, // a fixed -05:00
+      {"IST", "2026-07-15T17:30"}, // Asia/Kolkata
+      {"ACT", "2026-07-15T21:30"}, // Australia/Darwin
+      {"US/Pacific-New", "2026-07-15T05:00"},
+      {"Canada/East-Saskatchewan", "2026-07-15T06:00"},
+      {"ROC", "2026-07-15T20:00"},
+      {"Factory", "2026-07-15T12:00"},
+    };
+    for (Object[] zone : zones) {
+      Accessor accessor = accessor(timestamps(TimeUnit.SECOND, (String) zone[0], noonUtcInJuly));
+      LocalDateTime wallClock = LocalDateTime.parse((String) zone[1]);
+      assertEquals(wallClock, accessor.getLocalDateTime(0), (String) zone[0]);
+      assertEquals(wallClock, accessor.getOffsetDateTime(0).toLocalDateTime(), (String) zone[0]);
+      assertEquals(
+          Instant.ofEpochSecond(noonUtcInJuly), accessor.getTimestamp(0, null).toInstant());
+    }
+  }
+
+  /**
+   * A zone this JVM cannot resolve: the instant reads, the wall clock is refused rather than shown
+   * as UTC's.
+   */
+  @Test
+  void aZoneTheJvmDoesNotKnowHasAnInstantButNoWallClock() throws SQLException {
+    Instant instant = Instant.parse("2026-07-15T12:00:00Z");
+    Accessor accessor =
+        accessor(timestamps(TimeUnit.SECOND, "Mars/Olympus", instant.getEpochSecond()));
+    assertEquals(instant, accessor.getTimestamp(0, null).toInstant());
+    assertEquals(instant, accessor.getOffsetDateTime(0).toInstant());
+    assertEquals(instant, accessor.getObject(0, Instant.class));
+    assertEquals("2026-07-15 12:00:00+00:00", accessor.getString(0), "the instant, at UTC");
+    for (Class<?> wallClock :
+        new Class<?>[] {LocalDateTime.class, LocalDate.class, LocalTime.class}) {
+      SQLDataException refused =
+          assertThrows(SQLDataException.class, () -> accessor.getObject(0, wallClock));
+      assertEquals("22009", refused.getSQLState());
+      assertEquals(
+          "This JVM does not know the column's time zone 'Mars/Olympus', so it cannot show the"
+              + " value's wall clock there: read it as an Instant, an OffsetDateTime or a"
+              + " Timestamp, or cast it to VARCHAR in SQL",
+          refused.getMessage());
+    }
+  }
+
   @Test
   void intervals() throws SQLException {
     IntervalYearVector years =

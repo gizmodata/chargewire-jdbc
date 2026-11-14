@@ -2,6 +2,7 @@ package com.gizmodata.chargewire.jdbc;
 
 import com.gizmodata.chargewire.jdbc.client.IpcCompression;
 import java.sql.DriverPropertyInfo;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -10,6 +11,14 @@ import java.util.Map;
  * the URL ({@code ?key=value&...} or {@code ;key=value;...}) or in the {@link java.util.Properties}
  * passed to {@link java.sql.DriverManager#getConnection(String, java.util.Properties)}; a value in
  * the URL wins over the same key in the properties.
+ *
+ * <p>A key the driver does not know is never ignored silently. In the URL, which is the driver's
+ * own, it fails the connection (SQLSTATE {@code 08001}). In the {@code Properties}, which
+ * frameworks fill with keys of their own (Spark passes its read options, Hibernate its {@code
+ * hibernate.connection.*} settings), a key fails the connection when it is a misspelling of one of
+ * the driver's ({@link #resembling(String)}) or names TLS or signing in ({@link
+ * #namesSecurity(String)}); any other is left alone and reported as a warning on the connection
+ * (SQLSTATE {@code 01S00}).
  */
 public enum ChargewireProperty {
   /**
@@ -131,7 +140,21 @@ public enum ChargewireProperty {
   RESULT_ORDER(
       "resultOrder",
       "preserve",
-      "preserve or any: whether a result read in partitions must keep its row order");
+      "preserve or any: whether a result read in partitions must keep its row order"),
+  /**
+   * Whether the driver asks a DuckDB server for its exact Arrow types: on a server whose sessions
+   * have the option {@code duckdb_arrow_lossless_conversion} (Hardcharger, chargewire-duckdb), the
+   * driver turns it on as each session opens. UUID then arrives as a UUID (not text), TIME WITH
+   * TIME ZONE with its offset, BIT as bits, and HUGEINT and UHUGEINT exactly through their whole
+   * range (not as DECIMAL(38, 0), which fails above 38 digits). {@code false} leaves the session as
+   * the server opens it, which is what the driver did before this property existed. Either way a
+   * statement can {@code SET SESSION arrow_lossless_conversion}, and the driver reads both forms.
+   */
+  ARROW_LOSSLESS_CONVERSION(
+      "arrowLosslessConversion",
+      "true",
+      "Ask a DuckDB server for exact Arrow types (UUID, TIME WITH TIME ZONE, BIT, HUGEINT);"
+          + " false: as the server opens the session");
 
   private final String key;
   private final String defaultValue;
@@ -159,6 +182,169 @@ public enum ChargewireProperty {
    */
   public String defaultValue() {
     return defaultValue;
+  }
+
+  /**
+   * Returns the property with a key, in any case.
+   *
+   * @param key a key as written in a URL or in {@link java.util.Properties}
+   * @return the property, or {@code null} when the driver has none of that name
+   */
+  public static ChargewireProperty of(String key) {
+    if (key != null) {
+      for (ChargewireProperty property : values()) {
+        if (property.key.equalsIgnoreCase(key)) {
+          return property;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Whether the property's value is a credential, which no message may show.
+   *
+   * @return {@code true} for passwords and tokens
+   */
+  boolean secret() {
+    return this == PASSWORD
+        || this == TOKEN
+        || this == SUBJECT_TOKEN
+        || this == TRUST_STORE_PASSWORD;
+  }
+
+  /** The properties that decide whom the connection trusts and how it signs in. */
+  static final List<ChargewireProperty> SECURITY =
+      List.of(
+          AUTH_TYPE,
+          USER,
+          PASSWORD,
+          TOKEN,
+          SUBJECT_TOKEN,
+          USE_ENCRYPTION,
+          DISABLE_CERTIFICATE_VERIFICATION,
+          USE_SYSTEM_TRUST_STORE,
+          TLS_ROOT_CERTS,
+          TRUST_STORE,
+          TRUST_STORE_PASSWORD,
+          CLIENT_CERTIFICATE,
+          CLIENT_KEY);
+
+  /**
+   * Parts of other drivers' names for TLS and sign-in settings ({@code sslmode}, {@code useSSL}).
+   */
+  private static final List<String> SECURITY_WORDS =
+      List.of(
+          "ssl",
+          "tls",
+          "cert",
+          "trust",
+          "encrypt",
+          "verif",
+          "auth",
+          "passw",
+          "pwd",
+          "secret",
+          "credential",
+          "token",
+          "keystore",
+          "privatekey",
+          "clientkey");
+
+  /** Letters and digits in lower case: {@code tls-root-certs} and {@code TLS_ROOT_CERTS} alike. */
+  private static String letters(String key) {
+    StringBuilder letters = new StringBuilder(key.length());
+    for (int i = 0; i < key.length(); i++) {
+      char c = key.charAt(i);
+      if (Character.isLetterOrDigit(c)) {
+        letters.append(Character.toLowerCase(c));
+      }
+    }
+    return letters.toString();
+  }
+
+  /**
+   * Returns the property an unknown key is most likely a misspelling of: the same letters with
+   * other separators ({@code use_encryption}), one or two letters off ({@code tlsRootCert}, {@code
+   * useEncrypton}; one for keys of five letters or fewer), or a longer or shorter form of it
+   * ({@code clientCert}, {@code connectTimeoutMs}).
+   *
+   * @param key a key the driver has no property for
+   * @return the property meant, or {@code null} when the key resembles none
+   */
+  static ChargewireProperty resembling(String key) {
+    String given = letters(key);
+    if (given.isEmpty()) {
+      return null;
+    }
+    ChargewireProperty best = null;
+    int bestRank = Integer.MAX_VALUE;
+    for (ChargewireProperty property : values()) {
+      String known = letters(property.key);
+      int distance = editDistance(given, known);
+      boolean longEnough = Math.min(given.length(), known.length()) >= 6;
+      // The closest reading wins: the same letters, one letter off, a shortened form, two letters
+      // off, then a lengthened form.
+      int rank;
+      if (distance <= 1) {
+        rank = distance;
+      } else if (longEnough && known.startsWith(given)) {
+        rank = 2;
+      } else if (distance == 2 && known.length() > 5) {
+        rank = 3;
+      } else if (longEnough && given.startsWith(known)) {
+        rank = 4;
+      } else {
+        continue;
+      }
+      if (rank < bestRank) {
+        best = property;
+        bestRank = rank;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Whether an unknown key names TLS or signing in, in some driver's vocabulary ({@code sslmode},
+   * {@code trustServerCertificate}, {@code authMechanism}): ignoring one would leave the connection
+   * less protected, or protected differently, than its author believes.
+   *
+   * @param key a key the driver has no property for
+   * @return {@code true} if the key reads as a security setting
+   */
+  static boolean namesSecurity(String key) {
+    String given = letters(key);
+    for (String word : SECURITY_WORDS) {
+      if (given.contains(word)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Edits (insert, delete, replace, swap two neighbours) that turn one text into the other. */
+  private static int editDistance(String a, String b) {
+    int[][] d = new int[a.length() + 1][b.length() + 1];
+    for (int i = 0; i <= a.length(); i++) {
+      d[i][0] = i;
+    }
+    for (int j = 0; j <= b.length(); j++) {
+      d[0][j] = j;
+    }
+    for (int i = 1; i <= a.length(); i++) {
+      for (int j = 1; j <= b.length(); j++) {
+        int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+        d[i][j] = Math.min(Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1), d[i - 1][j - 1] + cost);
+        if (i > 1
+            && j > 1
+            && a.charAt(i - 1) == b.charAt(j - 2)
+            && a.charAt(i - 2) == b.charAt(j - 1)) {
+          d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+        }
+      }
+    }
+    return d[a.length()][b.length()];
   }
 
   /**

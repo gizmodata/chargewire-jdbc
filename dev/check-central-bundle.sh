@@ -5,7 +5,8 @@
 # non-empty, a GPG signature (.asc) that verifies (by the expected key, if given), and .md5/.sha1
 # (plus .sha256/.sha512) checksums that match; the POM's required metadata (name, description,
 # url, licenses, developers, scm) and version; no SNAPSHOT dependency; a jar that registers a
-# java.sql.Driver and carries this version; and nothing else in the bundle.
+# java.sql.Driver, carries this version and has its licence texts (META-INF/LICENSE, META-INF/NOTICE
+# and the entries in CENTRAL_BUNDLE_LICENSES); and nothing else in the bundle.
 #
 # Usage: dev/check-central-bundle.sh <bundle.zip> <groupId> <artifactId> <version> [<key fingerprint>]
 # The signing key's public half must be in gpg's keyring (GNUPGHOME). With CENTRAL_BUNDLE_DEPENDENCIES
@@ -138,6 +139,12 @@ if [ -s "$work/$base.jar" ]; then
   manifest=$(unzip -p "$work/$base.jar" META-INF/MANIFEST.MF | tr -d '\r')
   [[ $manifest == *"Implementation-Version: $version"* ]] \
     || fail "$artifact-$version.jar's manifest lacks Implementation-Version: $version"
+  # The licence texts every copy of the jar must carry: its own licence and notice, and with
+  # CENTRAL_BUNDLE_LICENSES (space-separated entries) whatever else this jar bundles needs.
+  for entry in META-INF/LICENSE META-INF/NOTICE ${CENTRAL_BUNDLE_LICENSES-}; do
+    size=$(unzip -p "$work/$base.jar" "$entry" 2>/dev/null | wc -c || true)
+    [ "${size// /}" -gt 0 ] 2>/dev/null || fail "$artifact-$version.jar has no $entry"
+  done
 fi
 if [ -s "$work/$base-sources.jar" ]; then
   [[ $(unzip -Z1 "$work/$base-sources.jar") == *.java* ]] || fail "the sources jar has no .java files"

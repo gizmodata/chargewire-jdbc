@@ -6,7 +6,6 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
-import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 
 /**
@@ -82,19 +81,19 @@ public final class ChargewireResultSetMetaData implements ResultSetMetaData {
 
   @Override
   public boolean isSigned(int column) throws SQLException {
-    return SqlTypes.isSigned(column(column).getType());
+    return SqlTypes.isSigned(column(column));
   }
 
   @Override
   public int getColumnDisplaySize(int column) throws SQLException {
-    Integer size = SqlTypes.columnSize(column(column).getType());
+    Field field = column(column);
+    Integer size = SqlTypes.columnSize(field);
     if (size == null) {
       return SqlTypes.UNBOUNDED;
     }
-    ArrowType type = column(column).getType();
-    if (SqlTypes.isNumeric(type)) {
-      Integer scale = SqlTypes.decimalDigits(type);
-      return size + (scale != null && scale > 0 ? 1 : 0) + (SqlTypes.isSigned(type) ? 1 : 0);
+    if (SqlTypes.isNumeric(field)) {
+      Integer scale = SqlTypes.decimalDigits(field);
+      return size + (scale != null && scale > 0 ? 1 : 0) + (SqlTypes.isSigned(field) ? 1 : 0);
     }
     return size;
   }
@@ -124,7 +123,7 @@ public final class ChargewireResultSetMetaData implements ResultSetMetaData {
     if (precision != null) {
       return precision;
     }
-    Integer size = SqlTypes.columnSize(column(column).getType());
+    Integer size = SqlTypes.columnSize(column(column));
     return size == null ? 0 : size;
   }
 
@@ -137,7 +136,7 @@ public final class ChargewireResultSetMetaData implements ResultSetMetaData {
     if (scale != null) {
       return scale;
     }
-    Integer digits = SqlTypes.decimalDigits(column(column).getType());
+    Integer digits = SqlTypes.decimalDigits(column(column));
     return digits == null ? 0 : digits;
   }
 

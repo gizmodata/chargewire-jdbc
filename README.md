@@ -26,7 +26,7 @@ plain HTTP, with results and parameters as Apache Arrow IPC streams. It is gener
 any server that implements the Chargewire spec, and is tested against the reference server,
 `chargewire-duckdb`, and [Hardcharger](https://github.com/gizmodata/hardcharger).
 
-**Status: 2.2.6**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
+**Status: 2.3.0**, for Chargewire protocol 1.0 (Chargewire 2.2.1), on Maven Central. It works with
 servers on either side of the protocol's rename.
 
 - JDBC 4.2 driver, registered with `DriverManager` and `ServiceLoader`
@@ -46,14 +46,14 @@ Maven:
 <dependency>
   <groupId>com.gizmodata</groupId>
   <artifactId>chargewire-jdbc</artifactId>
-  <version>2.2.6</version>
+  <version>2.3.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.gizmodata:chargewire-jdbc:2.2.6'
+implementation 'com.gizmodata:chargewire-jdbc:2.3.0'
 ```
 
 The artifact is the standalone jar, with Arrow, Jackson and the rest relocated inside it, so it
@@ -133,8 +133,38 @@ For a local server without TLS, add `useEncryption=false`.
 | `resultBufferSize` | `134217728` | Bytes an unread result may buffer when another statement needs its session (see below) |
 | `resultPartitions` | `32` | Read up to this many partitions of a result at once, each over its own connection (1 to 256; 1: one stream; see below) |
 | `resultOrder` | `preserve` | `any` lets a result read in partitions come back in any row order, which can be faster |
+| `arrowLosslessConversion` | `true` | On a DuckDB server (Hardcharger, chargewire-duckdb), ask each session for exact Arrow types, so UUID, TIME WITH TIME ZONE, BIT and the whole range of HUGEINT arrive as themselves; `false` leaves the session as the server opens it (see [DuckDB types](#duckdb-types)) |
 
 `ChargewireDataSource` takes the same URL and properties.
+
+**A key the driver does not know is never ignored silently**, so a misspelled setting (a TLS one
+above all) can't quietly not apply:
+
+- In the URL, any unknown key fails the connection (`SQLNonTransientConnectionException`, SQLSTATE
+  `08001`), naming the key and the property it resembles: `Unknown connection property
+  'tlsRootCert' in the URL: did you mean 'tlsRootCerts'?`.
+- In the `Properties`, a key fails the connection the same way when it resembles one of the
+  driver's (other separators or case as in `tls_root_certs`, one or two letters off, a shortened
+  or lengthened form such as `clientCert` or `connectTimeoutMs`), or when it names TLS or signing
+  in in another driver's words (`sslmode`, `useSSL`, `trustServerCertificate`, `authMechanism`):
+  such a key was written to protect the connection, and this driver has its own properties for
+  that.
+- Any other unknown key in the `Properties` is left alone, because frameworks put keys of their
+  own there (Spark passes its read options such as `dbtable` and `fetchsize`, Hibernate its
+  `hibernate.connection.*` settings). The connection reports each as a warning
+  (`Connection.getWarnings()`, SQLSTATE `01S00`).
+
+**No message shows a password or a token**, or any part of one. Messages name keys, never
+values (`Invalid value for connectTimeout: expected a number`). A URL in a message, and the one
+`DatabaseMetaData.getURL()` returns, shows `***` for passwords, tokens and the value of every
+unknown key, and after the first of those only the driver's own options
+(`…?password=***&useEncryption=false&***`): a password with an unencoded `&`, `;` or `#` in it
+continues there, so anything else is `***` whole and an unknown key there is reported without its
+name. Percent-encode a password in a URL (`%26` for `&`, `%3B` for `;`, `%23` for `#`, `%25` for
+`%`, `%20` for a space), or give it in the `Properties`, where it needs no encoding.
+Credentials before the host (`jdbc:chargewire://user:password@host/…`) are refused, with a message
+that says where they go: the driver does not read them from there, and a URL that looks as if it
+signs in as one user must not sign in as another.
 
 ## 🧠 How statements run
 
@@ -190,6 +220,24 @@ For a local server without TLS, add `useEncryption=false`.
   not know a parameter's type, the Java value decides it. `executeBatch()` sends the whole batch as
   one request, one row per execution; the server reports one total, so each entry of a batch of
   several is `SUCCESS_NO_INFO`.
+
+  A parameter is the value it had when its setter was called: a `Timestamp`, `Date`, `Calendar`,
+  array or `List` is copied then, so one object can be set to each row's value in turn, and
+  changing or freeing it afterwards changes nothing that was set.
+
+  **A batch stores what its rows store one by one.** An Arrow column has one type, so where the
+  type that is sent follows the value, a batch is sent as one request per run of consecutive rows
+  of the same form, in order, and never re-types a row to fit its neighbours. That is the case for
+  a VARIANT, for a parameter the server gives no type (an argument of a function that takes any
+  type), for an ENUM and a fixed-size ARRAY, and for a `TIMESTAMP WITH TIME ZONE` or a time of day
+  whose rows mix points in time, values without a zone and text. For a VARIANT an `Integer` and a
+  `Long` are two types (INT32, INT64), and so are two `BigDecimal`s of different digits: a batch
+  that alternates them is as many requests as it has rows. Every other parameter is sent in the
+  type the server declares, whatever the rows hold, and its batch is one request. When a request
+  of a batch fails, the batch stops there: the requests before it stay applied unless autocommit
+  is off and the transaction is rolled back, and `BatchUpdateException.getUpdateCounts()` has the
+  counts of their entries (the server runs a request's rows one after another, so rows of the
+  failing request before the one that failed may be applied too, as in a batch of one request).
 - **Lost sessions.** If the server no longer has the session (idle eviction, restart), the driver
   opens a new one, replays catalog, schema and autocommit, re-prepares prepared statements, and
   reports the loss of temporary state as a warning on the connection. A transaction's work is
@@ -272,7 +320,10 @@ the session: a statement, a prepare, or a `DatabaseMetaData` call that asks the 
 the call waits while it resumes, as above. Until then:
 
 - `isValid()` returns `true`, and closing the connection sends nothing.
-- `setAutoCommit`, `setCatalog` and `setSchema` are kept, and sent when the session opens.
+- `setAutoCommit`, `setCatalog` and `setSchema` are kept, and sent when the session opens. As on
+  an open session, `setCatalog` moves to that catalog's default schema: a schema set before it, or
+  given to connect, is not sent (`getSchema()` is `null` until the session opens and the server
+  says which schema that is).
 - `commit()` and `rollback()` have nothing to end.
 
 So a pool's connections, its refills (HikariCP replaces each connection at `maxLifetime`) and its
@@ -301,6 +352,9 @@ at connect as before.
 | struct | STRUCT | java.util.Map (`getObject(i, Struct.class)` gives a java.sql.Struct) |
 | map | JAVA_OBJECT | java.util.Map |
 | arrow.uuid | OTHER | UUID |
+| arrow.bool8 | BOOLEAN | Boolean |
+| arrow.json | VARCHAR (type name `JSON`) | String |
+| arrow.parquet.variant | OTHER (type name `VARIANT`) | the value it holds (see below) |
 | dictionary-encoded | the value type's | the value type's |
 
 `getObject(column, Class)` also converts to `LocalDate`, `LocalTime`, `LocalDateTime`,
@@ -309,6 +363,126 @@ zone), `BigInteger` and `UUID`. A timestamp without a time zone is a wall-clock 
 `Calendar` argument says which zone to read it in. A timestamp with a time zone is an instant, and
 a `Calendar` never shifts it. Numbers that do not fit the requested type raise SQLSTATE `22003`
 rather than wrap around, and text that does not parse raises `22018`.
+
+### DuckDB types
+
+DuckDB's Arrow export has two forms. The plain one sends UUID as text, TIME WITH TIME ZONE as a
+time without its offset, BIT as bytes nothing can tell from a BLOB, and HUGEINT and UHUGEINT as
+DECIMAL(38, 0), which fails for a value above 38 digits. The exact one
+(`arrow_lossless_conversion`) sends each as itself. On a server whose sessions have the option
+`duckdb_arrow_lossless_conversion` (Hardcharger, chargewire-duckdb), the driver turns it on as
+each session opens, so an application gets the exact types without choosing anything:
+
+| DuckDB type | JDBC type (type name) | `getObject` returns | With `arrowLosslessConversion=false` |
+|---|---|---|---|
+| BOOLEAN | BOOLEAN | Boolean | the same |
+| HUGEINT, UHUGEINT | NUMERIC (`HUGEINT`, `UHUGEINT`) | BigDecimal, exact through the whole range | DECIMAL (`DECIMAL(38,0)`); the server refuses a value above 38 digits |
+| BIGNUM | NUMERIC (`BIGNUM`) | BigDecimal | the same |
+| UUID | OTHER (`UUID`) | java.util.UUID | VARCHAR, String |
+| TIME WITH TIME ZONE | TIME_WITH_TIMEZONE | java.time.OffsetTime | TIME, java.sql.Time: the offset is lost |
+| BIT | OTHER (`BIT`) | String of `0` and `1` | VARBINARY, byte[] in DuckDB's encoding |
+| JSON | VARCHAR (`JSON`) | String | VARCHAR (`VARCHAR`), String |
+| VARIANT | OTHER (`VARIANT`) | the value it holds | the same |
+| ENUM | VARCHAR | String | the same |
+| LIST, ARRAY | ARRAY | java.util.List | the same |
+| STRUCT, MAP, UNION | STRUCT, JAVA_OBJECT, JAVA_OBJECT | Map, Map, the member's value | the same |
+
+A VARIANT reads as the Java value it holds: `Boolean`, `Byte`, `Short`, `Integer`, `Long`, `Float`,
+`Double`, `BigDecimal`, `String`, `byte[]`, `UUID`, `LocalDate`, `LocalTime`, `LocalDateTime` (a
+timestamp without a zone), `OffsetDateTime` at UTC (one with a zone), a `List` for an array and a
+`Map` for an object; `getString` gives a scalar as its text and an object or array as JSON. `getTime`
+of a TIME WITH TIME ZONE is that moment on 1970-01-01; `getObject(column, LocalTime.class)` is the
+time of day as written. The types are the same from a nullable column, a NOT NULL column and an
+empty result, in lists and structs too, and `SET SESSION arrow_lossless_conversion` in SQL switches
+the form for the statements that follow (the driver reads both).
+
+`DatabaseMetaData.getColumns`, `ResultSetMetaData` and `ParameterMetaData` give every type the
+same JDBC type, size and scale. Two things differ by design. `getColumns` has the server's own name
+for a column where a result has the JDBC name of what arrives (`FLOAT` and `REAL`, `BLOB` and
+`VARBINARY`, `DECIMAL` and `DECIMAL(18,3)`, `ENUM` and `VARCHAR`, `TIMESTAMP_S` and `TIMESTAMP`,
+`INTEGER[3]` and `INTEGER[]`), and it gives the size of a FLOAT or DOUBLE in bits (24, 53, with
+`NUM_PREC_RADIX` 2) where the others give decimal digits (7, 15). With
+`arrowLosslessConversion=false` the three still give the same JDBC type, and `getColumns` keeps the
+server's name and size for a column (`HUGEINT`, 39) that a result then carries as `DECIMAL(38,0)`.
+`getColumns` describes a BIT column by the connection's `arrowLosslessConversion`, not by a `SET
+SESSION arrow_lossless_conversion` run since: the catalog gives a BIT as bytes either way.
+
+As parameters, each type takes what `getObject` returns for it, and NULL: HUGEINT, UHUGEINT and
+BIGNUM take any integer (`BigInteger`, `BigDecimal`, `Long`, or its text) through their whole
+range; BIT takes its bits as text; TIME WITH TIME ZONE takes an `OffsetTime`, and a `LocalTime` as
+`TIME '…'` cast to it; ENUM takes its text; a fixed-size ARRAY takes a `List`; a VARIANT takes a
+scalar or a `List`, which the server makes a Variant of. STRUCT, MAP and UNION have no parameter
+form, nor does an object for a VARIANT: bind its JSON text to `CAST(CAST(? AS JSON) AS VARIANT)`.
+
+A VARIANT keeps the type of what it is given, alone or in a batch: a `Boolean`, `Byte`, `Short`,
+`Integer`, `Long`, `Float`, `Double`, `BigDecimal` (with its own precision and scale), `String`,
+`byte[]`, `LocalDate`, `LocalTime`, `LocalDateTime` and `OffsetDateTime` are stored as that type,
+read back as that class, and go back as that type again. Three things do not go that way. A `UUID`
+and an `OffsetTime` are stored as their text (VARCHAR). For a UUID, write `CAST(? AS UUID)` in the
+statement: that stores a UUID-typed variant, and `v = CAST(? AS UUID)` finds one, where `v = ?`
+compares with text and does not. For a time with an offset the text is all there is: a Variant
+has no such type that the server can send back. A `List` is sent
+with one type for its elements, so a list of numbers of different widths is stored in the wider
+one, and a list whose values only text could hold together (`List.of(1, "a")`) is refused with
+SQLSTATE `07006` rather than stored as text: bind its JSON text instead. And a
+`java.sql.Timestamp` is stored as a timestamp without a zone holding its wall clock in the JVM's
+zone, as for every parameter the server does not type as `TIMESTAMP WITH TIME ZONE` (see
+[Time zones](#time-zones)); an `Instant` or an `OffsetDateTime` is stored as the instant.
+With `arrowLosslessConversion=false` the server declares a BIT parameter as bytes, and text bound
+to it is taken as those bytes, not as bits: write `CAST(CAST(? AS VARCHAR) AS BIT)` there.
+
+### Time zones
+
+A `TIMESTAMP WITH TIME ZONE` is an instant. Reading one, `getTimestamp` (with or without a
+`Calendar`), `getObject(column, Instant.class)` and `getObject(column)` give that instant;
+`OffsetDateTime`, `ZonedDateTime`, `LocalDateTime` and `getString` show it in the session's time
+zone (the server's `TimeZone` setting, which it sends with the column), never the JVM's. That
+includes zones the server names in ways `java.time` does not know by itself: the three-letter IDs
+(`PST`, `IST`, `EST`) and names the time zone database has dropped. In a zone the JVM cannot
+resolve at all, the instant still reads (`Instant`, `Timestamp`; `OffsetDateTime` and `getString`
+at UTC), and `LocalDateTime`, `LocalDate` and `LocalTime` are refused with SQLSTATE `22009`.
+
+Inside a LIST, STRUCT, MAP or UNION the element is the same instant (a `java.sql.Timestamp` in the
+`List` or `Map` that `getObject` returns), and `getString` of the whole value shows it as the column
+shows it: `["2026-01-15 17:30:00+05:30"]` in a session in `Asia/Kolkata`, whatever the JVM's zone.
+A TIME WITH TIME ZONE there has its seconds and its offset (`["12:00:00+05:30"]`). The elements'
+own `toString()` is Java's: a `Timestamp` taken out of the list prints the JVM zone's wall clock,
+and so does the `toString()` of a `java.sql.Array` or `Struct` holding one.
+
+A parameter the server types `TIMESTAMP WITH TIME ZONE` takes two kinds of value:
+
+| Value | Stored |
+|---|---|
+| `Instant`, `OffsetDateTime`, `ZonedDateTime`, `java.sql.Timestamp` (with or without a `Calendar`), `java.util.Date`, `Calendar`, text with an offset (`2026-01-02 03:04:05+01:00`) | That instant, whatever the session's or the JVM's zone |
+| `LocalDateTime`, `LocalDate`, `java.sql.Date`, text without an offset | What the same literal means in that session: the server reads it in the session's `TimeZone` when the statement runs, exactly as it reads `TIMESTAMP '2026-01-02 03:04:05'` or `DATE '2026-01-02'` in SQL text |
+| `java.sql.Date` with a `Calendar` | Midnight of that date in the `Calendar`'s zone |
+| `java.sql.Time`, `LocalTime` | Refused with SQLSTATE `22018`: a time of day has no date |
+
+A value without a zone is not converted in the driver: it travels as a timestamp without a zone, a
+date, or text, and the server converts it as it converts the literal, daylight-saving gaps and
+overlaps included. So `ts = ?` with a `LocalDateTime` finds the rows `ts = TIMESTAMP '…'` finds,
+whatever the JVM's default zone is. The target type of `setObject(index, value, type)` does not
+change this: `setObject(localDateTime, Types.TIMESTAMP_WITH_TIMEZONE)` still has no zone, and
+`setObject(offsetDateTime, Types.TIMESTAMP)` is still that instant for such a parameter. In a batch
+whose rows mix both kinds, each row keeps its own meaning. For such a parameter a
+`java.sql.Timestamp` is a point in time, as `new Timestamp(millis)` makes one and as `getTimestamp`
+returns one: to bind a wall clock, use `LocalDateTime` (`timestamp.toLocalDateTime()`).
+
+**Where the server gives a parameter no type, the table above does not apply**: the driver cannot
+tell which kind of column the value is for. DuckDB types a parameter from what it is compared with
+or assigned to (`ts = ?`, `ts IN (?, ?)`, `COALESCE(?, ts)`, `INSERT … VALUES (?)`), and gives no
+type to an operand of arithmetic or an argument of a function: `ts >= ? - INTERVAL 7 DAY`,
+`date_trunc('day', ?)`, `CASE WHEN … THEN ? END`. (`ParameterMetaData.getParameterTypeName` says
+`UNKNOWN` for those.) There a value goes as its own type: an `Instant`, an `OffsetDateTime` or a
+`ZonedDateTime` as the instant, and a `java.sql.Timestamp` as a TIMESTAMP holding its wall clock in
+the JVM's zone, which is what it stores in a TIMESTAMP column. Compared with a TIMESTAMP column,
+that finds the rows the same `Timestamp` stored. Compared with a `TIMESTAMP WITH TIME ZONE` column,
+the server reads that wall clock in the session's zone, which is another instant whenever the
+session's zone is not the JVM's, and the rows are not found, without an error. For a `TIMESTAMP
+WITH TIME ZONE` in such an expression, bind an `Instant` or an `OffsetDateTime`
+(`timestamp.toInstant()`), or give the parameter its type in the statement: `ts >= CAST(? AS
+TIMESTAMPTZ) - INTERVAL 7 DAY`. (Sending a `Timestamp` as the instant there would do the reverse:
+find the `TIMESTAMP WITH TIME ZONE` rows and lose the TIMESTAMP ones, which are found today.)
 
 ## ⚠️ Errors
 
@@ -343,6 +517,29 @@ application only after `resumeTimeout` (see [A server that is resuming](#-a-serv
    CA.
 
 No JVM options are needed. Keep DBeaver's default of a separate connection for metadata reads.
+
+## 🔒 Read-only connections
+
+`Connection.setReadOnly(true)` is a hint, as JDBC allows: the driver keeps the value for
+`isReadOnly()` and sends nothing, and the session still runs any statement its user may run. The
+first `setReadOnly(true)` on a connection adds a warning (`getWarnings()`, SQLSTATE `01000`) that
+says so. The protocol has no read-only session for the driver to switch to (a session's options
+are its catalog, schema and autocommit), and the driver cannot make one: a DuckDB server refuses
+writes inside `BEGIN TRANSACTION READ ONLY`, but the server begins a session's transactions
+itself, with autocommit on and with it off, so there is no transaction for the driver to mark.
+
+To have writes refused, use one of the things a server does enforce:
+
+- a user or token the server gives read-only access (on Hardcharger, the `readonly` role);
+- a server started read-only (Hardcharger: `--read-only`), which
+  `DatabaseMetaData.isReadOnly()` then reports;
+- on a DuckDB server, SQL between `BEGIN TRANSACTION READ ONLY` and `COMMIT`: a write inside it
+  fails with `Cannot write to database … transaction is launched in read-only mode`.
+
+A session option that makes a session read-only, which `setReadOnly(true)` could then switch on,
+is proposed for the protocol in
+[gizmodata/chargewire#15](https://github.com/gizmodata/chargewire/issues/15) and for Hardcharger in
+[gizmodata/hardcharger#45](https://github.com/gizmodata/hardcharger/issues/45).
 
 ## 🚫 Not supported
 
@@ -479,6 +676,18 @@ USER_MANAGED (`-Dcentral.autoPublish=true` publishes as soon as it validates), a
 ## 📄 License
 
 [Apache License 2.0](LICENSE).
+
+The jar is standalone, so it carries the licences of what it contains: `META-INF/LICENSE` (the
+Apache License 2.0, this driver's and that of Arrow, Jackson, Commons and FlatBuffers),
+`META-INF/NOTICE` (this driver's notice, then each component's own, word for word),
+`META-INF/THIRD-PARTY-NOTICES.txt` (every component with its version and licence) and
+`META-INF/licenses/` (SLF4J's MIT licence, zstd-jni's BSD-2-Clause and Zstandard's BSD-3-Clause).
+The build keeps them true: `ThirdPartyNoticesTest` compares them with the jars Maven resolves (the
+version listed, each component's notice, each licence text), `JarLicensesIT` checks that the list
+names exactly the components in the built jar, and the release checks the uploaded jar has the
+files. After changing a dependency, update
+[`THIRD-PARTY-NOTICES.txt`](src/main/resources/META-INF/THIRD-PARTY-NOTICES.txt) and
+[`src/main/legal/NOTICE`](src/main/legal/NOTICE) as those tests say.
 
 ---
 

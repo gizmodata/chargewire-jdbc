@@ -6,7 +6,7 @@
 
   <groupId>com.gizmodata</groupId>
   <artifactId>chargewire-jdbc</artifactId>
-  <version>2.2.6</version>
+  <version>2.3.0</version>
   <packaging>jar</packaging>
 
   <name>Chargewire JDBC Driver</name>
@@ -176,9 +176,21 @@
          it. Maven still deploys it as chargewire-jdbc-<version>.jar. -->
     <finalName>${project.artifactId}</finalName>
     <resources>
+      <!-- driver.properties takes the version; nothing else is filtered: the licence texts
+           (META-INF/licenses, THIRD-PARTY-NOTICES.txt) must go in byte for byte. -->
       <resource>
         <directory>src/main/resources</directory>
         <filtering>true</filtering>
+        <includes>
+          <include>**/driver.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+        <excludes>
+          <exclude>**/driver.properties</exclude>
+        </excludes>
       </resource>
     </resources>
 
@@ -349,8 +361,23 @@
               </relocations>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheLicenseResourceTransformer"/>
-                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer"/>
+                <!-- Licences. The filter below drops every bundled jar's own META-INF/LICENSE
+                     and NOTICE (seventeen copies and variants, which would overwrite one
+                     another); the jar gets one of each instead: the Apache License 2.0, which
+                     is this driver's and most components', and src/main/legal/NOTICE, this
+                     driver's notice followed by each component's own, word for word. The other
+                     licences are in src/main/resources/META-INF/licenses, and
+                     META-INF/THIRD-PARTY-NOTICES.txt lists every component with its version.
+                     ThirdPartyNoticesTest checks those files against the jars the build
+                     resolves, and JarLicensesIT checks the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.IncludeResourceTransformer">
+                  <resource>META-INF/LICENSE</resource>
+                  <file>${project.basedir}/LICENSE</file>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.IncludeResourceTransformer">
+                  <resource>META-INF/NOTICE</resource>
+                  <file>${project.basedir}/src/main/legal/NOTICE</file>
+                </transformer>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <manifestEntries>
                     <Automatic-Module-Name>com.gizmodata.chargewire.jdbc</Automatic-Module-Name>
@@ -370,6 +397,12 @@
                     <exclude>META-INF/*.RSA</exclude>
                     <exclude>META-INF/MANIFEST.MF</exclude>
                     <exclude>META-INF/DEPENDENCIES</exclude>
+                    <exclude>META-INF/LICENSE</exclude>
+                    <exclude>META-INF/LICENSE.txt</exclude>
+                    <exclude>META-INF/LICENSE.md</exclude>
+                    <exclude>META-INF/NOTICE</exclude>
+                    <exclude>META-INF/NOTICE.txt</exclude>
+                    <exclude>META-INF/NOTICE.md</exclude>
                   </excludes>
                 </filter>
               </filters>

@@ -47,7 +47,8 @@ import org.apache.arrow.vector.types.pojo.Schema;
  *
  * <p>Parameters travel as an Arrow stream with the server's parameter types, so decimals,
  * timestamps and binaries keep their exact values. {@link #executeBatch()} sends the whole batch as
- * one request, one row per execution.
+ * one request, one row per execution, or as one request per run of rows that one Arrow column
+ * cannot hold as they are sent alone.
  */
 public final class ChargewirePreparedStatement extends ChargewireStatement
     implements PreparedStatement {
@@ -229,9 +230,17 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
   /**
    * {@inheritDoc}
    *
-   * <p>The batch goes to the server as one request whose Arrow body has one row per entry. The
-   * server reports one total, so each entry of a batch of several gets {@link #SUCCESS_NO_INFO}; a
-   * batch of one keeps its count.
+   * <p>The batch goes to the server as one request whose Arrow body has one row per entry, or as
+   * one request per run of rows where one Arrow column cannot hold them as they are sent alone
+   * ({@link ParameterEncoder#runs}): what a batch stores is what its rows store one by one. The
+   * server reports one total per request, so each entry of a request of several gets {@link
+   * #SUCCESS_NO_INFO}; a request of one keeps its count.
+   *
+   * <p>When a request of the batch fails, the batch stops there. The requests before it stay
+   * applied (unless autocommit is off and the transaction is rolled back), and {@link
+   * BatchUpdateException#getLargeUpdateCounts()} has the counts of their entries. The server runs
+   * the rows of a request one after another, so rows of the failing request before the one that
+   * failed may be applied as well; the server does not say how many.
    */
   @Override
   public long[] executeLargeBatch() throws SQLException {
@@ -242,24 +251,28 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
       return new long[0];
     }
     long[] counts = new long[rows.size()];
+    int done = 0;
     try {
+      List<List<ParameterEncoder.Value[]>> requests = new ArrayList<>();
       if (serverPrepared && rows.get(0).length > 0) {
-        if (runRows(rows)) {
+        requests.addAll(ParameterEncoder.runs(parameterSchema, rows));
+      } else {
+        for (ParameterEncoder.Value[] row : rows) {
+          requests.add(List.<ParameterEncoder.Value[]>of(row));
+        }
+      }
+      for (List<ParameterEncoder.Value[]> request : requests) {
+        if (runRows(request)) {
           throw returnedRows();
         }
         long total = getLargeUpdateCount();
-        Arrays.fill(counts, rows.size() == 1 ? total : SUCCESS_NO_INFO);
-      } else {
-        for (int i = 0; i < rows.size(); i++) {
-          if (runRows(List.<ParameterEncoder.Value[]>of(rows.get(i)))) {
-            throw returnedRows();
-          }
-          counts[i] = getLargeUpdateCount();
-        }
+        Arrays.fill(
+            counts, done, done + request.size(), request.size() == 1 ? total : SUCCESS_NO_INFO);
+        done += request.size();
       }
     } catch (SQLException e) {
       throw new BatchUpdateException(
-          e.getMessage(), e.getSQLState(), e.getErrorCode(), new long[0], e);
+          e.getMessage(), e.getSQLState(), e.getErrorCode(), Arrays.copyOf(counts, done), e);
     }
     return counts;
   }
@@ -330,13 +343,26 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
   // ---- Parameters ----
 
   private void set(int index, Object value, int sqlType, Calendar calendar) throws SQLException {
+    set(index, value, sqlType, calendar, value);
+  }
+
+  private void set(int index, Object value, int sqlType, Calendar calendar, Object source)
+      throws SQLException {
     checkOpen();
     if (index < 1 || index > parameters.length) {
       throw new SQLException(
           "Parameter " + index + " does not exist; the statement has " + parameters.length,
           "07009");
     }
-    parameters[index - 1] = new ParameterEncoder.Value(value, sqlType, calendar);
+    // The value as it is now: the parameters are sent when the statement runs, and until then
+    // the application may set the same Timestamp, array or Calendar to something else.
+    Object kept = ParameterEncoder.snapshot(value);
+    parameters[index - 1] =
+        new ParameterEncoder.Value(
+            kept,
+            sqlType,
+            calendar == null ? null : (Calendar) calendar.clone(),
+            source == value ? kept : ParameterEncoder.snapshot(source));
   }
 
   private void set(int index, Object value) throws SQLException {
@@ -458,7 +484,7 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
   public void setObject(int index, Object x, int targetSqlType, int scaleOrLength)
       throws SQLException {
     Object value = x == null ? null : ParameterEncoder.coerce(x, targetSqlType, scaleOrLength);
-    set(index, value, targetSqlType, null);
+    set(index, value, targetSqlType, null, x);
   }
 
   @Override

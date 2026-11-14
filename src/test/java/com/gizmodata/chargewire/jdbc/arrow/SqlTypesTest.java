@@ -142,4 +142,68 @@ class SqlTypesTest {
         "a decimal needs its precision; let the server infer it");
     assertNull(SqlTypes.arrowType(Types.OTHER));
   }
+
+  /** A table's column as Hardcharger 2.12.0's catalog gives it: its storage, and its name. */
+  private static Field catalog(String typeName, ArrowType storage, Field... children) {
+    return new Field(
+        "c",
+        new FieldType(
+            true,
+            storage,
+            null,
+            Map.of(SqlTypes.TYPE_NAME, typeName, "ARROW:FLIGHT:SQL:TABLE_NAME", "t")),
+        List.of(children));
+  }
+
+  @Test
+  void aCatalogColumnIsDescribedAsAResultCarriesIt() {
+    ArrowType bytes16 = new ArrowType.FixedSizeBinary(16);
+    ArrowType bytes8 = new ArrowType.FixedSizeBinary(8);
+    ArrowType binary = ArrowType.Binary.INSTANCE;
+    for (String name : List.of("HUGEINT", "UHUGEINT")) {
+      Field field = SqlTypes.catalogField(catalog(name, bytes16), true);
+      assertEquals(Types.NUMERIC, SqlTypes.jdbcType(field), name);
+      assertEquals(name, SqlTypes.typeName(field));
+      assertEquals(39, SqlTypes.columnSize(field), name);
+      assertEquals(0, SqlTypes.decimalDigits(field), name);
+      assertTrue(SqlTypes.isNumeric(field), name);
+    }
+    Field time = SqlTypes.catalogField(catalog("TIME WITH TIME ZONE", bytes8), true);
+    assertEquals(Types.TIME_WITH_TIMEZONE, SqlTypes.jdbcType(time));
+    assertEquals("TIME WITH TIME ZONE", SqlTypes.typeName(time));
+    assertEquals(21, SqlTypes.columnSize(time));
+    assertEquals(6, SqlTypes.decimalDigits(time));
+    Field bignum = SqlTypes.catalogField(catalog("BIGNUM", binary), false);
+    assertEquals(Types.NUMERIC, SqlTypes.jdbcType(bignum));
+    assertEquals("BIGNUM", SqlTypes.typeName(bignum));
+    Field bit = SqlTypes.catalogField(catalog("BIT", binary), true);
+    assertEquals(Types.OTHER, SqlTypes.jdbcType(bit));
+    assertEquals("BIT", SqlTypes.typeName(bit));
+    Field variant =
+        SqlTypes.catalogField(
+            catalog(
+                "VARIANT",
+                ArrowType.Struct.INSTANCE,
+                Field.notNullable("metadata", binary),
+                Field.nullable("value", binary)),
+            false);
+    assertEquals(Types.OTHER, SqlTypes.jdbcType(variant));
+    assertEquals("VARIANT", SqlTypes.typeName(variant));
+
+    // Without the exact types a BIT arrives as its bytes, and is described as them.
+    Field plainBit = catalog("BIT", binary);
+    assertTrue(plainBit == SqlTypes.catalogField(plainBit, false));
+    assertEquals(Types.VARBINARY, SqlTypes.jdbcType(plainBit));
+    // The name alone decides nothing: a column of another storage is left as it is.
+    for (Field other :
+        List.of(
+            catalog("HUGEINT", new ArrowType.Decimal(38, 0, 128)),
+            catalog("TIME WITH TIME ZONE", new ArrowType.Time(TimeUnit.MICROSECOND, 64)),
+            catalog("BLOB", binary),
+            catalog("UUID", bytes16),
+            catalog("VARIANT", ArrowType.Struct.INSTANCE, Field.nullable("x", binary)),
+            Field.nullable("no_name", bytes16))) {
+      assertTrue(other == SqlTypes.catalogField(other, true), other.toString());
+    }
+  }
 }

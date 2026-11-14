@@ -72,6 +72,10 @@ final class TlsContexts {
     if (config.trustStore != null) {
       char[] password =
           config.trustStorePassword == null ? null : config.trustStorePassword.toCharArray();
+      if (!Files.isRegularFile(config.trustStore)) {
+        // KeyStore.getInstance(File, …) refuses this with an IllegalArgumentException.
+        throw new IOException("the trustStore " + config.trustStore + " is not a file");
+      }
       KeyStore store = KeyStore.getInstance(config.trustStore.toFile(), password);
       for (String alias : Collections.list(store.aliases())) {
         Certificate certificate = store.getCertificate(alias);

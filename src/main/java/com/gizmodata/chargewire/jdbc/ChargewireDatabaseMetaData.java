@@ -296,7 +296,11 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
    * {@inheritDoc}
    *
    * <p>Built from each table's Arrow schema ({@code include_schema=true}) and its Flight SQL column
-   * metadata keys.
+   * metadata keys. A column is described as {@code ResultSetMetaData} describes it in a result: the
+   * same JDBC type, size and scale (see {@link SqlTypes#catalogField}). The type's name is the
+   * server's own for the column where it sent one ({@code FLOAT}, {@code BLOB}, {@code
+   * TIMESTAMP_S}, {@code INTEGER[3]}), which a result's column does not carry, and a floating
+   * point's size is in bits (radix 2), as JDBC has it for this method.
    */
   @Override
   public ResultSet getColumns(
@@ -324,7 +328,12 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
         if (columnPattern != null && !columnPattern.matcher(field.getName()).matches()) {
           continue;
         }
-        rows.add(columnRow(table, field, position, defaultKey));
+        rows.add(
+            columnRow(
+                table,
+                SqlTypes.catalogField(field, connection.exactTypes()),
+                position,
+                defaultKey));
       }
     }
     return result(
@@ -362,7 +371,7 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
     boolean described = SqlTypes.takesPrecisionMetadata(type);
     Integer size = described ? number(metadata.get(SqlTypes.PRECISION)) : null;
     if (size == null) {
-      size = SqlTypes.columnSize(type);
+      size = SqlTypes.columnSize(field);
       if (type instanceof ArrowType.FloatingPoint) {
         size =
             ((ArrowType.FloatingPoint) type).getPrecision() == FloatingPointPrecision.DOUBLE
@@ -372,10 +381,10 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
     }
     Integer digits = described ? number(metadata.get(SqlTypes.SCALE)) : null;
     if (digits == null) {
-      digits = SqlTypes.decimalDigits(type);
+      digits = SqlTypes.decimalDigits(field);
     }
     Integer radix =
-        SqlTypes.isNumeric(type) ? (type instanceof ArrowType.FloatingPoint ? 2 : 10) : null;
+        SqlTypes.isNumeric(field) ? (type instanceof ArrowType.FloatingPoint ? 2 : 10) : null;
     String autoIncrement = metadata.get(SqlTypes.IS_AUTO_INCREMENT);
     return new Object[] {
       table.text("catalog_name"),

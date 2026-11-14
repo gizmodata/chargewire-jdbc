@@ -119,6 +119,12 @@ public final class ChargewireConnection implements Connection {
   /** The {@code session_ended} reason for a transaction left idle too long (spec §5.6, §5.7). */
   static final String IDLE_IN_TRANSACTION = "idle_in_transaction";
 
+  /**
+   * DuckDB servers' session option (spec §5.3, a server's own) for Arrow types that lose nothing:
+   * UUID as {@code arrow.uuid}, HUGEINT and TIME WITH TIME ZONE in DuckDB's own encodings.
+   */
+  static final String LOSSLESS_OPTION = "duckdb_arrow_lossless_conversion";
+
   private final ChargewireClient client;
   private final String url;
   private final Map<String, String> properties;
@@ -139,6 +145,10 @@ public final class ChargewireConnection implements Connection {
   private volatile boolean sessionPending;
 
   private volatile int sessionGeneration;
+
+  /** Whether to turn {@link #LOSSLESS_OPTION} on in each session that has the option. */
+  private boolean lossless;
+
   private String catalog;
   private String schema;
   private volatile boolean optionsStale;
@@ -180,6 +190,10 @@ public final class ChargewireConnection implements Connection {
   private volatile boolean released;
   private volatile boolean ended;
   private boolean readOnly;
+
+  /** Whether this connection has said, in a warning, that {@link #setReadOnly} enforces nothing. */
+  private boolean readOnlyWarned;
+
   private int transactionIsolation = TRANSACTION_READ_COMMITTED;
   private int holdability = ResultSet.HOLD_CURSORS_OVER_COMMIT;
   private Map<String, Class<?>> typeMap = new HashMap<>();
@@ -214,6 +228,8 @@ public final class ChargewireConnection implements Connection {
     try {
       connection.catalog = ChargewireProperty.CATALOG.get(properties);
       connection.schema = ChargewireProperty.SCHEMA.get(properties);
+      connection.lossless =
+          ChargewireDriver.bool(properties, ChargewireProperty.ARROW_LOSSLESS_CONVERSION);
       if (client.signInPending()) {
         // A stopped server: a sign-in or a session would start it, so the first work does that.
         connection.sessionPending = true;
@@ -253,11 +269,29 @@ public final class ChargewireConnection implements Connection {
     transaction = TransactionState.of(session);
     try {
       applyOptions(session.path("options"), catalog, schema);
+      askForLosslessTypes(id, session.path("options"));
     } catch (SQLException e) {
       String failed = id;
       sessionId = null;
       client.deleteSession(failed);
       throw e;
+    }
+  }
+
+  /** Whether the connection asks its sessions for exact types ({@code arrowLosslessConversion}). */
+  boolean exactTypes() {
+    return lossless;
+  }
+
+  /**
+   * Turns {@link #LOSSLESS_OPTION} on in a session that lists it and has it off, unless {@code
+   * arrowLosslessConversion=false}. A server without the option is not asked (an option it doesn't
+   * have would fail the request, spec §5.3), and one that refuses the value keeps its own.
+   */
+  private void askForLosslessTypes(String id, JsonNode options) throws SQLException {
+    JsonNode current = options.path(LOSSLESS_OPTION);
+    if (lossless && current.isBoolean() && !current.asBoolean()) {
+      client.patchSession(id, client.newObject().put(LOSSLESS_OPTION, true));
     }
   }
 
@@ -852,6 +886,11 @@ public final class ChargewireConnection implements Connection {
         // The session opens with the catalog, schema and autocommit the connection has then.
         if ("catalog".equals(name)) {
           catalog = (String) value;
+          // Setting the catalog moves a session to that catalog's default schema, as USE does
+          // (an open session takes the server's answer, which says so). A schema kept from before,
+          // set earlier or given to connect, must not open the session: with the new catalog it
+          // would name a schema of that name there, or refuse every statement when there is none.
+          schema = null;
         } else if ("schema".equals(name)) {
           schema = (String) value;
         }
@@ -981,11 +1020,34 @@ public final class ChargewireConnection implements Connection {
     return schema;
   }
 
-  /** {@inheritDoc} A hint only: read-only is the server's and the principal's to decide. */
+  /**
+   * {@inheritDoc}
+   *
+   * <p>A hint only, which JDBC allows it to be: the driver keeps the value for {@link
+   * #isReadOnly()} and sends nothing, and the session still runs any statement its user may run.
+   * Chargewire has no read-only session to switch to (spec §5.3 has no such option), and the driver
+   * cannot build one from what servers have: a DuckDB server refuses writes inside {@code BEGIN
+   * TRANSACTION READ ONLY}, but the server begins a session's transactions itself, with autocommit
+   * on and off. The first {@code setReadOnly(true)} on a connection says so in a warning ({@link
+   * #getWarnings()}), so the hint is not mistaken for protection. What does refuse writes: a user
+   * the server gives read-only access, a server started read-only, or SQL run between {@code BEGIN
+   * TRANSACTION READ ONLY} and {@code COMMIT}.
+   */
   @Override
   public void setReadOnly(boolean readOnly) throws SQLException {
     checkOpen();
     this.readOnly = readOnly;
+    if (readOnly && !readOnlyWarned) {
+      readOnlyWarned = true;
+      addWarning(
+          new SQLWarning(
+              "setReadOnly(true) is a hint this driver cannot enforce: Chargewire has no"
+                  + " read-only session, so this connection still runs any statement its user"
+                  + " may run. To have writes refused, connect as a user with read-only access,"
+                  + " use a server started read-only, or run the statements between BEGIN"
+                  + " TRANSACTION READ ONLY and COMMIT",
+              "01000"));
+    }
   }
 
   @Override

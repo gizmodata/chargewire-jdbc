@@ -116,6 +116,12 @@ final class FakeChargewireServer implements AutoCloseable {
   static final String STOPPED_DETAIL =
       "The cluster was stopped in GizmoData Cloud after this session signed in.";
 
+  /**
+   * The value new sessions have for the option {@code duckdb_arrow_lossless_conversion}, as a
+   * DuckDB server's do, or {@code null} for a server whose sessions have no such option.
+   */
+  volatile Boolean losslessOption;
+
   /** How long discovery ({@code GET /chargewire}) takes to answer, as on a far link. */
   volatile int discoveryDelayMillis;
 
@@ -208,6 +214,9 @@ final class FakeChargewireServer implements AutoCloseable {
           }
           if (!options.has("schema")) {
             options.put("schema", "main");
+          }
+          if (losslessOption != null && !options.has("duckdb_arrow_lossless_conversion")) {
+            options.put("duckdb_arrow_lossless_conversion", losslessOption.booleanValue());
           }
           ObjectNode session =
               MAPPER.createObjectNode().put("session_id", "s" + sessions.incrementAndGet());

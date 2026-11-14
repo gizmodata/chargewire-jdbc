@@ -1,0 +1,45 @@
+Third-party software in the Chargewire JDBC driver's jar
+=========================================================
+
+The driver's jar is standalone: it contains the components below, most of them moved to packages
+under com.gizmodata.chargewire.jdbc.shaded. The driver itself is licensed under the Apache License
+2.0 (META-INF/LICENSE); its notice, followed by the notices these components carry, is
+META-INF/NOTICE.
+
+Each line names a component as groupId:artifactId:version, its licence (SPDX identifier), and
+where that licence's text is in this jar. The build checks this list against what the jar really
+contains (ThirdPartyNoticesTest, JarLicensesIT).
+
+com.fasterxml.jackson.core:jackson-annotations:2.22 | Apache-2.0 | META-INF/LICENSE
+com.fasterxml.jackson.core:jackson-core:2.22.3 | Apache-2.0 | META-INF/LICENSE
+com.fasterxml.jackson.core:jackson-databind:2.22.3 | Apache-2.0 | META-INF/LICENSE
+com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.3 | Apache-2.0 | META-INF/LICENSE
+com.github.luben:zstd-jni:1.5.7-23 | BSD-2-Clause | META-INF/licenses/zstd-jni/LICENSE
+com.google.flatbuffers:flatbuffers-java:25.2.10 | Apache-2.0 | META-INF/LICENSE
+commons-codec:commons-codec:1.23.0 | Apache-2.0 | META-INF/LICENSE
+commons-io:commons-io:2.20.0 | Apache-2.0 | META-INF/LICENSE
+org.apache.arrow:arrow-compression:19.0.0 | Apache-2.0 | META-INF/LICENSE
+org.apache.arrow:arrow-format:19.0.0 | Apache-2.0 | META-INF/LICENSE
+org.apache.arrow:arrow-memory-core:19.0.0 | Apache-2.0 | META-INF/LICENSE
+org.apache.arrow:arrow-memory-unsafe:19.0.0 | Apache-2.0 | META-INF/LICENSE
+org.apache.arrow:arrow-vector:19.0.0 | Apache-2.0 | META-INF/LICENSE
+org.apache.commons:commons-compress:1.28.0 | Apache-2.0 | META-INF/LICENSE
+org.apache.commons:commons-lang3:3.18.0 | Apache-2.0 | META-INF/LICENSE
+org.slf4j:slf4j-api:2.0.20 | MIT | META-INF/licenses/slf4j/LICENSE.txt
+org.slf4j:slf4j-nop:2.0.20 | MIT | META-INF/licenses/slf4j/LICENSE.txt
+
+Software inside those components, under licences of its own:
+
+- Zstandard, whose source zstd-jni compiles into its native libraries (the aix, darwin, freebsd,
+  linux and win directories of this jar): BSD-3-Clause, META-INF/licenses/zstd/LICENSE. Zstandard
+  is offered under that licence or the GNU General Public License version 2; it is distributed
+  here under the BSD licence. The text is the one zstd-jni 1.5.7-23 carries with that source.
+- FastDoubleParser, inside jackson-core: MIT, META-INF/FastDoubleParser-LICENSE; the code it
+  includes in turn is described in META-INF/FastDoubleParser-ThirdParty-LICENSE.
+- Schubfach, inside jackson-core: MIT, META-INF/Schubfach-LICENSE.
+
+Where the licence texts come from: the Apache License 2.0 text is the one the Arrow, Jackson,
+Commons and FlatBuffers distributions carry; the SLF4J text is the licence file inside the
+slf4j-api and slf4j-nop jars of the version above; the zstd-jni and Zstandard texts are the files
+LICENSE and src/main/native/LICENSE of https://github.com/luben/zstd-jni at tag v1.5.7-23 (its jar
+carries none); the FastDoubleParser and Schubfach texts are jackson-core's own files.

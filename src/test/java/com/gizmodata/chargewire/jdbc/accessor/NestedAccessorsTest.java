@@ -231,6 +231,150 @@ class NestedAccessorsTest extends AccessorFixture {
     assertTrue(accessor.isNull(2));
   }
 
+  /**
+   * A union as a server sends it: type ids of its own (DuckDB's are the members' positions), two
+   * members of one Arrow type, and members Arrow Java's {@code UnionVector} cannot look up by type
+   * (it needs the precision, the zone or the extension it was not given, and has one slot for all
+   * lists and one for all structs).
+   */
+  @Test
+  void aSparseUnionReadsEachMemberByItsDeclaredTypeId() throws SQLException {
+    Field declared =
+        new Field(
+            "u",
+            FieldType.nullable(
+                new ArrowType.Union(UnionMode.Sparse, new int[] {0, 1, 2, 3, 4, 5, 6, 7})),
+            List.of(
+                Field.nullable("a", INT),
+                Field.nullable("b", INT),
+                Field.nullable("d", new ArrowType.Decimal(10, 2, 128)),
+                Field.nullable(
+                    "t",
+                    new ArrowType.Timestamp(
+                        org.apache.arrow.vector.types.TimeUnit.MICROSECOND, "Asia/Kolkata")),
+                new Field(
+                    "l",
+                    FieldType.nullable(ArrowType.List.INSTANCE),
+                    List.of(Field.nullable("item", INT))),
+                new Field(
+                    "s",
+                    FieldType.nullable(ArrowType.Struct.INSTANCE),
+                    List.of(Field.nullable("x", INT))),
+                Field.nullable("id", org.apache.arrow.vector.extension.UuidType.INSTANCE),
+                Field.nullable(
+                    "tz",
+                    new org.apache.arrow.vector.extension.OpaqueType(
+                        new ArrowType.FixedSizeBinary(8), "time_tz", "DuckDB"))));
+    java.util.UUID id = java.util.UUID.fromString("00112233-4455-6677-8899-aabbccddeeff");
+    UnionVector union =
+        vector(
+            declared,
+            9,
+            v -> {
+              UnionVector u = v;
+              List<org.apache.arrow.vector.FieldVector> members = u.getChildrenFromFields();
+              for (int row = 0; row < 8; row++) {
+                u.getTypeBuffer().setByte(row, row);
+              }
+              // A null of the union: DuckDB gives it the first member's id and a null there.
+              u.getTypeBuffer().setByte(8, 0);
+              ((IntVector) members.get(0)).setSafe(0, 7);
+              ((IntVector) members.get(1)).setSafe(1, 8);
+              ((org.apache.arrow.vector.DecimalVector) members.get(2))
+                  .setSafe(2, new java.math.BigDecimal("12.34"));
+              ((org.apache.arrow.vector.TimeStampMicroTZVector) members.get(3))
+                  .setSafe(3, 1_768_478_400_000_000L);
+              ListVector list = (ListVector) members.get(4);
+              UnionListWriter writer = list.getWriter();
+              writer.setPosition(4);
+              writer.startList();
+              writer.writeInt(1);
+              writer.writeInt(2);
+              writer.endList();
+              StructVector struct = (StructVector) members.get(5);
+              struct.setIndexDefined(5);
+              ((IntVector) struct.getChild("x")).setSafe(5, 9);
+              ((org.apache.arrow.vector.UuidVector) members.get(6)).setSafe(6, id);
+              // 13:14:15.123456+02:00 as Hardcharger 2.12.0 sent it.
+              ((org.apache.arrow.vector.FixedSizeBinaryVector)
+                      ((org.apache.arrow.vector.extension.OpaqueVector) members.get(7))
+                          .getUnderlyingVector())
+                  .setSafe(7, java.util.HexFormat.of().parseHex("dfc400007a77180b"));
+            });
+    Accessor accessor = Accessors.create(union, declared, null);
+    assertEquals(7, accessor.getObject(0));
+    assertEquals(8, accessor.getObject(1));
+    assertEquals(new java.math.BigDecimal("12.34"), accessor.getObject(2));
+    assertEquals("12.34", accessor.getString(2));
+    assertEquals(
+        java.time.Instant.parse("2026-01-15T12:00:00Z"),
+        ((java.sql.Timestamp) accessor.getObject(3)).toInstant());
+    assertEquals("2026-01-15 17:30:00+05:30", accessor.getString(3));
+    assertEquals(List.of(1, 2), accessor.getObject(4));
+    assertEquals("[1, 2]", accessor.getString(4));
+    assertEquals(Map.of("x", 9), accessor.getObject(5));
+    assertEquals(id, accessor.getObject(6));
+    assertEquals(id.toString(), accessor.getString(6));
+    assertEquals(java.time.OffsetTime.parse("13:14:15.123456+02:00"), accessor.getObject(7));
+    assertEquals("13:14:15.123456+02:00", accessor.getString(7));
+    assertTrue(accessor.isNull(8));
+    for (int row = 0; row < 8; row++) {
+      assertTrue(!accessor.isNull(row), "row " + row);
+    }
+  }
+
+  /**
+   * Inside a list, a timestamp with a zone has its column's text (the zone's wall clock and its
+   * offset), not its {@code Timestamp} object's, which is the JVM zone's wall clock; a timestamp
+   * without a zone keeps the text it had.
+   */
+  @Test
+  void aZonedTimestampInAListHasItsColumnsText() throws SQLException {
+    java.util.TimeZone jvm = java.util.TimeZone.getDefault();
+    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/New_York"));
+    try {
+      for (String zone : new String[] {"Asia/Kolkata", null}) {
+        ListVector list =
+            vector(
+                new Field(
+                    "l",
+                    FieldType.nullable(ArrowType.List.INSTANCE),
+                    List.of(
+                        Field.nullable(
+                            "item",
+                            new ArrowType.Timestamp(
+                                org.apache.arrow.vector.types.TimeUnit.MICROSECOND, zone)))),
+                1,
+                v -> {
+                  UnionListWriter writer = v.getWriter();
+                  writer.setPosition(0);
+                  writer.startList();
+                  if (zone == null) {
+                    writer.timeStampMicro().writeTimeStampMicro(1_768_478_400_000_000L);
+                  } else {
+                    ((org.apache.arrow.vector.TimeStampMicroTZVector) v.getDataVector())
+                        .setSafe(0, 1_768_478_400_000_000L);
+                    writer.setPosition(0);
+                  }
+                  writer.endList();
+                  if (zone != null) {
+                    v.getOffsetBuffer().setInt(4, 1);
+                    v.getDataVector().setValueCount(1);
+                  }
+                });
+        Accessor accessor = accessor(list);
+        assertEquals(
+            zone == null ? "[\"2026-01-15 12:00:00.0\"]" : "[\"2026-01-15 17:30:00+05:30\"]",
+            accessor.getString(0));
+        assertEquals(
+            java.time.Instant.parse(zone == null ? "2026-01-15T17:00:00Z" : "2026-01-15T12:00:00Z"),
+            ((java.sql.Timestamp) ((List<?>) accessor.getObject(0)).get(0)).toInstant());
+      }
+    } finally {
+      java.util.TimeZone.setDefault(jvm);
+    }
+  }
+
   @Test
   void denseUnionsReadThroughTheirOffsets() throws SQLException {
     DenseUnionVector union =

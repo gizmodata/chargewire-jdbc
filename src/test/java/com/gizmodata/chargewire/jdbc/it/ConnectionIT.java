@@ -1,6 +1,7 @@
 package com.gizmodata.chargewire.jdbc.it;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -96,6 +97,39 @@ class ConnectionIT {
       assertEquals("28000", error.getSQLState());
       assertEquals("invalid_credentials", ChargewireProblem.codeOf(error));
       assertEquals(401, error.getErrorCode());
+    }
+  }
+
+  @Test
+  void aRefusedSignInShowsNeitherThePasswordNorTheToken() {
+    ChargewireServer server = SharedServer.get();
+    String secret = "Zq7Kv@Xw9Jp";
+    for (String option : new String[] {"password", "token"}) {
+      for (boolean inUrl : new boolean[] {true, false}) {
+        Properties properties = server.properties();
+        properties.remove("password");
+        String url = server.url("");
+        if (inUrl) {
+          url += (url.contains("?") ? "&" : "?") + option + "=" + secret;
+        } else {
+          properties.setProperty(option, secret);
+        }
+        String connectUrl = url;
+        SQLException error =
+            assertThrows(
+                SQLException.class, () -> DriverManager.getConnection(connectUrl, properties));
+        assertEquals("28000", error.getSQLState(), error.getMessage());
+        assertEquals(401, error.getErrorCode());
+        StringBuilder messages = new StringBuilder();
+        for (Throwable each = error; each != null; each = each.getCause()) {
+          messages.append(each).append('\n');
+          for (Throwable suppressed : each.getSuppressed()) {
+            messages.append(suppressed).append('\n');
+          }
+        }
+        assertFalse(messages.toString().contains("Zq7Kv"), messages.toString());
+        assertFalse(messages.toString().contains("Xw9Jp"), messages.toString());
+      }
     }
   }
 
@@ -237,6 +271,106 @@ class ConnectionIT {
     assertEquals("invalid_option_value", ChargewireProblem.codeOf(error));
   }
 
+  /**
+   * A key the driver has no property for is never silently ignored: refused in the URL, and in the
+   * Properties when it resembles one of the driver's or names TLS or signing in; anything else in
+   * the Properties (frameworks put their own there) connects, with a warning.
+   */
+  @Test
+  void unknownConnectionPropertiesAreRefusedOrReported() throws SQLException {
+    ChargewireServer server = SharedServer.get();
+    SQLException inUrl =
+        assertThrows(SQLException.class, () -> SharedServer.connect("resultPartition=4"));
+    assertEquals("08001", inUrl.getSQLState());
+    assertEquals(
+        "Unknown connection property 'resultPartition' in the URL: did you mean"
+            + " 'resultPartitions'?",
+        inUrl.getMessage());
+
+    Properties misspelled = new Properties();
+    misspelled.setProperty("tlsRootCert", "/etc/ssl/ca.pem");
+    SQLException inProperties =
+        assertThrows(SQLException.class, () -> SharedServer.connect(misspelled));
+    assertEquals("08001", inProperties.getSQLState());
+    assertTrue(
+        inProperties.getMessage().contains("did you mean 'tlsRootCerts'?"),
+        inProperties.getMessage());
+    assertTrue(!inProperties.getMessage().contains("/etc/ssl"), "no value in the message");
+
+    Properties anotherDrivers = new Properties();
+    anotherDrivers.setProperty("sslmode", "verify-full");
+    SQLException security =
+        assertThrows(SQLException.class, () -> SharedServer.connect(anotherDrivers));
+    assertEquals("08001", security.getSQLState());
+    assertTrue(security.getMessage().contains("it names TLS or signing in"), security.getMessage());
+
+    Properties foreign = new Properties();
+    foreign.setProperty("ApplicationName", "etl");
+    foreign.setProperty("fetchsize", "1000");
+    try (Connection connection = SharedServer.connect(foreign);
+        Statement statement = connection.createStatement();
+        ResultSet rows = statement.executeQuery("SELECT 42")) {
+      assertTrue(rows.next());
+      java.sql.SQLWarning warning = connection.getWarnings();
+      assertNotNull(warning);
+      assertEquals("01S00", warning.getSQLState());
+      assertEquals(
+          "The connection property 'ApplicationName' is not one of this driver's and was ignored"
+              + " (ChargewireProperty lists them)",
+          warning.getMessage());
+      assertTrue(warning.getNextWarning().getMessage().contains("'fetchsize'"));
+      assertNull(warning.getNextWarning().getNextWarning());
+    }
+    try (Connection connection =
+        DriverManager.getConnection(server.url("resultPartitions=4"), server.properties())) {
+      assertNull(connection.getWarnings(), "the driver's own properties raise none");
+    }
+  }
+
+  /**
+   * A catalog and a schema given together must both land: the schema is one of that catalog, so the
+   * catalog has to be applied first. Whether it is must not depend on the order the options were
+   * written in, nor on chance (the Go driver applied them in a map's random order, and failed about
+   * 33 connects in 40), so each form connects 40 times.
+   */
+  @Test
+  void aCatalogAndASchemaGivenTogetherBothLandOnEveryConnect() throws SQLException {
+    ChargewireServer server = SharedServer.get();
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("ATTACH IF NOT EXISTS ':memory:' AS together");
+      statement.execute("CREATE SCHEMA IF NOT EXISTS together.reports");
+    }
+    String base = "jdbc:chargewire://127.0.0.1:" + server.port;
+    Properties schemaFirst = server.properties();
+    schemaFirst.setProperty("schema", "reports");
+    schemaFirst.setProperty("catalog", "together");
+    Properties schemaOnly = server.properties();
+    schemaOnly.setProperty("schema", "reports");
+    Object[][] forms = {
+      {base + "/together?schema=reports", server.properties()},
+      {base + "?schema=reports&catalog=together", server.properties()},
+      {base + "?catalog=together&schema=reports", server.properties()},
+      {base + ";schema=reports;catalog=together", server.properties()},
+      {base, schemaFirst},
+      {base + "/together", schemaOnly},
+    };
+    for (Object[] form : forms) {
+      for (int attempt = 0; attempt < 40; attempt++) {
+        try (Connection connection =
+                DriverManager.getConnection((String) form[0], (Properties) form[1]);
+            Statement statement = connection.createStatement();
+            ResultSet rows =
+                statement.executeQuery("SELECT current_catalog() || '.' || current_schema()")) {
+          assertTrue(rows.next());
+          assertEquals("together.reports", rows.getString(1), form[0] + ", connect " + attempt);
+          assertEquals("together", connection.getCatalog());
+          assertEquals("reports", connection.getSchema());
+        }
+      }
+    }
+  }
+
   @Test
   void setSchemaAndSetCatalogChangeTheSession() throws SQLException {
     try (Connection connection = SharedServer.connect();
@@ -350,6 +484,59 @@ class ConnectionIT {
       assertEquals("tests", connection.getClientInfo().getProperty("ApplicationName"));
       connection.setReadOnly(true);
       assertTrue(connection.isReadOnly());
+    }
+  }
+
+  /**
+   * {@code setReadOnly(true)} is a hint: the session still writes, and the connection says so in a
+   * warning, once. What the server does enforce is a read-only transaction begun in SQL. If a later
+   * server offers a read-only session and the driver uses it, this test is the one to change.
+   */
+  @Test
+  void setReadOnlyIsAHintAndSaysSo() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      assertFalse(connection.isReadOnly());
+      assertNull(connection.getWarnings());
+      connection.setReadOnly(true);
+      assertTrue(connection.isReadOnly());
+      java.sql.SQLWarning warning = connection.getWarnings();
+      assertNotNull(warning);
+      assertEquals("01000", warning.getSQLState());
+      assertEquals(
+          "setReadOnly(true) is a hint this driver cannot enforce: Chargewire has no read-only"
+              + " session, so this connection still runs any statement its user may run. To have"
+              + " writes refused, connect as a user with read-only access, use a server started"
+              + " read-only, or run the statements between BEGIN TRANSACTION READ ONLY and COMMIT",
+          warning.getMessage());
+      // Not enforced: a write goes through.
+      statement.execute("CREATE OR REPLACE TABLE read_only_hint (i INTEGER)");
+      assertEquals(1, statement.executeUpdate("INSERT INTO read_only_hint VALUES (1)"));
+      // Said once per connection, however often a pool sets it.
+      connection.setReadOnly(false);
+      assertFalse(connection.isReadOnly());
+      connection.setReadOnly(true);
+      connection.setReadOnly(true);
+      assertNull(connection.getWarnings().getNextWarning());
+      // What the server enforces: a read-only transaction begun in SQL.
+      statement.execute("BEGIN TRANSACTION READ ONLY");
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_hint")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+      }
+      SQLException refused =
+          assertThrows(
+              SQLException.class,
+              () -> statement.executeUpdate("INSERT INTO read_only_hint VALUES (2)"));
+      assertTrue(
+          refused.getMessage().contains("transaction is launched in read-only mode"),
+          refused.getMessage());
+      statement.execute("ROLLBACK");
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_hint")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1), "the refused write left nothing");
+      }
+      statement.execute("DROP TABLE read_only_hint");
     }
   }
 
