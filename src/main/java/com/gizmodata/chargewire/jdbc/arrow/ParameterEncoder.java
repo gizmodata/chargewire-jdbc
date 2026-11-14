@@ -211,6 +211,91 @@ public final class ParameterEncoder {
   }
 
   /**
+   * Splits a batch into the runs of consecutive rows that each go to the server as one Arrow
+   * stream, so that every row is sent exactly as it is sent alone.
+   *
+   * <p>An Arrow column has one type. Most parameters are sent in the type the server declares,
+   * whatever the rows hold, and a batch of them is one run. For the others the type that is sent
+   * follows the value: a parameter the server gives no type, a VARIANT, an ENUM or a fixed-size
+   * ARRAY (sent in the value's own type), and a {@code TIMESTAMP WITH TIME ZONE} or a time of day
+   * (sent as an instant, a value without a zone, or text). One column over rows that differ would
+   * have to re-type some of them, as text at worst, and what the server stores for a VARIANT or
+   * computes from an untyped parameter is the type it was sent. So a row whose own form differs
+   * from the run's starts a new run. A NULL takes the form of its run where the server declares the
+   * type, and is a row of its own form (its {@code setNull} type, or none) where it does not.
+   *
+   * @param declared the server's parameter schema, or {@code null} when it sent none
+   * @param rows one array per execution, each as long as the parameter count
+   * @return the rows in order, in one list or more
+   * @throws SQLException if a value has no Arrow form
+   */
+  public static List<List<Value[]>> runs(Schema declared, List<Value[]> rows) throws SQLException {
+    int columns = rows.get(0).length;
+    Field[] fields = new Field[columns];
+    boolean[] follows = new boolean[columns];
+    boolean any = false;
+    for (int c = 0; c < columns; c++) {
+      Field field =
+          declared != null && c < declared.getFields().size() ? declared.getFields().get(c) : null;
+      fields[c] = field != null && !(field.getType() instanceof ArrowType.Null) ? field : null;
+      follows[c] = fields[c] == null || followsValue(fields[c]);
+      any |= follows[c];
+    }
+    if (!any || rows.size() == 1) {
+      return List.of(rows);
+    }
+    List<List<Value[]>> runs = new ArrayList<>();
+    List<Value[]> run = new ArrayList<>();
+    Field[] sent = new Field[columns];
+    for (Value[] row : rows) {
+      Field[] own = new Field[columns];
+      boolean fits = true;
+      for (int c = 0; c < columns; c++) {
+        if (!follows[c] || (fields[c] != null && row[c].value == null)) {
+          continue;
+        }
+        own[c] =
+            fields[c] == null
+                ? inferField(Integer.toString(c + 1), List.of(row[c]))
+                : sentField(fields[c], List.of(row[c]));
+        fits &= sent[c] == null || sent[c].equals(own[c]);
+      }
+      if (!fits) {
+        runs.add(run);
+        run = new ArrayList<>();
+        sent = new Field[columns];
+      }
+      for (int c = 0; c < columns; c++) {
+        if (own[c] != null) {
+          sent[c] = own[c];
+        }
+      }
+      run.add(row);
+    }
+    runs.add(run);
+    return runs;
+  }
+
+  /**
+   * Whether the Arrow type a declared parameter is sent in follows the value: see {@link #runs}.
+   */
+  private static boolean followsValue(Field declared) {
+    if (declared.getType() instanceof ArrowType.List && !declared.getChildren().isEmpty()) {
+      Field element = declared.getChildren().get(0);
+      return element.getType() instanceof ArrowType.Null || followsValue(element);
+    }
+    switch (target(declared)) {
+      case ZONED:
+      case TIME_TZ:
+      case TIME:
+      case OWN:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
    * Converts a value to the Java class of a JDBC type, for {@code setObject(index, value,
    * targetSqlType[, scale])}.
    *
@@ -352,6 +437,18 @@ public final class ParameterEncoder {
   }
 
   private static Field inferField(String name, List<Value> values) throws SQLException {
+    return inferField(name, values, false);
+  }
+
+  /**
+   * The one Arrow field for values sent in their own types.
+   *
+   * @param keepsTypes whether what receives the values keeps the type of each (a VARIANT): then
+   *     values of types that only text could hold together are refused, where otherwise they are
+   *     sent as text for the server to convert
+   */
+  private static Field inferField(String name, List<Value> values, boolean keepsTypes)
+      throws SQLException {
     Field inferred = null;
     int hint = NO_TYPE;
     for (Value value : values) {
@@ -361,8 +458,8 @@ public final class ParameterEncoder {
         }
         continue;
       }
-      Field field = fieldOf(name, value.value);
-      inferred = inferred == null ? field : unify(name, inferred, field);
+      Field field = fieldOf(name, value.value, keepsTypes);
+      inferred = inferred == null ? field : unify(name, inferred, field, keepsTypes);
     }
     if (inferred != null) {
       return inferred;
@@ -371,7 +468,7 @@ public final class ParameterEncoder {
     return Field.nullable(name, hinted == null ? NULL : hinted);
   }
 
-  private static Field fieldOf(String name, Object value) throws SQLException {
+  private static Field fieldOf(String name, Object value, boolean keepsTypes) throws SQLException {
     if (value instanceof Array) {
       value = ((Array) value).getArray();
     }
@@ -380,8 +477,8 @@ public final class ParameterEncoder {
       Field child = null;
       for (Object element : elements) {
         if (element != null) {
-          Field field = fieldOf("item", element);
-          child = child == null ? field : unify("item", child, field);
+          Field field = fieldOf("item", element, keepsTypes);
+          child = child == null ? field : unify("item", child, field, keepsTypes);
         }
       }
       if (child == null) {
@@ -460,13 +557,17 @@ public final class ParameterEncoder {
     return precision <= 76 ? new ArrowType.Decimal(precision, scale, 256) : UTF8;
   }
 
-  /** The type both values fit in; text when there is no better one. */
-  private static Field unify(String name, Field a, Field b) {
+  /**
+   * The type both values fit in; text when there is no better one, or a refusal of the two where
+   * each value's type is kept ({@code keepsTypes}) and text would change it.
+   */
+  private static Field unify(String name, Field a, Field b, boolean keepsTypes)
+      throws SQLException {
     if (a.equals(b)) {
       return a;
     }
     if (a.getType() instanceof ArrowType.List && b.getType() instanceof ArrowType.List) {
-      Field child = unify("item", a.getChildren().get(0), b.getChildren().get(0));
+      Field child = unify("item", a.getChildren().get(0), b.getChildren().get(0), keepsTypes);
       return new Field(name, FieldType.nullable(ArrowType.List.INSTANCE), List.of(child));
     }
     if (a.getType() instanceof ArrowType.Null) {
@@ -475,7 +576,18 @@ public final class ParameterEncoder {
     if (b.getType() instanceof ArrowType.Null) {
       return a;
     }
-    return Field.nullable(name, unify(a.getType(), b.getType()));
+    ArrowType both = unify(a.getType(), b.getType());
+    if (keepsTypes && both == UTF8) {
+      throw new SQLDataException(
+          "A VARIANT keeps the type of each value, and values of the types "
+              + SqlTypes.typeName(a)
+              + " and "
+              + SqlTypes.typeName(b)
+              + " cannot be sent in one list: bind the list's JSON text to"
+              + " CAST(CAST(? AS JSON) AS VARIANT)",
+          "07006");
+    }
+    return Field.nullable(name, both);
   }
 
   private static ArrowType unify(ArrowType a, ArrowType b) {
@@ -774,7 +886,7 @@ public final class ParameterEncoder {
       case TIME:
         return timeField(declared, values);
       case OWN:
-        return inferField(declared.getName(), values);
+        return inferField(declared.getName(), values, SqlTypes.isVariant(declared));
       default:
         // An extension type Arrow Java has no class for (arrow.json: text with a name) is sent
         // as its storage type: servers refuse extension types they don't take as parameters.

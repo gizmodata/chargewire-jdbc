@@ -220,6 +220,20 @@ signs in as one user must not sign in as another.
   not know a parameter's type, the Java value decides it. `executeBatch()` sends the whole batch as
   one request, one row per execution; the server reports one total, so each entry of a batch of
   several is `SUCCESS_NO_INFO`.
+
+  **A batch stores what its rows store one by one.** An Arrow column has one type, so where the
+  type that is sent follows the value, a batch is sent as one request per run of consecutive rows
+  of the same form, in order, and never re-types a row to fit its neighbours. That is the case for
+  a VARIANT, for a parameter the server gives no type (an argument of a function that takes any
+  type), for an ENUM and a fixed-size ARRAY, and for a `TIMESTAMP WITH TIME ZONE` or a time of day
+  whose rows mix points in time, values without a zone and text. For a VARIANT an `Integer` and a
+  `Long` are two types (INT32, INT64), and so are two `BigDecimal`s of different digits: a batch
+  that alternates them is as many requests as it has rows. Every other parameter is sent in the
+  type the server declares, whatever the rows hold, and its batch is one request. When a request
+  of a batch fails, the batch stops there: the requests before it stay applied unless autocommit
+  is off and the transaction is rolled back, and `BatchUpdateException.getUpdateCounts()` has the
+  counts of their entries (the server runs a request's rows one after another, so rows of the
+  failing request before the one that failed may be applied too, as in a batch of one request).
 - **Lost sessions.** If the server no longer has the session (idle eviction, restart), the driver
   opens a new one, replays catalog, schema and autocommit, re-prepares prepared statements, and
   reports the loss of temporary state as a warning on the connection. A transaction's work is
@@ -395,6 +409,21 @@ range; BIT takes its bits as text; TIME WITH TIME ZONE takes an `OffsetTime`, an
 `TIME '…'` cast to it; ENUM takes its text; a fixed-size ARRAY takes a `List`; a VARIANT takes a
 scalar or a `List`, which the server makes a Variant of. STRUCT, MAP and UNION have no parameter
 form, nor does an object for a VARIANT: bind its JSON text to `CAST(CAST(? AS JSON) AS VARIANT)`.
+
+A VARIANT keeps the type of what it is given, alone or in a batch: a `Boolean`, `Byte`, `Short`,
+`Integer`, `Long`, `Float`, `Double`, `BigDecimal` (with its own precision and scale), `String`,
+`byte[]`, `LocalDate`, `LocalTime`, `LocalDateTime` and `OffsetDateTime` are stored as that type,
+read back as that class, and go back as that type again. Three things do not go that way. A `UUID`
+and an `OffsetTime` are stored as their text (VARCHAR). For a UUID, write `CAST(? AS UUID)` in the
+statement: that stores a UUID-typed variant, and `v = CAST(? AS UUID)` finds one, where `v = ?`
+compares with text and does not. For a time with an offset the text is all there is: a Variant
+has no such type that the server can send back. A `List` is sent
+with one type for its elements, so a list of numbers of different widths is stored in the wider
+one, and a list whose values only text could hold together (`List.of(1, "a")`) is refused with
+SQLSTATE `07006` rather than stored as text: bind its JSON text instead. And a
+`java.sql.Timestamp` is stored as a timestamp without a zone holding its wall clock in the JVM's
+zone, as for every parameter the server does not type as `TIMESTAMP WITH TIME ZONE` (see
+[Time zones](#time-zones)); an `Instant` or an `OffsetDateTime` is stored as the instant.
 With `arrowLosslessConversion=false` the server declares a BIT parameter as bytes, and text bound
 to it is taken as those bytes, not as bits: write `CAST(CAST(? AS VARCHAR) AS BIT)` there.
 

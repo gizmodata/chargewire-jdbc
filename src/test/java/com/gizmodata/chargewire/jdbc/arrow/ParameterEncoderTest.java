@@ -818,6 +818,145 @@ class ParameterEncoderTest {
     assertEquals(List.of(4, 5, 6), arrays.rows.get(0)[0]);
   }
 
+  // ---- A batch as runs of rows that go as they go alone ----
+
+  private static final Field VARIANT =
+      new Field(
+          "1",
+          new FieldType(
+              true,
+              ArrowType.Struct.INSTANCE,
+              null,
+              java.util.Map.of("ARROW:extension:name", "arrow.parquet.variant")),
+          List.of(
+              Field.notNullable("metadata", ArrowType.Binary.INSTANCE),
+              Field.nullable("value", ArrowType.Binary.INSTANCE)));
+
+  /** The sizes of the runs a one-column batch of these values is sent in. */
+  private static List<Integer> runs(Field declared, Object... values) throws SQLException {
+    List<ParameterEncoder.Value[]> rows = new ArrayList<>();
+    for (Object value : values) {
+      rows.add(
+          new ParameterEncoder.Value[] {
+            value instanceof ParameterEncoder.Value ? (ParameterEncoder.Value) value : value(value)
+          });
+    }
+    List<Integer> sizes = new ArrayList<>();
+    int row = 0;
+    for (List<ParameterEncoder.Value[]> run :
+        ParameterEncoder.runs(declared == null ? null : new Schema(List.of(declared)), rows)) {
+      sizes.add(run.size());
+      for (ParameterEncoder.Value[] each : run) {
+        assertTrue(each == rows.get(row++), "the rows keep their order");
+      }
+    }
+    assertEquals(rows.size(), row);
+    return sizes;
+  }
+
+  @Test
+  void aBatchForADeclaredTypeIsOneRunWhateverItsRowsHold() throws SQLException {
+    assertEquals(
+        List.of(5),
+        runs(Field.nullable("1", new ArrowType.Decimal(18, 3, 128)), 1, 2L, "3.5", null, 4.5d));
+    assertEquals(
+        List.of(4), runs(Field.nullable("1", ArrowType.Utf8.INSTANCE), 1, "a", true, null));
+    assertEquals(
+        List.of(3), runs(opaque(new ArrowType.FixedSizeBinary(16), "hugeint"), 1, "2", 3L));
+    assertEquals(List.of(1), runs(VARIANT, 1));
+  }
+
+  @Test
+  void aVariantBatchIsSplitWhereTheTypeOfItsRowsChanges() throws Exception {
+    // 2.3.0 before this: one column of text for all four, so every row was stored as VARCHAR.
+    assertEquals(List.of(1, 1, 1, 1), runs(VARIANT, 1, "a", 2L, 1.5d));
+    assertEquals(List.of(3, 2), runs(VARIANT, 1, 2, 3, "a", "b"));
+    // A NULL has the type of its run, wherever it stands.
+    assertEquals(List.of(4, 2), runs(VARIANT, null, 1, null, 2, "a", null));
+    // An Integer and a Long are two types to a VARIANT (INT32, INT64), and so are two decimals
+    // of different digits.
+    assertEquals(List.of(1, 1), runs(VARIANT, 1, 2L));
+    assertEquals(
+        List.of(2, 1),
+        runs(VARIANT, new BigDecimal("1.5"), new BigDecimal("2.5"), new BigDecimal("10.25")));
+    assertEquals(List.of(2, 1), runs(VARIANT, List.of(1, 2), List.of(3), List.of("a")));
+    // Each run is then one column of its rows' own type.
+    assertEquals(new ArrowType.Int(32, true), column(VARIANT, 1, null, 3).type(0));
+  }
+
+  @Test
+  void aBatchForAnUntypedParameterIsSplitTheSameAndANullIsARowOfItsOwnType() throws SQLException {
+    assertEquals(List.of(2, 1, 1), runs(null, 1, 2, "a", new byte[] {1}));
+    assertEquals(List.of(3), runs(null, "a", "b", "c"));
+    // Alone, a NULL goes as a column of no type, or of its setNull type: so it does in a batch.
+    assertEquals(List.of(1, 1, 1), runs(null, 1, null, 2));
+    assertEquals(
+        List.of(2, 1),
+        runs(
+            null,
+            1,
+            new ParameterEncoder.Value(null, Types.INTEGER, null),
+            new ParameterEncoder.Value(null, Types.VARCHAR, null)));
+  }
+
+  @Test
+  void aBatchForAZonedTimestampOrATimeIsSplitWhereTheFormOfItsRowsChanges() throws SQLException {
+    Field zoned = Field.nullable("1", ZONED);
+    Instant instant = Instant.parse("2026-01-15T12:00:00Z");
+    LocalDateTime wallClock = LocalDateTime.of(2026, 1, 15, 12, 0);
+    assertEquals(List.of(3), runs(zoned, instant, null, new Timestamp(0)));
+    // Text with an offset is a point in time, as an Instant is; text without one is the server's
+    // to read.
+    assertEquals(
+        List.of(2, 2, 2, 1),
+        runs(
+            zoned,
+            instant,
+            instant,
+            wallClock,
+            null,
+            "2026-01-15 12:00:00+02",
+            instant,
+            "2026-01-15 12:00:00"));
+    assertEquals(List.of(1, 1), runs(zoned, wallClock, LocalDate.of(2026, 1, 15)));
+    Field time = Field.nullable("1", new ArrowType.Time(TimeUnit.MICROSECOND, 64));
+    assertEquals(
+        List.of(2, 1),
+        runs(
+            time,
+            LocalTime.NOON,
+            Time.valueOf("12:00:00"),
+            OffsetTime.of(12, 0, 0, 0, ZoneOffset.UTC)));
+    Field zonedList =
+        new Field(
+            "1",
+            FieldType.nullable(ArrowType.List.INSTANCE),
+            List.of(Field.nullable("item", ZONED)));
+    assertEquals(List.of(1, 1), runs(zonedList, List.of(instant), List.of(wallClock)));
+    Field numbers =
+        new Field(
+            "1",
+            FieldType.nullable(ArrowType.List.INSTANCE),
+            List.of(Field.nullable("item", new ArrowType.Int(32, true))));
+    assertEquals(List.of(2), runs(numbers, List.of(1), List.of("2", 3L)));
+  }
+
+  @Test
+  void aListOfUnrelatedTypesForAVariantIsRefusedNotSentAsText() throws Exception {
+    SQLException error =
+        assertThrows(SQLDataException.class, () -> column(VARIANT, List.of(1, "a")));
+    assertEquals("07006", error.getSQLState());
+    assertEquals(
+        "A VARIANT keeps the type of each value, and values of the types INTEGER and VARCHAR"
+            + " cannot be sent in one list: bind the list's JSON text to"
+            + " CAST(CAST(? AS JSON) AS VARIANT)",
+        error.getMessage());
+    // Numbers of two widths have a type that holds both, and so have an untyped parameter's
+    // values, which the server converts as it needs them.
+    assertEquals(List.of(1L, 2L), column(VARIANT, List.of(1, 2L)).rows.get(0)[0]);
+    assertEquals(List.of("1", "a"), one(List.of(1, "a")).rows.get(0)[0]);
+  }
+
   @Test
   void anOffsetTimeWithoutADeclaredTypeIsTextWithItsOffset() throws Exception {
     Decoded decoded = one(OffsetTime.of(13, 14, 0, 0, ZoneOffset.ofHoursMinutes(-5, -30)));

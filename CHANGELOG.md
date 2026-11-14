@@ -100,6 +100,18 @@ All notable changes to this project are documented here. The format follows
 - **BIGNUM, BIT and VARIANT arrived as bytes in DuckDB's encodings.** BIGNUM now reads as a
   `BigDecimal` (JDBC type `NUMERIC`), BIT as its bits (`"10101"`), and VARIANT as the Java value
   it holds, with JSON text for an object or an array (README, "DuckDB types").
+- **`executeBatch` could store something else than the same rows stored one by one.** A batch
+  goes to the server as Arrow, one column per parameter, and a column has one type. For a
+  parameter the server gives no type (an argument of a function that takes any type), the driver
+  chose one type for the whole batch: an `Integer` next to a `Long` went as BIGINT, and rows of
+  unrelated types all went as text, numbers, dates and booleans included, or the batch failed
+  (`Cannot convert 'binary data' to text`) where each row alone was accepted. A TIME parameter
+  with an `OffsetTime` in one row turned the whole column to text and then refused rows it takes
+  alone. A batch is now sent as one request per run of consecutive rows of the same form wherever
+  the form follows the value, so every row goes exactly as it goes alone (README, "How statements
+  run"); a batch for a parameter of a declared type is one request, as before. `BatchesIT` binds
+  67 Java values to a parameter of each of 43 types, and to an untyped one, alone and in
+  one batch, and compares what the server holds.
 - **A UNION failed to read, or read as NULL, for most member types.** The driver asked Arrow
   Java for a union's member by the kind of its type, which cannot answer for a kind that needs
   more than its name and has one slot per kind. Reading a member that is a DECIMAL, HUGEINT,
@@ -179,6 +191,13 @@ Everything here is something an application written for 2.2.6 can notice.
   the URL's options of those names). 2.2.6 connected and dropped them without a word, so such a
   URL only ever worked with the credentials given a second time, and it showed them unredacted in
   every message with the URL and in `DatabaseMetaData.getURL()`. They are `***@` in messages now.
+- **A batch may take more than one request** (see the fix above): for a parameter the server
+  gives no type, a `TIMESTAMP WITH TIME ZONE` or a time of day, when the rows differ in form (an
+  `Instant` in one row and a `LocalDateTime` in the next; an `Integer` and a `String` for an
+  untyped parameter). Before, such a batch was one request with every row re-typed to one type.
+  The values stored are the ones each row stores alone. When a batch fails,
+  `BatchUpdateException.getUpdateCounts()` now has the counts of the entries of the requests
+  that were applied before the failing one (before: always empty).
 - **The text of three connection errors** (their class and SQLSTATE `08001` are unchanged), so
   that none quotes what may be a password: `Invalid value for <option>: expected …` (before:
   `Invalid value '<value>' for <option>: …`), `an option is not key=value; …` (before: `option
