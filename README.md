@@ -536,6 +536,11 @@ To have writes refused, use one of the things a server does enforce:
 - on a DuckDB server, SQL between `BEGIN TRANSACTION READ ONLY` and `COMMIT`: a write inside it
   fails with `Cannot write to database … transaction is launched in read-only mode`.
 
+A session option that makes a session read-only, which `setReadOnly(true)` could then switch on,
+is proposed for the protocol in
+[gizmodata/chargewire#15](https://github.com/gizmodata/chargewire/issues/15) and for Hardcharger in
+[gizmodata/hardcharger#45](https://github.com/gizmodata/hardcharger/issues/45).
+
 ## 🚫 Not supported
 
 Generated keys (use `INSERT ... RETURNING`), savepoints, stored procedure calls, scrollable or
