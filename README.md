@@ -442,6 +442,13 @@ includes zones the server names in ways `java.time` does not know by itself: the
 resolve at all, the instant still reads (`Instant`, `Timestamp`; `OffsetDateTime` and `getString`
 at UTC), and `LocalDateTime`, `LocalDate` and `LocalTime` are refused with SQLSTATE `22009`.
 
+Inside a LIST, STRUCT, MAP or UNION the element is the same instant (a `java.sql.Timestamp` in the
+`List` or `Map` that `getObject` returns), and `getString` of the whole value shows it as the column
+shows it: `["2026-01-15 17:30:00+05:30"]` in a session in `Asia/Kolkata`, whatever the JVM's zone.
+A TIME WITH TIME ZONE there has its seconds and its offset (`["12:00:00+05:30"]`). The elements'
+own `toString()` is Java's: a `Timestamp` taken out of the list prints the JVM zone's wall clock,
+and so does the `toString()` of a `java.sql.Array` or `Struct` holding one.
+
 A parameter the server types `TIMESTAMP WITH TIME ZONE` takes two kinds of value:
 
 | Value | Stored |

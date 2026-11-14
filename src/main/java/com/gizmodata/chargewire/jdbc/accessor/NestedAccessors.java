@@ -49,7 +49,7 @@ final class NestedAccessors {
     return out.toString();
   }
 
-  private static void render(Object value, StringBuilder out) {
+  static void render(Object value, StringBuilder out) {
     if (value == null) {
       out.append("null");
     } else if (value instanceof Number || value instanceof Boolean) {
@@ -85,7 +85,7 @@ final class NestedAccessors {
     }
   }
 
-  private static void quote(String text, StringBuilder out) {
+  static void quote(String text, StringBuilder out) {
     out.append('"');
     for (int i = 0; i < text.length(); i++) {
       char c = text.charAt(i);
@@ -155,7 +155,25 @@ final class NestedAccessors {
 
     @Override
     public String getString(int row) throws SQLException {
-      return render(getObject(row));
+      StringBuilder out = new StringBuilder();
+      appendJson(row, out);
+      return out.toString();
+    }
+
+    @Override
+    void appendJson(int row, StringBuilder out) throws SQLException {
+      if (isNull(row)) {
+        out.append("null");
+        return;
+      }
+      out.append('[');
+      for (long i = start(row); i < end(row); i++) {
+        if (i > start(row)) {
+          out.append(", ");
+        }
+        elements.appendJson(Math.toIntExact(i), out);
+      }
+      out.append(']');
     }
 
     @Override
@@ -193,7 +211,27 @@ final class NestedAccessors {
 
     @Override
     public String getString(int row) throws SQLException {
-      return render(getObject(row));
+      StringBuilder out = new StringBuilder();
+      appendJson(row, out);
+      return out.toString();
+    }
+
+    @Override
+    void appendJson(int row, StringBuilder out) throws SQLException {
+      if (isNull(row)) {
+        out.append("null");
+        return;
+      }
+      out.append('{');
+      for (int i = 0; i < children.size(); i++) {
+        if (i > 0) {
+          out.append(", ");
+        }
+        quote(names.get(i), out);
+        out.append(": ");
+        children.get(i).appendJson(row, out);
+      }
+      out.append('}');
     }
 
     @Override
@@ -317,7 +355,36 @@ final class NestedAccessors {
 
     @Override
     public String getString(int row) throws SQLException {
-      return render(getObject(row));
+      StringBuilder out = new StringBuilder();
+      appendJson(row, out);
+      return out.toString();
+    }
+
+    @Override
+    void appendJson(int row, StringBuilder out) throws SQLException {
+      if (isNull(row)) {
+        out.append("null");
+        return;
+      }
+      MapVector map = (MapVector) vector;
+      // As getObject has them: a key that comes twice is shown once, where it first stood, with
+      // its last value.
+      Map<String, Integer> entries = new LinkedHashMap<>();
+      for (int i = map.getElementStartIndex(row); i < map.getElementEndIndex(row); i++) {
+        entries.put(keys.jsonKey(i), i);
+      }
+      out.append('{');
+      boolean first = true;
+      for (Map.Entry<String, Integer> entry : entries.entrySet()) {
+        if (!first) {
+          out.append(", ");
+        }
+        first = false;
+        quote(entry.getKey(), out);
+        out.append(": ");
+        values.appendJson(entry.getValue(), out);
+      }
+      out.append('}');
     }
   }
 
@@ -384,6 +451,20 @@ final class NestedAccessors {
     @Override
     public Object getObject(int row) throws SQLException {
       return member(row).getObject(index(row));
+    }
+
+    @Override
+    void appendJson(int row, StringBuilder out) throws SQLException {
+      if (isNull(row)) {
+        out.append("null");
+      } else {
+        member(row).appendJson(index(row), out);
+      }
+    }
+
+    @Override
+    String jsonKey(int row) throws SQLException {
+      return member(row).jsonKey(index(row));
     }
 
     @Override
@@ -483,6 +564,20 @@ final class NestedAccessors {
     @Override
     public Object getObject(int row) throws SQLException {
       return values.getObject(index(row));
+    }
+
+    @Override
+    void appendJson(int row, StringBuilder out) throws SQLException {
+      if (isNull(row)) {
+        out.append("null");
+      } else {
+        values.appendJson(index(row), out);
+      }
+    }
+
+    @Override
+    String jsonKey(int row) throws SQLException {
+      return values.jsonKey(index(row));
     }
 
     @Override

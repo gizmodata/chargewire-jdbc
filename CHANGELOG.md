@@ -34,6 +34,16 @@ All notable changes to this project are documented here. The format follows
   with SQLSTATE `22009` instead of showing UTC's wall clock as the session's; the instant still
   reads, and `OffsetDateTime` and `getString` give it at UTC, as before.
 
+- **`getString` of a LIST, STRUCT or MAP holding a `TIMESTAMP WITH TIME ZONE` showed the JVM
+  zone's wall clock, without an offset.** The text of a nested value was made from the elements'
+  Java objects, and a `java.sql.Timestamp` prints itself in the JVM's zone: the instant that a
+  column shows as `2026-01-15 17:30:00+05:30` in a session in `Asia/Kolkata` read
+  `["2026-01-15 07:00:00.0"]` in a list on a JVM in New York, and changed with the JVM's zone. A
+  nested `TIMESTAMP WITH TIME ZONE` now has the text it has as a column, in lists, structs, maps
+  (as a key too) and unions, at any depth. A nested TIME WITH TIME ZONE, which reads as an
+  `OffsetTime` since this release, has its column's text as well (`12:00:00+05:30`; an
+  `OffsetTime` prints `12:00+05:30`). The elements `getObject` returns are unchanged.
+
 - **On a connection made to a stopped server, `setSchema` followed by `setCatalog` opened the
   session in the wrong schema, or not at all.** Such a connection keeps `setCatalog` and
   `setSchema` and sends them when its first statement opens the session (2.2.6). It kept the
@@ -203,6 +213,10 @@ Everything here is something an application written for 2.2.6 can notice.
   the URL's options of those names). 2.2.6 connected and dropped them without a word, so such a
   URL only ever worked with the credentials given a second time, and it showed them unredacted in
   every message with the URL and in `DatabaseMetaData.getURL()`. They are `***@` in messages now.
+- **The text of a nested `TIMESTAMP WITH TIME ZONE`** (see the fix above): `getString` of a list,
+  struct or map shows it as `"2026-01-15 17:30:00+05:30"` (the session's wall clock and offset)
+  where it showed `"2026-01-15 07:00:00.0"` (the JVM zone's wall clock). A timestamp without a zone
+  inside a list keeps its text (`"2026-01-15 12:00:00.0"`).
 - **A batch may take more than one request** (see the fix above): for a parameter the server
   gives no type, a `TIMESTAMP WITH TIME ZONE` or a time of day, when the rows differ in form (an
   `Instant` in one row and a `LocalDateTime` in the next; an `Integer` and a `String` for an

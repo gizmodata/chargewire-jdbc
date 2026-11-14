@@ -293,6 +293,24 @@ final class TemporalAccessors {
       return formatDateTime(value.toLocalDateTime())
           + value.getOffset().getId().replace("Z", "+00:00");
     }
+
+    /**
+     * {@inheritDoc} With a zone, the text is {@link #getString}'s: the session's wall clock and its
+     * offset. The object is a {@link Timestamp}, whose own text is the JVM zone's wall clock.
+     */
+    @Override
+    void appendJson(int row, StringBuilder out) throws SQLException {
+      if (zone == null || isNull(row)) {
+        super.appendJson(row, out);
+      } else {
+        NestedAccessors.quote(getString(row), out);
+      }
+    }
+
+    @Override
+    String jsonKey(int row) throws SQLException {
+      return zone == null ? super.jsonKey(row) : getString(row);
+    }
   }
 
   /** Intervals: year-month as {@link Period}, day-time as {@link Duration}, and month-day-nano. */

@@ -267,6 +267,24 @@ final class DuckDbAccessors {
       return TemporalAccessors.formatTime(micros(bits) * 1_000L) + offsetText(offset(bits));
     }
 
+    /**
+     * {@inheritDoc} The text is {@link #getString}'s, with the seconds that {@link
+     * OffsetTime#toString} leaves out at a full minute.
+     */
+    @Override
+    void appendJson(int row, StringBuilder out) throws SQLException {
+      if (isNull(row)) {
+        super.appendJson(row, out);
+      } else {
+        NestedAccessors.quote(getString(row), out);
+      }
+    }
+
+    @Override
+    String jsonKey(int row) throws SQLException {
+      return getString(row);
+    }
+
     /** {@inheritDoc} The value as the server encoded it. */
     @Override
     public byte[] getBytes(int row) {

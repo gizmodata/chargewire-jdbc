@@ -80,6 +80,30 @@ public abstract class Accessor {
   }
 
   /**
+   * Appends the value as it reads inside the text of a list, a struct or a map: JSON, made from the
+   * value's object. A type whose object no longer has what its text shows (a {@code TIMESTAMP WITH
+   * TIME ZONE}'s zone: its object is the instant) appends its {@link #getString} instead.
+   *
+   * @param row a row, which may be null
+   * @param out where the text goes
+   * @throws SQLException if the value cannot be read
+   */
+  void appendJson(int row, StringBuilder out) throws SQLException {
+    NestedAccessors.render(isNull(row) ? null : getObject(row), out);
+  }
+
+  /**
+   * Returns the value as the key of a map in that text.
+   *
+   * @param row a non-null row
+   * @return the key's text
+   * @throws SQLException if the value cannot be read
+   */
+  String jsonKey(int row) throws SQLException {
+    return String.valueOf(getObject(row));
+  }
+
+  /**
    * Returns the value as a boolean.
    *
    * @param row a non-null row

@@ -323,6 +323,58 @@ class NestedAccessorsTest extends AccessorFixture {
     }
   }
 
+  /**
+   * Inside a list, a timestamp with a zone has its column's text (the zone's wall clock and its
+   * offset), not its {@code Timestamp} object's, which is the JVM zone's wall clock; a timestamp
+   * without a zone keeps the text it had.
+   */
+  @Test
+  void aZonedTimestampInAListHasItsColumnsText() throws SQLException {
+    java.util.TimeZone jvm = java.util.TimeZone.getDefault();
+    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/New_York"));
+    try {
+      for (String zone : new String[] {"Asia/Kolkata", null}) {
+        ListVector list =
+            vector(
+                new Field(
+                    "l",
+                    FieldType.nullable(ArrowType.List.INSTANCE),
+                    List.of(
+                        Field.nullable(
+                            "item",
+                            new ArrowType.Timestamp(
+                                org.apache.arrow.vector.types.TimeUnit.MICROSECOND, zone)))),
+                1,
+                v -> {
+                  UnionListWriter writer = v.getWriter();
+                  writer.setPosition(0);
+                  writer.startList();
+                  if (zone == null) {
+                    writer.timeStampMicro().writeTimeStampMicro(1_768_478_400_000_000L);
+                  } else {
+                    ((org.apache.arrow.vector.TimeStampMicroTZVector) v.getDataVector())
+                        .setSafe(0, 1_768_478_400_000_000L);
+                    writer.setPosition(0);
+                  }
+                  writer.endList();
+                  if (zone != null) {
+                    v.getOffsetBuffer().setInt(4, 1);
+                    v.getDataVector().setValueCount(1);
+                  }
+                });
+        Accessor accessor = accessor(list);
+        assertEquals(
+            zone == null ? "[\"2026-01-15 12:00:00.0\"]" : "[\"2026-01-15 17:30:00+05:30\"]",
+            accessor.getString(0));
+        assertEquals(
+            java.time.Instant.parse(zone == null ? "2026-01-15T17:00:00Z" : "2026-01-15T12:00:00Z"),
+            ((java.sql.Timestamp) ((List<?>) accessor.getObject(0)).get(0)).toInstant());
+      }
+    } finally {
+      java.util.TimeZone.setDefault(jvm);
+    }
+  }
+
   @Test
   void denseUnionsReadThroughTheirOffsets() throws SQLException {
     DenseUnionVector union =

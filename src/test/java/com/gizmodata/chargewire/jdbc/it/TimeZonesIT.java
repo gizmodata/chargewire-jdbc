@@ -861,4 +861,51 @@ class TimeZonesIT {
       }
     }
   }
+
+  /**
+   * Inside a list, a struct, a map or a union, a TIMESTAMP WITH TIME ZONE and a TIME WITH TIME ZONE
+   * have the text they have as a column: the session's wall clock with its offset, and the time
+   * with its seconds and its offset. The JVM's zone ({@link #JVM_ZONE} here) is in none.
+   */
+  @Test
+  void nestedValuesWithAZoneHaveTheTextTheyHaveAsAColumn() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      for (String zone : List.of("Asia/Kolkata", "America/New_York", "UTC")) {
+        statement.execute("SET TimeZone = '" + zone + "'");
+        try (ResultSet rows =
+            statement.executeQuery(
+                "SELECT t, o, [t, NULL, t] AS l, {'t': t, 'o': o} AS s, MAP {'k': t} AS m,"
+                    + " MAP {t: o} AS keyed, [[o]] AS ll, [{'t': t}] AS ls,"
+                    + " union_value(t := t)::UNION(n INTEGER, t TIMESTAMPTZ) AS u,"
+                    + " [union_value(t := t)::UNION(n INTEGER, t TIMESTAMPTZ)] AS lu,"
+                    + " FROM (SELECT TIMESTAMPTZ '2026-01-15 12:00:00+00' AS t,"
+                    + " TIMETZ '12:00:00+05:30' AS o)")) {
+          assertTrue(rows.next());
+          String t = rows.getString("t");
+          String o = rows.getString("o");
+          assertEquals("12:00:00+05:30", o);
+          assertEquals(
+              Map.of(
+                      "Asia/Kolkata", "2026-01-15 17:30:00+05:30",
+                      "America/New_York", "2026-01-15 07:00:00-05:00",
+                      "UTC", "2026-01-15 12:00:00+00:00")
+                  .get(zone),
+              t);
+          assertEquals("[\"" + t + "\", null, \"" + t + "\"]", rows.getString("l"), zone);
+          assertEquals("{\"t\": \"" + t + "\", \"o\": \"" + o + "\"}", rows.getString("s"), zone);
+          assertEquals("{\"k\": \"" + t + "\"}", rows.getString("m"), zone);
+          assertEquals("{\"" + t + "\": \"" + o + "\"}", rows.getString("keyed"), zone);
+          assertEquals("[[\"" + o + "\"]]", rows.getString("ll"), zone);
+          assertEquals("[{\"t\": \"" + t + "\"}]", rows.getString("ls"), zone);
+          assertEquals(t, rows.getString("u"), zone);
+          assertEquals("[\"" + t + "\"]", rows.getString("lu"), zone);
+          // The values themselves are the instant and the time, as before.
+          assertEquals(
+              Instant.parse("2026-01-15T12:00:00Z"),
+              ((Timestamp) ((List<?>) rows.getObject("l")).get(0)).toInstant());
+        }
+      }
+    }
+  }
 }
