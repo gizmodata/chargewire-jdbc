@@ -211,6 +211,64 @@ public final class ParameterEncoder {
   }
 
   /**
+   * Returns a value as it is now, for a parameter that is sent when its statement runs: a copy of
+   * whatever the application can change after the setter has returned.
+   *
+   * <p>A setter sets a value, not a reference. One {@code java.sql.Timestamp} set to another time
+   * for each row of a batch, an array filled again, a list cleared, a {@code java.sql.Array} freed:
+   * none of it may reach a parameter that was set before. Copied are {@code java.util.Date} and its
+   * subclasses ({@code java.sql.Date}, {@code Time}, {@code Timestamp}), {@code Calendar}, arrays
+   * of every kind and {@code List}s with their elements, and a {@code java.sql.Array}'s elements; a
+   * {@code CharSequence} that is not a {@code String} is kept as its text, and an atomic number or
+   * an adder as its value. Everything else the driver takes is immutable.
+   *
+   * @param value the value a setter was given, or {@code null}
+   * @return the value itself when it cannot change, else a copy
+   * @throws SQLException if a {@code java.sql.Array} does not give its elements
+   */
+  public static Object snapshot(Object value) throws SQLException {
+    if (value instanceof java.util.Date) {
+      return ((java.util.Date) value).clone();
+    } else if (value instanceof Calendar) {
+      return ((Calendar) value).clone();
+    } else if (value instanceof byte[]) {
+      return ((byte[]) value).clone();
+    } else if (value instanceof Array) {
+      return snapshot(((Array) value).getArray());
+    } else if (value instanceof List) {
+      List<Object> copy = new ArrayList<>(((List<?>) value).size());
+      for (Object element : (List<?>) value) {
+        copy.add(snapshot(element));
+      }
+      return java.util.Collections.unmodifiableList(copy);
+    } else if (value instanceof Object[]) {
+      Object[] copy = new Object[((Object[]) value).length];
+      for (int i = 0; i < copy.length; i++) {
+        copy[i] = snapshot(((Object[]) value)[i]);
+      }
+      return copy;
+    } else if (value != null && value.getClass().isArray()) {
+      int length = java.lang.reflect.Array.getLength(value);
+      Object copy =
+          java.lang.reflect.Array.newInstance(value.getClass().getComponentType(), length);
+      System.arraycopy(value, 0, copy, 0, length);
+      return copy;
+    } else if (value instanceof CharSequence && !(value instanceof String)) {
+      return value.toString();
+    } else if (value instanceof java.util.concurrent.atomic.AtomicInteger) {
+      return ((Number) value).intValue();
+    } else if (value instanceof java.util.concurrent.atomic.AtomicLong
+        || value instanceof java.util.concurrent.atomic.LongAdder
+        || value instanceof java.util.concurrent.atomic.LongAccumulator) {
+      return ((Number) value).longValue();
+    } else if (value instanceof java.util.concurrent.atomic.DoubleAdder
+        || value instanceof java.util.concurrent.atomic.DoubleAccumulator) {
+      return ((Number) value).doubleValue();
+    }
+    return value;
+  }
+
+  /**
    * Splits a batch into the runs of consecutive rows that each go to the server as one Arrow
    * stream, so that every row is sent exactly as it is sent alone.
    *

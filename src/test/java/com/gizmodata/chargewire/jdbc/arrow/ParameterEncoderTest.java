@@ -818,6 +818,87 @@ class ParameterEncoderTest {
     assertEquals(List.of(4, 5, 6), arrays.rows.get(0)[0]);
   }
 
+  // ---- A parameter is the value it had when it was set ----
+
+  @Test
+  void whatTheApplicationCanChangeIsCopiedWhenItIsSet() throws Exception {
+    Timestamp timestamp = Timestamp.valueOf("2026-01-01 00:00:00.123456789");
+    Date date = Date.valueOf("2026-01-01");
+    Time time = Time.valueOf("01:00:00");
+    java.util.Date instant = new java.util.Date(1_000);
+    Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("Asia/Tokyo"));
+    byte[] bytes = {1, 2};
+    int[] ints = {1, 2};
+    Object[] objects = {timestamp, new byte[] {3}};
+    List<Object> list = new ArrayList<>(List.of(1, new ArrayList<>(List.of(date))));
+    StringBuilder text = new StringBuilder("text");
+    java.util.concurrent.atomic.AtomicLong number = new java.util.concurrent.atomic.AtomicLong(7);
+
+    Object keptTimestamp = ParameterEncoder.snapshot(timestamp);
+    Object keptDate = ParameterEncoder.snapshot(date);
+    Object keptTime = ParameterEncoder.snapshot(time);
+    Object keptInstant = ParameterEncoder.snapshot(instant);
+    Calendar keptCalendar = (Calendar) ParameterEncoder.snapshot(calendar);
+    byte[] keptBytes = (byte[]) ParameterEncoder.snapshot(bytes);
+    int[] keptInts = (int[]) ParameterEncoder.snapshot(ints);
+    Object[] keptObjects = (Object[]) ParameterEncoder.snapshot(objects);
+    List<?> keptList = (List<?>) ParameterEncoder.snapshot(list);
+    Object keptText = ParameterEncoder.snapshot(text);
+    Object keptNumber = ParameterEncoder.snapshot(number);
+
+    timestamp.setTime(0);
+    date.setTime(0);
+    time.setTime(0);
+    instant.setTime(0);
+    calendar.setTimeZone(TimeZone.getTimeZone("UTC"));
+    bytes[0] = 9;
+    ints[0] = 9;
+    ((byte[]) objects[1])[0] = 9;
+    objects[0] = null;
+    list.clear();
+    text.append(" changed");
+    number.set(9);
+
+    // Each keeps its class, so it converts as it did before the copy, and its value.
+    assertEquals(Timestamp.valueOf("2026-01-01 00:00:00.123456789"), keptTimestamp);
+    assertEquals(Timestamp.class, keptTimestamp.getClass());
+    assertEquals(Date.valueOf("2026-01-01"), keptDate);
+    assertEquals(Date.class, keptDate.getClass());
+    assertEquals(Time.valueOf("01:00:00"), keptTime);
+    assertEquals(Time.class, keptTime.getClass());
+    assertEquals(new java.util.Date(1_000), keptInstant);
+    assertEquals("Asia/Tokyo", keptCalendar.getTimeZone().getID());
+    assertArrayEquals(new byte[] {1, 2}, keptBytes);
+    assertArrayEquals(new int[] {1, 2}, keptInts);
+    assertEquals(Timestamp.valueOf("2026-01-01 00:00:00.123456789"), keptObjects[0]);
+    assertArrayEquals(new byte[] {3}, (byte[]) keptObjects[1]);
+    assertEquals(List.of(1, List.of(Date.valueOf("2026-01-01"))), keptList);
+    assertEquals("text", keptText);
+    assertEquals(7L, keptNumber);
+
+    // What cannot change is not copied.
+    for (Object same :
+        List.of(
+            "text",
+            1,
+            2L,
+            new BigDecimal("1.5"),
+            BigInteger.TEN,
+            UUID.randomUUID(),
+            Instant.EPOCH,
+            LocalDate.EPOCH,
+            LocalDateTime.MIN,
+            LocalTime.NOON,
+            OffsetDateTime.MAX,
+            OffsetTime.MAX,
+            Duration.ZERO,
+            Period.ZERO,
+            new ChargewireInterval(1, 2, 3))) {
+      assertTrue(same == ParameterEncoder.snapshot(same), same.getClass().getName());
+    }
+    assertEquals(null, ParameterEncoder.snapshot(null));
+  }
+
   // ---- A batch as runs of rows that go as they go alone ----
 
   private static final Field VARIANT =

@@ -354,7 +354,15 @@ public final class ChargewirePreparedStatement extends ChargewireStatement
           "Parameter " + index + " does not exist; the statement has " + parameters.length,
           "07009");
     }
-    parameters[index - 1] = new ParameterEncoder.Value(value, sqlType, calendar, source);
+    // The value as it is now: the parameters are sent when the statement runs, and until then
+    // the application may set the same Timestamp, array or Calendar to something else.
+    Object kept = ParameterEncoder.snapshot(value);
+    parameters[index - 1] =
+        new ParameterEncoder.Value(
+            kept,
+            sqlType,
+            calendar == null ? null : (Calendar) calendar.clone(),
+            source == value ? kept : ParameterEncoder.snapshot(source));
   }
 
   private void set(int index, Object value) throws SQLException {

@@ -100,6 +100,18 @@ All notable changes to this project are documented here. The format follows
 - **BIGNUM, BIT and VARIANT arrived as bytes in DuckDB's encodings.** BIGNUM now reads as a
   `BigDecimal` (JDBC type `NUMERIC`), BIT as its bits (`"10101"`), and VARIANT as the Java value
   it holds, with JSON text for an object or an array (README, "DuckDB types").
+- **A parameter set from an object that was changed afterwards took the later value.** The
+  driver kept the object a setter was given and read it when the statement ran. One
+  `java.sql.Timestamp` or `java.sql.Date` reused for every row of a batch (`ts.setTime(…);
+  ps.setTimestamp(1, ts); ps.addBatch();` in a loop) therefore stored the last row's value in
+  every row, without an error, and so did a `byte[]`, an array or a `List` filled again between
+  rows; a value changed after its setter and before `execute` was stored as changed; the
+  `Calendar` given to `setTimestamp`, `setDate` or `setTime` was read at its later zone; and a
+  `java.sql.Array` freed after `setObject` failed the statement (`The array was freed`). A setter
+  now takes the value as it is when it is called: `java.util.Date` and its subclasses,
+  `Calendar`, arrays and `List`s with their elements, and a `java.sql.Array`'s elements are
+  copied, a `StringBuilder` is kept as its text and an `AtomicLong` as its number. Streams,
+  readers, `Blob`s and `Clob`s were already read by their setters.
 - **`executeBatch` could store something else than the same rows stored one by one.** A batch
   goes to the server as Arrow, one column per parameter, and a column has one type. For a
   parameter the server gives no type (an argument of a function that takes any type), the driver

@@ -221,6 +221,10 @@ signs in as one user must not sign in as another.
   one request, one row per execution; the server reports one total, so each entry of a batch of
   several is `SUCCESS_NO_INFO`.
 
+  A parameter is the value it had when its setter was called: a `Timestamp`, `Date`, `Calendar`,
+  array or `List` is copied then, so one object can be set to each row's value in turn, and
+  changing or freeing it afterwards changes nothing that was set.
+
   **A batch stores what its rows store one by one.** An Arrow column has one type, so where the
   type that is sent follows the value, a batch is sent as one request per run of consecutive rows
   of the same form, in order, and never re-types a row to fit its neighbours. That is the case for

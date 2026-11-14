@@ -515,4 +515,114 @@ class BatchesIT {
       }
     }
   }
+
+  /**
+   * A parameter is the value it had when its setter returned. An application may reuse one {@code
+   * Timestamp}, {@code Date}, {@code Calendar}, array or list for every row of a batch, changing it
+   * between rows, and may change or free it after the setter: the parameters are sent later, when
+   * the statement runs.
+   */
+  @Test
+  void aParameterIsTheValueItHadWhenItWasSet() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute(
+          "CREATE OR REPLACE TEMP TABLE kept (id INTEGER, ts TIMESTAMP, d DATE, t TIME,"
+              + " u TIMESTAMPTZ, c TIMESTAMPTZ, tc TIMESTAMP, b BLOB, ints INTEGER[],"
+              + " objects INTEGER[], list INTEGER[], freed INTEGER[], text VARCHAR, n BIGINT)");
+      Timestamp ts = new Timestamp(0);
+      java.sql.Date d = new java.sql.Date(0);
+      Time t = new Time(0);
+      java.util.Date u = new java.util.Date(0);
+      Calendar c = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+      Calendar zone = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+      Timestamp noon = Timestamp.from(Instant.parse("2026-01-15T12:00:00Z"));
+      byte[] b = new byte[2];
+      int[] ints = new int[2];
+      Object[] objects = new Object[2];
+      List<Integer> list = new ArrayList<>(List.of(0, 0));
+      StringBuilder text = new StringBuilder();
+      java.util.concurrent.atomic.AtomicLong n = new java.util.concurrent.atomic.AtomicLong();
+      // Sets every reused object to row k's values (k = 9: after the setters, before the run).
+      java.util.function.IntConsumer change =
+          k -> {
+            ts.setTime(Timestamp.valueOf("2026-01-0" + k + " 00:00:00").getTime());
+            ts.setNanos(k * 1000);
+            d.setTime(java.sql.Date.valueOf("2026-01-0" + k).getTime());
+            t.setTime(Time.valueOf("0" + k + ":00:00").getTime());
+            u.setTime(k * 1000L);
+            c.setTimeInMillis(k * 60_000L);
+            zone.setTimeZone(TimeZone.getTimeZone(k == 9 ? "Asia/Tokyo" : "UTC"));
+            b[0] = (byte) k;
+            b[1] = (byte) k;
+            ints[0] = k;
+            ints[1] = k + 1;
+            objects[0] = k;
+            objects[1] = k + 1;
+            list.set(0, k);
+            list.set(1, k + 1);
+            text.setLength(0);
+            text.append("text ").append(k);
+            n.set(k);
+          };
+      try (PreparedStatement insert =
+          connection.prepareStatement(
+              "INSERT INTO kept VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+        for (int k = 1; k <= 4; k++) {
+          change.accept(k);
+          insert.setInt(1, k);
+          insert.setTimestamp(2, ts);
+          insert.setDate(3, d);
+          insert.setTime(4, t);
+          insert.setObject(5, u);
+          insert.setObject(6, c);
+          insert.setTimestamp(7, noon, zone);
+          insert.setBytes(8, b);
+          insert.setObject(9, ints);
+          insert.setObject(10, objects);
+          insert.setObject(11, list);
+          java.sql.Array freed = connection.createArrayOf("INTEGER", new Object[] {k, k + 1});
+          insert.setObject(12, freed);
+          freed.free();
+          insert.setObject(13, text);
+          insert.setObject(14, n);
+          if (k <= 3) {
+            insert.addBatch();
+          }
+          if (k == 3) {
+            change.accept(9);
+            assertEquals(3, insert.executeBatch().length);
+          }
+        }
+        change.accept(9);
+        assertEquals(1, insert.executeUpdate());
+      }
+      try (ResultSet rows =
+          statement.executeQuery(
+              "SELECT id, CAST(ts AS VARCHAR), CAST(d AS VARCHAR), CAST(t AS VARCHAR),"
+                  + " epoch_ms(u), epoch_ms(c), CAST(tc AS VARCHAR), CAST(b AS VARCHAR),"
+                  + " CAST(ints AS VARCHAR), CAST(objects AS VARCHAR), CAST(list AS VARCHAR),"
+                  + " CAST(freed AS VARCHAR), text, n FROM kept ORDER BY id")) {
+        for (int k = 1; k <= 4; k++) {
+          assertTrue(rows.next());
+          String row = "row " + k + (k == 4 ? ", run alone" : ", in the batch");
+          String pair = "[" + k + ", " + (k + 1) + "]";
+          assertEquals(k, rows.getInt(1));
+          assertEquals("2026-01-0" + k + " 00:00:00.00000" + k, rows.getString(2), row);
+          assertEquals("2026-01-0" + k, rows.getString(3), row);
+          assertEquals("0" + k + ":00:00", rows.getString(4), row);
+          assertEquals(k * 1000L, rows.getLong(5), row);
+          assertEquals(k * 60_000L, rows.getLong(6), row);
+          assertEquals("2026-01-15 12:00:00", rows.getString(7), row + ": the Calendar's zone");
+          assertEquals("\\x0" + k + "\\x0" + k, rows.getString(8), row);
+          assertEquals(pair, rows.getString(9), row);
+          assertEquals(pair, rows.getString(10), row);
+          assertEquals(pair, rows.getString(11), row);
+          assertEquals(pair, rows.getString(12), row);
+          assertEquals("text " + k, rows.getString(13), row);
+          assertEquals(k, rows.getLong(14), row);
+        }
+      }
+    }
+  }
 }
