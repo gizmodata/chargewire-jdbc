@@ -189,10 +189,8 @@ public final class ChargewireConnection implements Connection {
   private volatile boolean closing;
   private volatile boolean released;
   private volatile boolean ended;
+  // A pending session keeps the requested restriction; an open one has confirmed it.
   private boolean readOnly;
-
-  /** Whether this connection has said, in a warning, that {@link #setReadOnly} enforces nothing. */
-  private boolean readOnlyWarned;
 
   private int transactionIsolation = TRANSACTION_READ_COMMITTED;
   private int holdability = ResultSet.HOLD_CURSORS_OVER_COMMIT;
@@ -226,6 +224,7 @@ public final class ChargewireConnection implements Connection {
     ChargewireConnection connection =
         new ChargewireConnection(client, url, properties, resultBufferSize);
     try {
+      connection.readOnly = ChargewireDriver.bool(properties, ChargewireProperty.READ_ONLY);
       connection.catalog = ChargewireProperty.CATALOG.get(properties);
       connection.schema = ChargewireProperty.SCHEMA.get(properties);
       connection.lossless =
@@ -256,26 +255,37 @@ public final class ChargewireConnection implements Connection {
       options.put("schema", schema);
     }
     options.put("autocommit", autoCommit);
+    if (readOnly) {
+      options.put("read_only", true);
+    }
     JsonNode session = client.createSession(options);
     String id = session.path("session_id").asText(null);
     if (id == null || id.isEmpty()) {
       throw SqlErrors.protocolError("The server's session response has no session_id");
     }
+    try {
+      if (readOnly && !confirmedReadOnly(session.path("options"))) {
+        throw SqlErrors.protocolError("The server did not confirm read_only=true; the new session was rejected");
+      }
+      readOnly |= confirmedReadOnly(session.path("options"));
+      applyOptions(session.path("options"), catalog, schema);
+      askForLosslessTypes(id, session.path("options"));
+    } catch (SQLException e) {
+      try {
+        client.deleteSession(id);
+      } catch (SQLException cleanup) {
+        e.addSuppressed(cleanup);
+      }
+      throw e;
+    }
+    // Publish the new id only after confirmation and setup, so concurrent requests
+    // cannot observe an unconfirmed replacement session.
     sessionId = id;
     sessionGeneration++;
     transactionMayBeOpen = false;
     placeChangedBy = 0;
     settingsChanged = false;
     transaction = TransactionState.of(session);
-    try {
-      applyOptions(session.path("options"), catalog, schema);
-      askForLosslessTypes(id, session.path("options"));
-    } catch (SQLException e) {
-      String failed = id;
-      sessionId = null;
-      client.deleteSession(failed);
-      throw e;
-    }
   }
 
   /** Whether the connection asks its sessions for exact types ({@code arrowLosslessConversion}). */
@@ -444,7 +454,7 @@ public final class ChargewireConnection implements Connection {
                   + (reason == null ? "" : ": " + reason)
                   + "); session "
                   + sessionId
-                  + " was opened with the same catalog, schema and autocommit. Temporary tables,"
+                  + " was opened with the same catalog, schema, autocommit and read-only mode. Temporary tables,"
                   + " prepared statements and settings made in SQL were lost.",
               "01000"));
       if (idleInTransaction) {
@@ -893,6 +903,8 @@ public final class ChargewireConnection implements Connection {
           schema = null;
         } else if ("schema".equals(name)) {
           schema = (String) value;
+        } else if ("read_only".equals(name)) {
+          readOnly = (Boolean) value;
         }
         return;
       }
@@ -912,7 +924,18 @@ public final class ChargewireConnection implements Connection {
           detail + " [" + code + "]", "unknown_option".equals(code) ? "HY092" : "HY024");
     }
     JsonNode actual = response.path("options");
+    if ("read_only".equals(name) && Boolean.TRUE.equals(value) && !confirmedReadOnly(actual)) {
+      SQLException failure = SqlErrors.protocolError("The server did not confirm read_only=true; the connection is closed");
+      closed = true;
+      try {
+        close();
+      } catch (SQLException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+      throw failure;
+    }
     synchronized (sessionLock) {
+      readOnly |= confirmedReadOnly(actual);
       catalog = actual.path("catalog").asText(catalog);
       schema = actual.path("schema").asText(schema);
       optionsStale = false;
@@ -943,6 +966,7 @@ public final class ChargewireConnection implements Connection {
    */
   private void takeSession(JsonNode session, long statementsBefore) {
     synchronized (sessionLock) {
+      readOnly |= confirmedReadOnly(session.path("options"));
       catalog = session.path("options").path("catalog").asText(null);
       schema = session.path("options").path("schema").asText(null);
       optionsStale = false;
@@ -1020,40 +1044,40 @@ public final class ChargewireConnection implements Connection {
     return schema;
   }
 
+  private static boolean confirmedReadOnly(JsonNode options) {
+    JsonNode value = options.path("read_only");
+    return value.isBoolean() && value.booleanValue();
+  }
+
   /**
-   * {@inheritDoc}
-   *
-   * <p>A hint only, which JDBC allows it to be: the driver keeps the value for {@link
-   * #isReadOnly()} and sends nothing, and the session still runs any statement its user may run.
-   * Chargewire has no read-only session to switch to (spec §5.3 has no such option), and the driver
-   * cannot build one from what servers have: a DuckDB server refuses writes inside {@code BEGIN
-   * TRANSACTION READ ONLY}, but the server begins a session's transactions itself, with autocommit
-   * on and off. The first {@code setReadOnly(true)} on a connection says so in a warning ({@link
-   * #getWarnings()}), so the hint is not mistaken for protection. What does refuse writes: a user
-   * the server gives read-only access, a server started read-only, or SQL run between {@code BEGIN
-   * TRANSACTION READ ONLY} and {@code COMMIT}.
+   * {@inheritDoc} Requests server-enforced read-only mode. This restriction is one-way;
+   * open a separate connection to write. A server that cannot confirm it causes an error.
    */
   @Override
-  public void setReadOnly(boolean readOnly) throws SQLException {
-    checkOpen();
-    this.readOnly = readOnly;
-    if (readOnly && !readOnlyWarned) {
-      readOnlyWarned = true;
-      addWarning(
-          new SQLWarning(
-              "setReadOnly(true) is a hint this driver cannot enforce: Chargewire has no"
-                  + " read-only session, so this connection still runs any statement its user"
-                  + " may run. To have writes refused, connect as a user with read-only access,"
-                  + " use a server started read-only, or run the statements between BEGIN"
-                  + " TRANSACTION READ ONLY and COMMIT",
-              "01000"));
+  public void setReadOnly(boolean requested) throws SQLException {
+    synchronized (sessionLock) {
+      checkOpen();
+      if (readOnly && !requested) {
+        throw new SQLException("Read-only is one-way; open another connection to write", "25006");
+      }
+      if (readOnly == requested) {
+        return;
+      }
+      setOption("read_only", true);
     }
   }
 
   @Override
   public boolean isReadOnly() throws SQLException {
     checkOpen();
-    return readOnly;
+    synchronized (sessionLock) {
+      // Confirm requested protection. A pool checking an ordinary lazy connection must not
+      // wake its stopped server merely to learn that it has not requested read-only mode.
+      if (readOnly) {
+        startSessionIfPending();
+      }
+      return readOnly;
+    }
   }
 
   @Override

@@ -520,26 +520,39 @@ No JVM options are needed. Keep DBeaver's default of a separate connection for m
 
 ## 🔒 Read-only connections
 
-`Connection.setReadOnly(true)` is a hint, as JDBC allows: the driver keeps the value for
-`isReadOnly()` and sends nothing, and the session still runs any statement its user may run. The
-first `setReadOnly(true)` on a connection adds a warning (`getWarnings()`, SQLSTATE `01000`) that
-says so. The protocol has no read-only session for the driver to switch to (a session's options
-are its catalog, schema and autocommit), and the driver cannot make one: a DuckDB server refuses
-writes inside `BEGIN TRANSACTION READ ONLY`, but the server begins a session's transactions
-itself, with autocommit on and with it off, so there is no transaction for the driver to mark.
+Use the `readOnly=true` connection property to request a read-only session when it
+is created:
 
-To have writes refused, use one of the things a server does enforce:
+```java
+try (Connection connection = DriverManager.getConnection(url + "&readOnly=true");
+     Statement statement = connection.createStatement();
+     ResultSet rows = statement.executeQuery("SELECT 42 AS answer")) {
+  rows.next();
+  System.out.println(rows.getInt(1)); // 42
+}
+```
 
-- a user or token the server gives read-only access (on Hardcharger, the `readonly` role);
-- a server started read-only (Hardcharger: `--read-only`), which
-  `DatabaseMetaData.isReadOnly()` then reports;
-- on a DuckDB server, SQL between `BEGIN TRANSACTION READ ONLY` and `COMMIT`: a write inside it
-  fails with `Cannot write to database … transaction is launched in read-only mode`.
+Here `url` is your configured JDBC URL with its existing query parameters; use
+`?readOnly=true` if it has no query string, or set `readOnly` to `true` in the
+`Properties` passed to `DriverManager.getConnection`.
 
-A session option that makes a session read-only, which `setReadOnly(true)` could then switch on,
-is proposed for the protocol in
-[gizmodata/chargewire#15](https://github.com/gizmodata/chargewire/issues/15) and for Hardcharger in
-[gizmodata/hardcharger#45](https://github.com/gizmodata/hardcharger/issues/45).
+`Connection.setReadOnly(true)` requests the same server-enforced restriction on an
+existing session. The server may require you to commit or roll back an active
+transaction first. Read-only is one-way, including on a lazy connection that has
+not opened its session yet: `setReadOnly(false)` fails with SQLSTATE `25006` once
+read-only has been selected. Open a separate connection to write.
+
+The driver requires a boolean `options.read_only: true` in the server's response.
+An older server that rejects or ignores the option causes an error, with no
+writable fallback. Connections that omit read-only work with older servers as
+before. A lazy connection confirms the restriction when first used; `isReadOnly()`
+also opens and confirms a pending session when read-only was requested. A pool
+checking an ordinary lazy connection does not wake its server. Replacement sessions request and
+confirm the restriction again, including when the original server imposed it.
+
+This restricts SQL writes according to the server's Chargewire implementation;
+it does not grant read access or sandbox installed extension code. A server's
+access-control rules still apply.
 
 ## 🚫 Not supported
 

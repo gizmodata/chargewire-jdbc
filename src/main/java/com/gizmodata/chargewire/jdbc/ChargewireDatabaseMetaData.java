@@ -931,7 +931,7 @@ public final class ChargewireDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean isReadOnly() throws SQLException {
-    // Without the key, the connection's own read-only hint.
+    // Without the key, the connection's confirmed read-only mode.
     return infoFlag(connection.isReadOnly(), "server_read_only");
   }
 

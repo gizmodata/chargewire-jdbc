@@ -487,56 +487,60 @@ class ConnectionIT {
     }
   }
 
-  /**
-   * {@code setReadOnly(true)} is a hint: the session still writes, and the connection says so in a
-   * warning, once. What the server does enforce is a read-only transaction begun in SQL. If a later
-   * server offers a read-only session and the driver uses it, this test is the one to change.
-   */
   @Test
-  void setReadOnlyIsAHintAndSaysSo() throws SQLException {
-    try (Connection connection = SharedServer.connect();
+  void setReadOnlyIsEnforcedAndOneWay() throws SQLException {
+    try (Connection writer = SharedServer.connect();
+        Statement setup = writer.createStatement();
+        Connection connection = SharedServer.connect();
         Statement statement = connection.createStatement()) {
+      setup.execute("CREATE OR REPLACE TABLE read_only_client (i INTEGER)");
       assertFalse(connection.isReadOnly());
-      assertNull(connection.getWarnings());
       connection.setReadOnly(true);
       assertTrue(connection.isReadOnly());
-      java.sql.SQLWarning warning = connection.getWarnings();
-      assertNotNull(warning);
-      assertEquals("01000", warning.getSQLState());
-      assertEquals(
-          "setReadOnly(true) is a hint this driver cannot enforce: Chargewire has no read-only"
-              + " session, so this connection still runs any statement its user may run. To have"
-              + " writes refused, connect as a user with read-only access, use a server started"
-              + " read-only, or run the statements between BEGIN TRANSACTION READ ONLY and COMMIT",
-          warning.getMessage());
-      // Not enforced: a write goes through.
-      statement.execute("CREATE OR REPLACE TABLE read_only_hint (i INTEGER)");
-      assertEquals(1, statement.executeUpdate("INSERT INTO read_only_hint VALUES (1)"));
-      // Said once per connection, however often a pool sets it.
-      connection.setReadOnly(false);
-      assertFalse(connection.isReadOnly());
+      assertNull(connection.getWarnings());
+      SQLException refused = assertThrows(SQLException.class,
+          () -> statement.executeUpdate("INSERT INTO read_only_client VALUES (1)"));
+      assertEquals("25006", refused.getSQLState());
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_client")) {
+        assertTrue(rows.next());
+        assertEquals(0, rows.getLong(1));
+      }
+      assertEquals("25006", assertThrows(SQLException.class,
+          () -> connection.setReadOnly(false)).getSQLState());
       connection.setReadOnly(true);
-      connection.setReadOnly(true);
-      assertNull(connection.getWarnings().getNextWarning());
-      // What the server enforces: a read-only transaction begun in SQL.
+      assertEquals(1, setup.executeUpdate("INSERT INTO read_only_client VALUES (2)"));
+      setup.execute("DROP TABLE read_only_client");
+    }
+  }
+
+  @Test
+  void readOnlyPropertyAppliesFromCreation() throws SQLException {
+    try (Connection connection = SharedServer.connect("readOnly=true");
+        Statement statement = connection.createStatement()) {
+      assertTrue(connection.isReadOnly());
+      try (ResultSet rows = statement.executeQuery("SELECT 42 AS answer")) {
+        assertTrue(rows.next());
+        assertEquals(42, rows.getInt(1));
+      }
+      assertEquals("25006", assertThrows(SQLException.class,
+          () -> statement.execute("CREATE TABLE readonly_property_probe (i INTEGER)")).getSQLState());
+    }
+  }
+
+  @Test
+  void sqlReadOnlyTransactionStillRefusesWrites() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("CREATE OR REPLACE TABLE read_only_transaction (i INTEGER)");
       statement.execute("BEGIN TRANSACTION READ ONLY");
-      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_hint")) {
-        assertTrue(rows.next());
-        assertEquals(1, rows.getLong(1));
-      }
-      SQLException refused =
-          assertThrows(
-              SQLException.class,
-              () -> statement.executeUpdate("INSERT INTO read_only_hint VALUES (2)"));
-      assertTrue(
-          refused.getMessage().contains("transaction is launched in read-only mode"),
-          refused.getMessage());
+      assertThrows(SQLException.class,
+          () -> statement.executeUpdate("INSERT INTO read_only_transaction VALUES (1)"));
       statement.execute("ROLLBACK");
-      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_hint")) {
+      try (ResultSet rows = statement.executeQuery("SELECT count(*) FROM read_only_transaction")) {
         assertTrue(rows.next());
-        assertEquals(1, rows.getLong(1), "the refused write left nothing");
+        assertEquals(0, rows.getLong(1));
       }
-      statement.execute("DROP TABLE read_only_hint");
+      statement.execute("DROP TABLE read_only_transaction");
     }
   }
 

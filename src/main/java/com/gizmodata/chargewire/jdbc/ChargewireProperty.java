@@ -79,6 +79,8 @@ public enum ChargewireProperty {
   CATALOG("catalog", null, "Initial catalog"),
   /** The session's initial schema. */
   SCHEMA("schema", null, "Initial schema"),
+  /** Request a server-enforced, one-way read-only session from creation. */
+  READ_ONLY("readOnly", "false", "Require a server-enforced read-only session"),
   /** Where the server mounts the protocol. */
   BASE_PATH("basePath", "/chargewire", "Path the server mounts Chargewire under"),
   /** Milliseconds to wait for a TCP and TLS connection. */
