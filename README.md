@@ -162,6 +162,9 @@ unknown key, and after the first of those only the driver's own options
 continues there, so anything else is `***` whole and an unknown key there is reported without its
 name. Percent-encode a password in a URL (`%26` for `&`, `%3B` for `;`, `%23` for `#`, `%25` for
 `%`, `%20` for a space), or give it in the `Properties`, where it needs no encoding.
+Credentials before the host (`jdbc:chargewire://user:password@host/…`) are refused, with a message
+that says where they go: the driver does not read them from there, and a URL that looks as if it
+signs in as one user must not sign in as another.
 
 ## 🧠 How statements run
 

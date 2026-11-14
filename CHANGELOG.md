@@ -159,6 +159,11 @@ Everything here is something an application written for 2.2.6 can notice.
 - **Connection strings that connected before and now fail** (see the fix above): a URL with a
   key that is not a driver property (it was ignored), and `Properties` with a key that resembles
   a driver property or names TLS or signing in. Remove the key, or spell it as the error says.
+- **A URL with credentials before the host is refused**: `jdbc:chargewire://user:password@host/…`
+  fails with SQLSTATE `08001` and says where they go (the `user` and `password` properties, or
+  the URL's options of those names). 2.2.6 connected and dropped them without a word, so such a
+  URL only ever worked with the credentials given a second time, and it showed them unredacted in
+  every message with the URL and in `DatabaseMetaData.getURL()`. They are `***@` in messages now.
 - **The text of three connection errors** (their class and SQLSTATE `08001` are unchanged), so
   that none quotes what may be a password: `Invalid value for <option>: expected …` (before:
   `Invalid value '<value>' for <option>: …`), `an option is not key=value; …` (before: `option

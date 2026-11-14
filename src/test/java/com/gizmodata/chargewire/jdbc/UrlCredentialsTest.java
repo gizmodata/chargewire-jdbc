@@ -140,6 +140,32 @@ class UrlCredentialsTest {
     }
   }
 
+  // ---- Credentials before the host ----
+
+  @ParameterizedTest
+  @CsvSource({
+    "jdbc:chargewire://joe:Zq7KvXw9Jp@h:1/db,jdbc:chargewire://***@h:1/db",
+    "jdbc:chargewire://joe@h:1/db?useEncryption=false,"
+        + "jdbc:chargewire://***@h:1/db?useEncryption=false",
+    "jdbc:chargewire://joe:Zq7Kv:Xw9Jp@h,jdbc:chargewire://***@h",
+    "jdbc:chargewire://joe:Zq7Kv@Xw9Jp@h:1/db;user=joe,jdbc:chargewire://***@h:1/db;user=joe",
+    "jdbc:chargewire://joe:Zq7Kv%40Xw9Jp@[::1]:8443,jdbc:chargewire://***@[::1]:8443",
+    "jdbc:warp://joe:Zq7KvXw9Jp@h,jdbc:warp://***@h",
+  })
+  void credentialsBeforeTheHostAreRefusedAndNotShown(String url, String shown) {
+    // 2.2.6 connected without them, and without a word.
+    SQLException error =
+        assertThrows(SQLNonTransientConnectionException.class, () -> ChargewireUrl.parse(url));
+    assertEquals("08001", error.getSQLState());
+    assertEquals(
+        "Invalid Chargewire URL '"
+            + shown
+            + "': it has credentials before the host ('user:password@'), which this driver does"
+            + " not read from there; give them as the user and password properties, or as the"
+            + " URL's user and password options",
+        error.getMessage());
+  }
+
   // ---- What a refusal says ----
 
   /** Every message of a failure: its causes, the suppressed and the chained ones. */

@@ -16,6 +16,8 @@ import java.util.regex.Pattern;
 
 /**
  * A parsed {@code jdbc:chargewire://host[:port][/catalog][?key=value&...][;key=value;...]} URL.
+ * Credentials before the host ({@code user:password@}) are refused: they go in the {@code user} and
+ * {@code password} options or properties.
  *
  * <p>Option values are percent-decoded; option keys are case-insensitive and kept here in lower
  * case. The port defaults to 443 (TLS) or 80 ({@code useEncryption=false}), because Chargewire is
@@ -69,6 +71,15 @@ final class ChargewireUrl {
     if (semicolon >= 0) {
       parseOptions(url, rest.substring(semicolon + 1), ';', options, writtenKeys);
       rest = rest.substring(0, semicolon);
+    }
+    if (rest.substring(2, firstOf(rest, 2, "/?#")).indexOf('@') >= 0) {
+      // Refused rather than dropped without a word: whoever wrote them expects to sign in as that
+      // user.
+      throw invalid(
+          url,
+          "it has credentials before the host ('user:password@'), which this driver does not read"
+              + " from there; give them as the user and password properties, or as the URL's user"
+              + " and password options");
     }
     URI uri;
     try {
