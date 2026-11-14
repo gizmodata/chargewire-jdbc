@@ -24,6 +24,13 @@ All notable changes to this project are documented here. The format follows
   `OffsetDateTime`, `ZonedDateTime` and `getString` show a `TIMESTAMP WITH TIME ZONE` in the
   session's zone, and `getTimestamp` and `Instant` give the instant. See README, "Time zones".
 
+  Not changed, and now said in the README: a parameter the server gives no type (`ts >= ? -
+  INTERVAL 7 DAY`, `date_trunc('day', ?)`, `CASE … THEN ? END`) takes a `java.sql.Timestamp` as a
+  TIMESTAMP holding the JVM zone's wall clock, as 2.2.6 did. Against a TIMESTAMP column that is
+  right; against a `TIMESTAMP WITH TIME ZONE` column it is the wrong instant when the session's
+  zone is not the JVM's. Bind an `Instant` or an `OffsetDateTime` there, or write `CAST(? AS
+  TIMESTAMPTZ)`.
+
 - **A `TIMESTAMP WITH TIME ZONE` read in a session whose `TimeZone` is a three-letter ID (`PST`,
   `IST`, `EST`, `ACT` and 24 more) or a name the time zone database has dropped showed UTC's
   wall clock.** The server takes these names, `java.time` does not know them by themselves, and

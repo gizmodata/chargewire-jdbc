@@ -464,9 +464,25 @@ overlaps included. So `ts = ?` with a `LocalDateTime` finds the rows `ts = TIMES
 whatever the JVM's default zone is. The target type of `setObject(index, value, type)` does not
 change this: `setObject(localDateTime, Types.TIMESTAMP_WITH_TIMEZONE)` still has no zone, and
 `setObject(offsetDateTime, Types.TIMESTAMP)` is still that instant for such a parameter. In a batch
-whose rows mix both kinds, each row keeps its own meaning. A `java.sql.Timestamp` is a point in
-time, as `new Timestamp(millis)` makes one and as `getTimestamp` returns one: to bind a wall clock,
-use `LocalDateTime` (`timestamp.toLocalDateTime()`).
+whose rows mix both kinds, each row keeps its own meaning. For such a parameter a
+`java.sql.Timestamp` is a point in time, as `new Timestamp(millis)` makes one and as `getTimestamp`
+returns one: to bind a wall clock, use `LocalDateTime` (`timestamp.toLocalDateTime()`).
+
+**Where the server gives a parameter no type, the table above does not apply**: the driver cannot
+tell which kind of column the value is for. DuckDB types a parameter from what it is compared with
+or assigned to (`ts = ?`, `ts IN (?, ?)`, `COALESCE(?, ts)`, `INSERT … VALUES (?)`), and gives no
+type to an operand of arithmetic or an argument of a function: `ts >= ? - INTERVAL 7 DAY`,
+`date_trunc('day', ?)`, `CASE WHEN … THEN ? END`. (`ParameterMetaData.getParameterTypeName` says
+`UNKNOWN` for those.) There a value goes as its own type: an `Instant`, an `OffsetDateTime` or a
+`ZonedDateTime` as the instant, and a `java.sql.Timestamp` as a TIMESTAMP holding its wall clock in
+the JVM's zone, which is what it stores in a TIMESTAMP column. Compared with a TIMESTAMP column,
+that finds the rows the same `Timestamp` stored. Compared with a `TIMESTAMP WITH TIME ZONE` column,
+the server reads that wall clock in the session's zone, which is another instant whenever the
+session's zone is not the JVM's, and the rows are not found, without an error. For a `TIMESTAMP
+WITH TIME ZONE` in such an expression, bind an `Instant` or an `OffsetDateTime`
+(`timestamp.toInstant()`), or give the parameter its type in the statement: `ts >= CAST(? AS
+TIMESTAMPTZ) - INTERVAL 7 DAY`. (Sending a `Timestamp` as the instant there would do the reverse:
+find the `TIMESTAMP WITH TIME ZONE` rows and lose the TIMESTAMP ones, which are found today.)
 
 ## ⚠️ Errors
 

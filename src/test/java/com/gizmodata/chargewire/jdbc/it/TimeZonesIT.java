@@ -908,4 +908,90 @@ class TimeZonesIT {
       }
     }
   }
+
+  /**
+   * Where the server gives a parameter no type (an operand of arithmetic, an argument of a
+   * function), the driver cannot know which column the value is for, and sends it as its own type:
+   * a {@code java.sql.Timestamp} as a TIMESTAMP holding its wall clock in the JVM's zone, as it is
+   * stored in a TIMESTAMP column, and an {@code Instant} or {@code OffsetDateTime} as the instant.
+   * So each finds the rows of one kind of column and not of the other, when the session's zone is
+   * not the JVM's. The README says so, with the two ways out that are the last assertions here.
+   */
+  @Test
+  void whereTheServerGivesAParameterNoTypeAValueGoesAsItsOwnType() throws SQLException {
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute("SET TimeZone = 'Asia/Kolkata'");
+      statement.execute(
+          "CREATE OR REPLACE TEMP TABLE moments (naive TIMESTAMP, zoned TIMESTAMPTZ)");
+      Timestamp moment = Timestamp.valueOf("2026-01-15 12:00:00");
+      try (PreparedStatement insert =
+          connection.prepareStatement("INSERT INTO moments VALUES (?, ?)")) {
+        insert.setTimestamp(1, moment);
+        insert.setTimestamp(2, moment);
+        assertEquals(1, insert.executeUpdate());
+      }
+      Object[] instants = {moment.toInstant(), moment.toInstant().atOffset(ZoneOffset.UTC)};
+      // Typed by the column it is compared with: every value means what it means for that type.
+      assertEquals("TIMESTAMP", typeOfParameter(connection, "naive = ?"));
+      assertEquals("TIMESTAMP WITH TIME ZONE", typeOfParameter(connection, "zoned = ?"));
+      assertEquals(1, found(connection, "naive = ?", moment));
+      assertEquals(1, found(connection, "zoned = ?", moment));
+      for (Object instant : instants) {
+        assertEquals(1, found(connection, "zoned = ?", instant));
+      }
+      for (String column : List.of("naive", "zoned")) {
+        boolean zoned = column.equals("zoned");
+        for (String untyped :
+            List.of(
+                "% >= ? - INTERVAL 1 MINUTE AND % <= ? + INTERVAL 1 MINUTE",
+                "date_trunc('minute', %) = date_trunc('minute', ?)",
+                "% = CASE WHEN true THEN ? ELSE ? END")) {
+          String predicate = untyped.replace("%", column);
+          assertEquals("UNKNOWN", typeOfParameter(connection, predicate), predicate);
+          // The Timestamp's wall clock: the TIMESTAMP column's, and another instant for the
+          // TIMESTAMPTZ column, which reads it in the session's zone.
+          assertEquals(zoned ? 0 : 1, found(connection, predicate, moment), predicate);
+          assertEquals(
+              zoned ? 0 : 1, found(connection, predicate, moment.toLocalDateTime()), predicate);
+          for (Object instant : instants) {
+            assertEquals(zoned ? 1 : 0, found(connection, predicate, instant), predicate);
+          }
+        }
+      }
+      // The ways out for a TIMESTAMPTZ in such an expression: an Instant (above), or the type.
+      String typed =
+          "zoned >= CAST(? AS TIMESTAMPTZ) - INTERVAL 1 MINUTE"
+              + " AND zoned <= CAST(? AS TIMESTAMPTZ) + INTERVAL 1 MINUTE";
+      assertEquals("TIMESTAMP WITH TIME ZONE", typeOfParameter(connection, typed));
+      assertEquals(1, found(connection, typed, moment));
+    }
+  }
+
+  private static String typeOfParameter(Connection connection, String predicate)
+      throws SQLException {
+    try (PreparedStatement select =
+        connection.prepareStatement("SELECT count(*) FROM moments WHERE " + predicate)) {
+      return select.getParameterMetaData().getParameterTypeName(1);
+    }
+  }
+
+  /** The rows a predicate finds with the same value for each of its parameters. */
+  private static int found(Connection connection, String predicate, Object value)
+      throws SQLException {
+    try (PreparedStatement select =
+        connection.prepareStatement("SELECT count(*) FROM moments WHERE " + predicate)) {
+      for (int i = 1; i <= select.getParameterMetaData().getParameterCount(); i++) {
+        if (value instanceof Timestamp) {
+          select.setTimestamp(i, (Timestamp) value);
+        } else {
+          select.setObject(i, value);
+        }
+      }
+      try (ResultSet rows = select.executeQuery()) {
+        assertTrue(rows.next());
+        return rows.getInt(1);
+      }
+    }
+  }
 }
