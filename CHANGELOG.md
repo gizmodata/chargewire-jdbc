@@ -177,6 +177,9 @@ All notable changes to this project are documented here. The format follows
   2.2.6 did. A server without the option is not asked, and `SET SESSION arrow_lossless_conversion`
   in SQL still switches the form; the driver reads both.
 
+- **`ChargewireDriver.redact(url)`**: a URL as the driver's messages show one, for a driver built
+  over this one with a URL scheme of its own, so both hide the same things.
+
 ### Changed
 
 Everything here is something an application written for 2.2.6 can notice.

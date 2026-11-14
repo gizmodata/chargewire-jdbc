@@ -134,6 +134,21 @@ class UrlCredentialsTest {
   }
 
   @Test
+  void aDriverOverThisOneShowsItsOwnUrlsTheSameWay() {
+    String options = "/db?user=joe&password=" + HEAD + "&" + TAIL + "=1#" + TAIL;
+    assertEquals(
+        "jdbc:hardcharger://h/db?user=joe&password=***&***#***",
+        ChargewireDriver.redact("jdbc:hardcharger://h" + options));
+    assertEquals(
+        ChargewireUrl.redact("jdbc:chargewire://h:31337" + options),
+        ChargewireDriver.redact("jdbc:chargewire://h:31337" + options));
+    assertEquals(
+        "jdbc:hardcharger://***@h",
+        ChargewireDriver.redact("jdbc:hardcharger://joe:" + HEAD + "@h"));
+    assertEquals(null, ChargewireDriver.redact(null));
+  }
+
+  @Test
   void noFormOfAPasswordIsShownWhereverItIsWritten() {
     for (String url : urls()) {
       assertHidden(ChargewireUrl.redact(url), url);

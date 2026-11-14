@@ -192,6 +192,20 @@ public final class ChargewireDriver implements Driver {
         "Unknown connection property '" + key + "' in " + where + ": " + hint, "08001");
   }
 
+  /**
+   * Returns a URL as this driver's messages and {@code DatabaseMetaData.getURL()} show one: with
+   * {@code ***} for everything that may be part of a password or a token (README, "Properties").
+   * For a driver built over this one that has a URL scheme of its own in this driver's syntax
+   * ({@code jdbc:<name>://host…}), so that it shows its URLs exactly as this driver shows the URL
+   * it makes of them.
+   *
+   * @param url a URL, or {@code null}
+   * @return the URL to show, or {@code null}
+   */
+  public static String redact(String url) {
+    return ChargewireUrl.redact(url);
+  }
+
   @Override
   public boolean acceptsURL(String url) {
     return ChargewireUrl.accepts(url);
