@@ -44,6 +44,7 @@ import org.apache.arrow.vector.dictionary.Dictionary;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.DictionaryEncoding;
+import org.apache.arrow.vector.types.pojo.Field;
 
 /**
  * Creates the {@link Accessor} for a vector.
@@ -61,6 +62,21 @@ public final class Accessors {
    * @return the accessor
    */
   public static Accessor create(FieldVector vector, DictionaryProvider dictionaries) {
+    return create(vector, null, dictionaries);
+  }
+
+  /**
+   * Creates the accessor for a column of the current batch.
+   *
+   * @param vector the column
+   * @param declared the column's field as the stream's schema declares it, or {@code null} for the
+   *     vector's own: a sparse union's type ids are only in the declaration (Arrow Java's {@code
+   *     UnionVector} reports ids of its own making)
+   * @param dictionaries the stream's dictionaries, for dictionary-encoded columns, or {@code null}
+   * @return the accessor
+   */
+  public static Accessor create(
+      FieldVector vector, Field declared, DictionaryProvider dictionaries) {
     DictionaryEncoding encoding = vector.getField().getDictionary();
     if (encoding != null && dictionaries != null) {
       Dictionary dictionary = dictionaries.lookup(encoding.getId());
@@ -136,32 +152,32 @@ public final class Accessors {
       return new TemporalAccessors.DurationAccessor((DurationVector) vector);
     }
     if (vector instanceof MapVector) {
-      return new NestedAccessors.MapAccessor((MapVector) vector, dictionaries);
+      return new NestedAccessors.MapAccessor((MapVector) vector, declared, dictionaries);
     }
     if (vector instanceof ListVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((ListVector) vector).getDataVector(), dictionaries);
+          vector, ((ListVector) vector).getDataVector(), child(declared, 0), dictionaries);
     }
     if (vector instanceof LargeListVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((LargeListVector) vector).getDataVector(), dictionaries);
+          vector, ((LargeListVector) vector).getDataVector(), child(declared, 0), dictionaries);
     }
     if (vector instanceof FixedSizeListVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((FixedSizeListVector) vector).getDataVector(), dictionaries);
+          vector, ((FixedSizeListVector) vector).getDataVector(), child(declared, 0), dictionaries);
     }
     if (vector instanceof ListViewVector) {
       return new NestedAccessors.ListAccessor(
-          vector, ((ListViewVector) vector).getDataVector(), dictionaries);
+          vector, ((ListViewVector) vector).getDataVector(), child(declared, 0), dictionaries);
     }
     if (vector instanceof StructVector && SqlTypes.isVariant(vector.getField())) {
       return new NestedAccessors.VariantAccessor((StructVector) vector, dictionaries);
     }
     if (vector instanceof StructVector) {
-      return new NestedAccessors.StructAccessor((StructVector) vector, dictionaries);
+      return new NestedAccessors.StructAccessor((StructVector) vector, declared, dictionaries);
     }
     if (vector instanceof UnionVector || vector instanceof DenseUnionVector) {
-      return new NestedAccessors.UnionAccessor(vector, dictionaries);
+      return new NestedAccessors.UnionAccessor(vector, declared, dictionaries);
     }
     String integer16 = SqlTypes.duckDbInteger(vector.getField().getType());
     if (integer16 != null && vector instanceof ExtensionTypeVector) {
@@ -197,5 +213,12 @@ public final class Accessors {
       return create(extension.getUnderlyingVector(), dictionaries);
     }
     return new NestedAccessors.GenericAccessor(vector);
+  }
+
+  /** A declared field's child, or {@code null} when the declaration is not known. */
+  static Field child(Field declared, int index) {
+    return declared == null || declared.getChildren().size() <= index
+        ? null
+        : declared.getChildren().get(index);
   }
 }

@@ -462,6 +462,65 @@ class DuckDbTypesIT {
   }
 
   /**
+   * Every type reads as a member of a UNION as it reads as a column, next to an INTEGER member of
+   * the same union and a NULL of it, alone and inside a list.
+   */
+  @Test
+  void everyTypeReadsTheSameAsAMemberOfAUnion() throws SQLException {
+    List<Column> columns = columns();
+    try (Connection connection = SharedServer.connect();
+        Statement statement = connection.createStatement()) {
+      createTables(statement, columns);
+      for (Column column : columns) {
+        String union = "UNION(n INTEGER, m " + column.sqlType() + ")";
+        String member = "union_value(m := " + column.name() + ")::" + union;
+        try (ResultSet rows =
+            statement.executeQuery(
+                "SELECT 1 AS row, "
+                    + member
+                    + " AS u, ["
+                    + member
+                    + "] AS us FROM all_types WHERE id = 1"
+                    + " UNION ALL SELECT 2, union_value(n := 7)::"
+                    + union
+                    + ", [union_value(n := 7)::"
+                    + union
+                    + "] UNION ALL SELECT 3, NULL::"
+                    + union
+                    + ", [NULL::"
+                    + union
+                    + "] ORDER BY row")) {
+          String at = " as a member of " + union;
+          assertEquals(Types.JAVA_OBJECT, rows.getMetaData().getColumnType(2), column.name() + at);
+          assertEquals("UNION", rows.getMetaData().getColumnTypeName(2), column.name() + at);
+          assertTrue(rows.next());
+          Object value = rows.getObject("u");
+          assertFalse(rows.wasNull(), column.name() + at);
+          assertTrue(
+              column.javaClass().isInstance(value),
+              column.name() + at + " is a " + (value == null ? null : value.getClass().getName()));
+          assertValue(column, column.value(), value, at);
+          if (column.text() != null) {
+            assertEquals(column.text(), rows.getString("u"), column.name() + at);
+          }
+          List<?> listed = (List<?>) rows.getObject("us");
+          assertEquals(1, listed.size(), column.name() + at);
+          assertValue(column, column.value(), listed.get(0), at + ", in a list");
+          assertTrue(rows.next());
+          assertEquals(7, rows.getObject("u"), column.name() + at);
+          assertEquals("7", rows.getString("u"), column.name() + at);
+          assertEquals(List.of(7), rows.getObject("us"), column.name() + at);
+          assertTrue(rows.next());
+          assertNull(rows.getObject("u"), column.name() + at);
+          assertTrue(rows.wasNull(), column.name() + at);
+          assertNull(rows.getString("u"), column.name() + at);
+          assertFalse(rows.next());
+        }
+      }
+    }
+  }
+
+  /**
    * What {@code getObject} returned goes back with {@code setObject}, and NULL with {@code
    * setObject(null)} and with {@code setNull} of the column's own JDBC type: the server then holds
    * the same values, column by column.

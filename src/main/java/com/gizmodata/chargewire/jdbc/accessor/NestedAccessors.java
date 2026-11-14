@@ -29,6 +29,7 @@ import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.complex.UnionVector;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.util.JsonStringArrayList;
 import org.apache.arrow.vector.util.JsonStringHashMap;
@@ -120,9 +121,13 @@ final class NestedAccessors {
     private final Accessor elements;
     private final Field elementField;
 
-    ListAccessor(ValueVector vector, FieldVector elementVector, DictionaryProvider dictionaries) {
+    ListAccessor(
+        ValueVector vector,
+        FieldVector elementVector,
+        Field declaredElement,
+        DictionaryProvider dictionaries) {
       super(vector);
-      this.elements = Accessors.create(elementVector, dictionaries);
+      this.elements = Accessors.create(elementVector, declaredElement, dictionaries);
       this.elementField = elementVector.getField();
     }
 
@@ -167,11 +172,12 @@ final class NestedAccessors {
     private final List<String> names = new ArrayList<>();
     private final List<Accessor> children = new ArrayList<>();
 
-    StructAccessor(StructVector vector, DictionaryProvider dictionaries) {
+    StructAccessor(StructVector vector, Field declared, DictionaryProvider dictionaries) {
       super(vector);
-      for (FieldVector child : vector.getChildrenFromFields()) {
-        names.add(child.getName());
-        children.add(Accessors.create(child, dictionaries));
+      List<FieldVector> fields = vector.getChildrenFromFields();
+      for (int i = 0; i < fields.size(); i++) {
+        names.add(fields.get(i).getName());
+        children.add(Accessors.create(fields.get(i), Accessors.child(declared, i), dictionaries));
       }
     }
 
@@ -288,12 +294,15 @@ final class NestedAccessors {
     private final Accessor keys;
     private final Accessor values;
 
-    MapAccessor(MapVector vector, DictionaryProvider dictionaries) {
+    MapAccessor(MapVector vector, Field declared, DictionaryProvider dictionaries) {
       super(vector);
       StructVector entries = (StructVector) vector.getDataVector();
       List<FieldVector> fields = entries.getChildrenFromFields();
-      this.keys = Accessors.create(fields.get(0), dictionaries);
-      this.values = Accessors.create(fields.get(1), dictionaries);
+      Field declaredEntries = Accessors.child(declared, 0);
+      this.keys =
+          Accessors.create(fields.get(0), Accessors.child(declaredEntries, 0), dictionaries);
+      this.values =
+          Accessors.create(fields.get(1), Accessors.child(declaredEntries, 1), dictionaries);
     }
 
     @Override
@@ -312,14 +321,26 @@ final class NestedAccessors {
     }
   }
 
-  /** Sparse and dense unions: every getter reads the row's own member. */
+  /**
+   * Sparse and dense unions: every getter reads the row's own member.
+   *
+   * <p>A sparse union's member is found by its position among the union's children, through the
+   * type ids the stream's schema declares. Arrow Java's {@code UnionVector.getVectorByType} looks a
+   * member up by the kind of its type instead: it has one slot per kind, so two INTEGER members are
+   * one to it and a LIST or STRUCT member is a vector of its own making, and it cannot make the
+   * vector of a kind that needs more than its name (a decimal's precision, a timestamp's zone, an
+   * extension type), where it fails with a {@code NullPointerException}.
+   */
   static final class UnionAccessor extends Accessor {
     private final DictionaryProvider dictionaries;
+    private final Field declared;
     private final Map<Integer, Accessor> members = new HashMap<>();
 
-    UnionAccessor(ValueVector vector, DictionaryProvider dictionaries) {
+    UnionAccessor(ValueVector vector, Field declared, DictionaryProvider dictionaries) {
       super(vector);
       this.dictionaries = dictionaries;
+      this.declared =
+          declared != null && declared.getType() instanceof ArrowType.Union ? declared : null;
     }
 
     private Accessor member(int row) {
@@ -327,18 +348,28 @@ final class NestedAccessors {
           vector instanceof UnionVector
               ? ((UnionVector) vector).getTypeValue(row)
               : ((DenseUnionVector) vector).getTypeId(row);
-      return members.computeIfAbsent(
-          typeId,
-          id -> {
-            ValueVector member =
-                vector instanceof UnionVector
-                    ? ((UnionVector) vector).getVectorByType(id)
-                    : ((DenseUnionVector) vector).getVectorByType(id.byteValue());
-            // A row without a member (Arrow Java's null type id) is null.
-            return member == null
-                ? new NullAccessor(vector)
-                : Accessors.create((FieldVector) member, dictionaries);
-          });
+      return members.computeIfAbsent(typeId, this::memberOf);
+    }
+
+    private Accessor memberOf(int typeId) {
+      if (vector instanceof UnionVector) {
+        List<FieldVector> children = ((UnionVector) vector).getChildrenFromFields();
+        // Without the declaration, the ids are the ones a vector built in Java has: its own.
+        int[] ids =
+            ((ArrowType.Union) (declared != null ? declared : vector.getField()).getType())
+                .getTypeIds();
+        for (int i = 0; i < children.size(); i++) {
+          if ((ids == null || ids.length <= i ? i : ids[i]) == typeId) {
+            return Accessors.create(children.get(i), Accessors.child(declared, i), dictionaries);
+          }
+        }
+        // A row without a member (Arrow Java's null type id) is null.
+        return new NullAccessor(vector);
+      }
+      ValueVector member = ((DenseUnionVector) vector).getVectorByType((byte) typeId);
+      return member == null
+          ? new NullAccessor(vector)
+          : Accessors.create((FieldVector) member, dictionaries);
     }
 
     private int index(int row) {

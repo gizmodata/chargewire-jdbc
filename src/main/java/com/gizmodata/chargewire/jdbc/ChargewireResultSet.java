@@ -144,7 +144,9 @@ public final class ChargewireResultSet implements ResultSet {
     List<FieldVector> vectors = root.getFieldVectors();
     Accessor[] bound = new Accessor[vectors.size()];
     for (int i = 0; i < bound.length; i++) {
-      bound[i] = Accessors.create(vectors.get(i), batches.dictionaries());
+      bound[i] =
+          Accessors.create(
+              vectors.get(i), root.getSchema().getFields().get(i), batches.dictionaries());
     }
     accessors = bound;
     boundGeneration = batches.generation();

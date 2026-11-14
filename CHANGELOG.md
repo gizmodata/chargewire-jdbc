@@ -100,6 +100,15 @@ All notable changes to this project are documented here. The format follows
 - **BIGNUM, BIT and VARIANT arrived as bytes in DuckDB's encodings.** BIGNUM now reads as a
   `BigDecimal` (JDBC type `NUMERIC`), BIT as its bits (`"10101"`), and VARIANT as the Java value
   it holds, with JSON text for an object or an array (README, "DuckDB types").
+- **A UNION failed to read, or read as NULL, for most member types.** The driver asked Arrow
+  Java for a union's member by the kind of its type, which cannot answer for a kind that needs
+  more than its name and has one slot per kind. Reading a member that is a DECIMAL, HUGEINT,
+  UHUGEINT, BIGNUM, TIMESTAMP WITH TIME ZONE or MAP threw a `NullPointerException` (not a
+  `SQLException`), a fixed-size ARRAY or a UNION inside the union an
+  `UnsupportedOperationException`, and a LIST, STRUCT or VARIANT member read as NULL without an
+  error; of two members of the same type, the second read as the first. With the exact types this
+  release asks for, UUID, TIME WITH TIME ZONE and BIT members would have joined the first group.
+  Every type now reads as a member of a union exactly as it reads as a column, alone and in a list.
 - **Several types could not be bound, and one was stored wrong.** A parameter for an ENUM column
   failed (`IPC stream did not have the expected number (1) of dictionaries`), a fixed-size ARRAY,
   a BIGNUM and a VARIANT were refused (`Parameters of type … are not supported`), and a HUGEINT or
